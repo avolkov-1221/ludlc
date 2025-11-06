@@ -552,7 +552,9 @@ void ludlc_serial_connection_destroy(struct ludlc_connection *conn)
 	sconn->flags = 0;
 
 	/* Clean up core connection state */
-	ludlc_connection_cleanup(&sconn->conn);
+	if (sconn->uart_fd >= 0 &&
+			sconn->event_fd[0] >= 0 && sconn->event_fd[1] >= 0)
+		ludlc_connection_cleanup(&sconn->conn);
 
 	/* Close file descriptors */
 	if(sconn->uart_fd >= 0)
@@ -601,6 +603,17 @@ int ludlc_serial_connection_create(const ludlc_platform_args_t *args,
 	sconn->event_fd[1] = -1;
 	if (pipe(sconn->event_fd) < 0) {
 		ret = errno;
+
+		if(sconn->event_fd[0] >= 0) {
+			close(sconn->event_fd[0]);
+			sconn->event_fd[0] = -1;
+		}
+
+		if(sconn->event_fd[1] >= 0) {
+			close(sconn->event_fd[1]);
+			sconn->event_fd[1] = -1;
+		}
+
 		goto err;
 	}
 
@@ -610,7 +623,7 @@ int ludlc_serial_connection_create(const ludlc_platform_args_t *args,
 	/* Open the TTY device */
 	sconn->uart_fd = open(args->port, O_RDWR | O_NOCTTY | O_NONBLOCK);
 	if(sconn->uart_fd < 0) {
-		ret = errno;
+		ret = -errno;
 		goto err;
 	}
 

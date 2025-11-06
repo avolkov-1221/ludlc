@@ -69,9 +69,9 @@ typedef CONFIG_LUDLC_ID_TYPE	ludlc_id_t;
  * arithmetic relies on unsigned wrap-around behavior.
  */
 #if defined(BUILD_ASSERT)
-BUILD_ASSERT(((ludlc_id_t)0 < (ludlc_id_t)-1))
+BUILD_ASSERT(((ludlc_id_t)0 < (ludlc_id_t)-1));
 #elif defined(BUILD_BUG_ON)
-BUILD_BUG_ON(!((ludlc_id_t)0 < (ludlc_id_t)-1))
+BUILD_BUG_ON(!((ludlc_id_t)0 < (ludlc_id_t)-1));
 #else
 /* Simulate static_assert() from C11 (borrowed from Zephyr */
 enum __build_assert_enum_ludlc_id_t__ {

@@ -77,6 +77,7 @@ int ludlc_platform_init_timer(struct ludlc_connection *conn,
 				ludlc_platform_timer_t *timer,
 				ludlc_timer_cb_t cb)
 {
+	int ret;
 	struct sigevent sev = {0};
 
 	if (!timer)
@@ -94,7 +95,10 @@ int ludlc_platform_init_timer(struct ludlc_connection *conn,
 
 	/* Create the underlying POSIX timer. */
 	/* We use CLOCK_MONOTONIC, as it's not affected by system time changes. */
-	return timer_create(CLOCK_MONOTONIC, &sev, &timer->posix_timer_id);
+	if (timer_create(CLOCK_MONOTONIC, &sev, &timer->posix_timer_id))
+		return -errno;
+
+	return 0;
 }
 
 /**
@@ -188,4 +192,22 @@ int ludlc_platform_stop_timer(ludlc_platform_timer_t *timer)
 	}
 
 	return 0;
+}
+
+/**
+ * @brief Delete a LuDLC platform timer.
+ *
+ * This function disarms the underlying POSIX timer and clears the
+ * `pending` flag to prevent any in-flight expirations from
+ * executing the callback.
+ *
+ * @param timer Pointer to the `ludlc_platform_timer_t` structure to delete.
+ */
+void ludlc_platform_destroy_timer(ludlc_platform_timer_t *timer)
+{
+	if (timer) {
+		ludlc_platform_stop_timer(timer);
+
+		timer_delete(timer->posix_timer_id);
+	}
 }

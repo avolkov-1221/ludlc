@@ -86,6 +86,13 @@ static inline ludlc_platform_start_timer(ludlc_platform_timer_t *timer,
  * @return 0 on success, or a negative error code on failure.
  */
 static inline ludlc_platform_stop_timer(ludlc_platform_timer_t *timer);
+
+/**
+ * @brief  (Inline) Destroy platform timer.
+ *
+ * @param timer Pointer to the timer handle to delete.
+ */
+static inline void ludlc_platform_destroy_timer(ludlc_platform_timer_t *timer);
 #else
 /**
  * @brief Initializes a platform-specific timer.
@@ -117,6 +124,13 @@ int ludlc_platform_start_timer(ludlc_platform_timer_t *timer,
  * @return 0 on success, or a negative error code on failure.
  */
 int ludlc_platform_stop_timer(ludlc_platform_timer_t *timer);
+
+/**
+ * @brief Destroy platform timer.
+ *
+ * @param timer Pointer to the timer handle to delete.
+ */
+void ludlc_platform_destroy_timer(ludlc_platform_timer_t *timer);
 #endif
 
 #endif /* __LUDLC_PLATFORM_API_H__ */

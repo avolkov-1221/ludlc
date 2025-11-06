@@ -824,12 +824,18 @@ void ludlc_connection_cleanup(struct ludlc_connection *conn)
 #endif
 	ludlc_id_t confirmed_num = 0;
 
-	LUDLC_LOCK(&conn->lock);
-	on_disconnect_lock(conn, confirmed_q, &confirmed_num);
-	LUDLC_UNLOCK(&conn->lock);
+	if (ludlc_platform_test_bit(LUDLC_CONN_INITED_F, &conn->flags)) {
+		LUDLC_LOCK(&conn->lock);
+		on_disconnect_lock(conn, confirmed_q, &confirmed_num);
+		LUDLC_UNLOCK(&conn->lock);
 
-	/* Call deferred on_confirm callbacks (for MT) */
-	ludlc_confirm_unlocked(conn, confirmed_q, confirmed_num);
+		/* Call deferred on_confirm callbacks (for MT) */
+		ludlc_confirm_unlocked(conn, confirmed_q, confirmed_num);
+
+		ludlc_platform_destroy_timer(&conn->wd_timer);
+		ludlc_platform_destroy_timer(&conn->ping_timer);
+
+	}
 
 	memset(conn, 0, sizeof(*conn));
 }
@@ -858,6 +864,8 @@ int ludlc_connection_init(struct ludlc_connection *conn,
 		const struct ludlc_conn_cb *cb,
 		void *user_ctx)
 {
+	int ret;
+
 	if (!conn || !proto_cb)
 		return -EINVAL;
 
@@ -876,12 +884,24 @@ int ludlc_connection_init(struct ludlc_connection *conn,
 	conn->ctrl_packet.chan = CONFIG_LUDLC_CONTROL_CHANNEL;
 	conn->conn_state = LUDLC_STATE_DISCONNECTED;
 
-	/* Initialize platform-specific timers */
-	ludlc_platform_init_timer(conn, &conn->ping_timer, ludlc_ping_timer);
-	ludlc_platform_init_timer(conn, &conn->wd_timer, ludlc_wd_timer);
-
 	LUDLC_KFIFO_INIT(&conn->tx_fifo, conn->tx_buf, sizeof(conn->tx_buf));
 
-	return 0;
+	/* Initialize platform-specific timers */
+	ret = ludlc_platform_init_timer(conn, &conn->ping_timer,
+			ludlc_ping_timer);
+
+	if (!ret) {
+		ret = ludlc_platform_init_timer(conn, &conn->wd_timer,
+				ludlc_wd_timer);
+		if(!ret) {
+			ludlc_platform_set_bit(LUDLC_CONN_INITED_F,
+					&conn->flags);
+			return 0;
+		}
+
+		ludlc_platform_destroy_timer(&conn->ping_timer);
+	}
+
+	return ret;
 }
 

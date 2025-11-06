@@ -151,13 +151,13 @@ typedef uint16_t			ludlc_csum_t;
 /** @brief Flag indicating that platform allocation functions are inlined. */
 #define LUDLC_PLATFORM_ALLOC_INLINED	1
 /**
- * @brief (Inline) Allocates memory using standard `malloc`.
+ * @brief (Inline) Allocates memory using standard `cmalloc`.
  * @param sz Size to allocate.
- * @return Pointer to allocated memory, or NULL on failure.
+ * @return Pointer to allocated and zeroed memory, or NULL on failure.
  */
 static inline void *ludlc_platform_alloc(size_t sz)
 {
-	return malloc(sz);
+	return calloc(sz, 1);
 }
 
 /**
