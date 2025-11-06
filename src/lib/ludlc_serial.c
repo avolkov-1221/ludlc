@@ -20,7 +20,6 @@
 
 #include <ludlc.h>
 #include <ludlc_private.h>
-#include <ludlc_logger.h>
 #include <ludlc_serial.h>
 #include <ludlc_serial_enc_impl.h>
 

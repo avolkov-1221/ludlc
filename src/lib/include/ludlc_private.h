@@ -20,6 +20,7 @@
 
 #include <ludlc_platform_api.h>
 #include <ludlc_packet.h>
+#include <ludlc_logger.h>
 
 /**
  * @enum ludlc_conn_state

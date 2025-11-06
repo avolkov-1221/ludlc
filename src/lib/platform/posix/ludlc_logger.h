@@ -37,12 +37,6 @@
 #define MAX_LOG_LEVEL LOG_DEBUG
 #endif
 
-#if MAX_LUDLC_LOG_LEVEL <= LOG_TRACE
-#define LUDLC_LOG_TRACE(...) log_trace(__VA_ARGS__)
-#else
-#define LUDLC_LOG_TRACE(...) do { (void)0; } while(0)
-#endif
-
 #if MAX_LUDLC_LOG_LEVEL <= LOG_DEBUG
 #define LUDLC_LOG_DEBUG(...) log_debug(__VA_ARGS__)
 #else
@@ -65,12 +59,6 @@
 #define LUDLC_LOG_ERROR(...) log_error(__VA_ARGS__)
 #else
 #define LUDLC_LOG_ERROR(...) do { (void)0; } while(0)
-#endif
-
-#if MAX_LUDLC_LOG_LEVEL <= LOG_FATAL
-#define LUDLC_LOG_FATAL(...) log_fatal(__VA_ARGS__)
-#else
-#define LUDLC_LOG_FATAL(...) do { (void)0; } while(0)
 #endif
 
 #endif /* __LUDLC_LOGGER_H__ */

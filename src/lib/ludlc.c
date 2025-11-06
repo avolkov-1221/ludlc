@@ -19,7 +19,6 @@
 
 #include <ludlc.h>
 #include <ludlc_private.h>
-#include <ludlc_logger.h>
 
 /**
  * @brief Checks if a given packet ID represents a PING packet.
