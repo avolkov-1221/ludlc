@@ -28,27 +28,6 @@ set(LUDLC
 	${PLATFORM_SRC}
 )
 
-if(CONFIG_LUDLC_SERIAL_CONN)
-set(LUDLC
-	${LUDLC}
-	ludlc_serial.c
-	)
-endif(CONFIG_LUDLC_SERIAL_CONN)
-
-if(CONFIG_LUDLC_SPI_CONN)
-set(LUDLC
-	${LUDLC}
-	ludlc_spi.c
-	)
-endif(CONFIG_LUDLC_SPI_CONN)
-
-if(CONFIG_LUDLC_CAN_CONN)
-set(LUDLC
-	${LUDLC}
-	ludlc_can.c
-	)
-endif(CONFIG_LUDLC_CAN_CONN)
-
 set(ludlc_target ludlc)
 set(ludlc_target ${ludlc_target} PARENT_SCOPE)
 

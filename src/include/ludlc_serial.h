@@ -8,7 +8,7 @@
  * and managing a LuDLC connection specifically over a serial (byte-stream)
  * transport. It includes the entry points for the TX/RX threads.
  *
- * Copyright (C) 2025 Andrey VOLKOV <andrey@volkov.fr> and LuDLC Contributors
+ * Copyright (C) 2025-2026 Andrey VOLKOV <andrey@volkov.fr> & LuDLC Contributors
  *
  * This file is licensed under either the Apache License, Version 2.0,
  * or the GNU General Public License, version 2 or (at your option)
@@ -17,38 +17,6 @@
 
 #ifndef __LUDLC_SERIAL_H__
 #define __LUDLC_SERIAL_H__
-
-/**
- * @brief Main thread function for the serial transmitter (TX).
- *
- * This function runs as a dedicated thread, managing the encoding and
- * transmission of packets from the LuDLC core to the serial transport.
- *
- * @param ludlc_state A void pointer to the `struct ludlc_connection` object.
- * @return void* Typically returns NULL when the thread exits.
- */
-void *ludlc_tx_serial_thread(void *ludlc_state);
-
-/**
- * @brief Main thread function for the serial receiver (RX).
- *
- * This function runs as a dedicated thread, managing the reception and
- * decoding of bytes from the serial transport into LuDLC packets.
- *
- * @param ludlc_state A void pointer to the `struct ludlc_connection` object.
- * @return void* Typically returns NULL when the thread exits.
- */
-void *ludlc_rx_serial_thread(void *ludlc_state);
-
-/**
- * @brief Fills a platform arguments structure with default serial settings.
- *
- * This utility function can be used to initialize a `ludlc_platform_args_t`
- * structure with sensible defaults for a serial connection.
- *
- * @param args Pointer to the platform arguments structure to be filled.
- */
-void ludlc_default_serial_platform_args(struct ludlc_platform_args *args);
 
 /**
  * @brief Creates and initializes a new LuDLC serial connection.
@@ -78,4 +46,3 @@ int ludlc_serial_connection_create(const ludlc_platform_args_t *args,
 void ludlc_serial_connection_destroy(struct ludlc_connection *conn);
 
 #endif /* __LUDLC_SERIAL_H__ */
-
