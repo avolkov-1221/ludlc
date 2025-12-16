@@ -7,7 +7,7 @@
  * This file provides the byte-stuffing and framing logic for sending
  * LuDLC packets over a serial byte stream.
  *
- * Copyright (C) 2025 Andrey VOLKOV <andrey@volkov.fr> and LuDLC Contributors
+ * Copyright (C) 2025-2026 Andrey VOLKOV <andrey@volkov.fr> & LuDLC Contributors
  *
  * This file is licensed under either the Apache License, Version 2.0,
  * or the GNU General Public License, version 2 or (at your option)
@@ -53,10 +53,10 @@ struct ludlc_sdec_state {
 	ludlc_csum_t		csum;
 
 	/**< Current FSM state (see ludlc_serial_decode). */
-	uint_fast8_t state;
+	uint_fast8_t		state;
 
 	/** @brief Buffer to store the de-escaped incoming packet. */
-	uint8_t payload[LUDLC_MAX_PACKET_SIZE];
+	uint8_t			*payload;
 };
 
 /**
@@ -112,10 +112,24 @@ struct ludlc_senc_state {
  *
  * @param p_state Pointer to the decoder state structure.
  */
-static inline void ludlc_serial_decoder_init(struct ludlc_sdec_state *p_state)
+static inline void ludlc_serial_decoder_init(struct ludlc_sdec_state *dec_state)
 {
-	p_state->state = 0;
-	p_state->size  = 0;
+	dec_state->state = 0;
+	dec_state->size  = 0;
+}
+
+/**
+ * @brief Reinitializes the serial decoder state machine after packet reception.
+ *
+ * @param dec_state   Pointer to the decoder state structure.
+ * @param new_payload Pointer to the new buffer's payload.
+ */
+static inline void ludlc_serial_decoder_prep(struct ludlc_sdec_state *dec_state,
+		void *new_payload)
+{
+	dec_state->size = 0;
+	dec_state->csum = LUDLC_CSUM_INIT_VALUE;
+	dec_state->payload = new_payload;
 }
 
 /**
@@ -129,7 +143,7 @@ static inline void ludlc_serial_decoder_init(struct ludlc_sdec_state *p_state)
  * @param dec_state Pointer to the decoder state structure.
  * @param c The raw octet received from the serial interface.
  */
-static inline void ludlc_serial_decode(struct ludlc_connection *conn,
+static inline bool ludlc_serial_decode(struct ludlc_connection *conn,
 		struct ludlc_sdec_state *dec_state, uint8_t c)
 {
 	/**
@@ -143,8 +157,9 @@ static inline void ludlc_serial_decode(struct ludlc_connection *conn,
 		dec_payload,
 	};
 
-	if (c == LUDLC_SOF)
+	if (c == LUDLC_SOF) {
 		dec_state->state = dec_wait_sof;
+	}
 
 	switch(dec_state->state) {
 	case dec_idle:
@@ -153,20 +168,17 @@ static inline void ludlc_serial_decode(struct ludlc_connection *conn,
 		 * 'if' expression above)
 		 */
 		break;
-
 	case dec_wait_sof:
 		/* This is a new packet, triggered by LUDLC_SOF. */
 		/* First, process the *previous* one. */
+		dec_state->state = dec_payload;
 		if (dec_state->size >= LUDLC_MIN_PACKET_SZ) {
 			/* the CRC([data][crc]) must be a known constant,
 			 * or it's not a crc but something else */
 			if (dec_state->csum == LUDLC_CSUM_VERIFY_VALUE) {
 				LUDLC_INC_STATS(conn, rx_packet);
-				ludlc_receive(
-					conn,
-					(ludlc_packet_t *)dec_state->payload,
-					dec_state->size - sizeof(ludlc_csum_t),
-					conn->proto->get_timestamp());
+				dec_state->size -= sizeof(ludlc_csum_t);
+				return true;
 			} else {
 				LUDLC_INC_STATS(conn, bad_csum);
 			}
@@ -174,18 +186,15 @@ static inline void ludlc_serial_decode(struct ludlc_connection *conn,
 			/* Packet was too short */
 			LUDLC_INC_STATS(conn, dropped);
 		}
-		/* Prepare decoder's FSM for the new packet */
-		dec_state->size = 0;
-		dec_state->csum = LUDLC_CSUM_INIT_VALUE;
-		dec_state->state = dec_payload;
-		return;
 
+		ludlc_serial_decoder_prep(dec_state,
+				dec_state->payload);
+		break;
 	case dec_esc:
 		/* This octet is an escaped data one */
 		dec_state->state = dec_payload;
 		c ^= LUDLC_MASK;
 		/* fallthrough */
-
 	case dec_payload:
 		if (dec_state->size < sizeof(dec_state->payload)) {
 			if(c == LUDLC_ESC) {
@@ -205,6 +214,8 @@ static inline void ludlc_serial_decode(struct ludlc_connection *conn,
 		}
 		break;
 	}
+
+	return false;
 }
 
 /**
@@ -232,7 +243,7 @@ static inline uint8_t ludlc_serial_encode(struct ludlc_connection *conn,
 		enc_eof,
 		enc_esc
 	};
-	uint8_t c;
+	uint8_t c = 0;
 
 	switch (enc_state->state) {
 	case enc_idle:
@@ -351,6 +362,19 @@ static inline void ludlc_serial_encoder_init(struct ludlc_senc_state *p_state)
 	p_state->state = 0;
 	p_state->flags = 0;
 	p_state->hdr_size = 0;
+}
+
+/**
+ * @brief Checks if the serial encoder FSM is in the idle state.
+ *
+ * @param p_state Pointer to the encoder state structure.
+ * @return true if the encoder is idle (ready for a new packet), false otherwise.
+ */
+static inline bool ludlc_serial_encoder_packet_sz(
+		struct ludlc_senc_state *enc_state)
+{
+
+	return enc_state->hdr_size + enc_state->payload_size;
 }
 
 #endif /* __LUDLC_SERIAL_ENC_IMPL_H__ */
