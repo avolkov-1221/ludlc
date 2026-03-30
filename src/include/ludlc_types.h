@@ -27,14 +27,18 @@
  */
 struct ludlc_connection;
 
-/**
- * @typedef ludlc_timer_cb_t
- * @brief Callback function type for platform timers.
- *
- * @param conn Pointer to the LuDLC connection associated with the timer.
- * This allows the callback to access the connection's state.
- */
-typedef void (*ludlc_timer_cb_t)(struct ludlc_connection *conn);
+#ifdef CONFIG_LUDLC_CSUM_TYPE
+typedef CONFIG_LUDLC_CSUM_TYPE	ludlc_csum_t;
+#else
+typedef uint16_t	ludlc_csum_t;
+#endif
+
+/* --- Timestamps --- */
+#ifdef CONFIG_LUDLC_TIMESTAMP_TYPE
+typedef CONFIG_LUDLC_TIMESTAMP_TYPE	ludlc_timestamp_t;
+#else
+typedef uint64_t ludlc_timestamp_t;
+#endif
 
 #endif /* __LUDLC_TYPES_H__ */
 

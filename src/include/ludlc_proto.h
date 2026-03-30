@@ -18,9 +18,6 @@
 #ifndef __LUDLC_PROTO_H__
 #define __LUDLC_PROTO_H__
 
-#include <stdint.h>
-#include <ludlc_platform_config.h>
-
 /**
  * @def CONFIG_LUDLC_WINDOW
  * @brief Defines the maximal size of the packets waiting queue (sliding window).
@@ -149,6 +146,22 @@ typedef CONFIG_LUDLC_CHANNEL_TYPE	ludlc_channel_t;
 #define CONFIG_LUDLC_CONTROL_CHANNEL	0
 #endif
 
+#define LUDLC_MAX_TTL		127
+
+/**
+ * @def CONFIG_LUDLC_DEFAULT_TTL
+ * @brief Maximum Time-To-Live (retries) for a packet before it is failed.
+ * Defaults to 4 if not configured.
+ */
+#ifdef CONFIG_LUDLC_DEFAULT_TTL
+#if CONFIG_LUDLC_DEFAULT_TTL >= LUDLC_MAX_TTL || CONFIG_LUDLC_DEFAULT_TTL < 1
+#error The CONFIG_LUDLC_DEFAULT_TTL value is out of range [1; 126], please fix it!
+#endif
+#define LUDLC_DEFAULT_TTL	CONFIG_LUDLC_MAX_TTL
+#else
+#define LUDLC_DEFAULT_TTL	4
+#endif
+
 /**
  * @struct ludlc_proto_cb
  * @brief Transport-layer callback structure.
@@ -159,54 +172,6 @@ typedef CONFIG_LUDLC_CHANNEL_TYPE	ludlc_channel_t;
  * checksumming and timestamping.
  */
 struct ludlc_proto_cb {
-	/**
-	 * @brief (Optional) Called to initialize the transmitter hardware.
-	 * @param user_arg The user context pointer from the connection.
-	 * @return 0 on success, negative error code on failure.
-	 */
-	int (*tx_start)(void *user_arg);
-	/**
-	 * @brief (Optional) Called to de-initialize the transmitter hardware.
-	 * @param user_arg The user context pointer from the connection.
-	 * @return 0 on success, negative error code on failure.
-	 */
-	int (*tx_stop)(void *user_arg);
-	/**
-	 * @brief (Mandatory) Writes a block of data to the transmitter hardware.
-	 *
-	 * This function should be non-blocking or have its own timeout.
-	 *
-	 * @param user_arg The user context pointer from the connection.
-	 * @param buf Pointer to the data buffer to write.
-	 * @param sz The number of bytes to write.
-	 * @return The number of bytes written, or a negative error code.
-	 */
-	ssize_t (*tx_write)(void *user_arg, const void *buf, size_t sz);
-
-	/**
-	 * @brief (Optional) Called to initialize the receiver hardware.
-	 * @param user_arg The user context pointer from the connection.
-	 * @return 0 on success, negative error code on failure.
-	 */
-	int (*rx_start)(void *user_arg);
-	/**
-	 * @brief (Optional) Called to de-initialize the receiver hardware.
-	 * @param user_arg The user context pointer from the connection.
-	 * @return 0 on success, negative error code on failure.
-	 */
-	int (*rx_stop)(void *user_arg);
-	/**
-	 * @brief (Mandatory) Reads a block of data from the hardware.
-	 *
-	 * @param user_arg The user context pointer from the connection.
-	 * @param buf Pointer to the buffer to store read data.
-	 * @param sz The maximum number of bytes to read.
-	 * @param tout_ms Timeout in milliseconds. A negative value
-	 * typically means wait indefinitely.
-	 * @return The number of bytes read, or a negative error code
-	 * (e.g., -EAGAIN on timeout).
-	 */
-	ssize_t (*rx_read)(void *user_arg, void *buf, size_t sz, int tout_ms);
 	/**
 	 * @brief (Optional/Mandatory) Calculates the checksum of a single byte.
 	 *

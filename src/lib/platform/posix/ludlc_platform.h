@@ -5,11 +5,11 @@
  * @brief LuDLC POSIX platform related definitions
  *
  * This file provides the concrete implementation of the LuDLC platform
- * abstraction layer for POSIX-compliant systems (e.g., Linux).
+ * abstraction layer for POSIX-compliant systems.
  * It defines types and macros for locks, timers, atomics, and FIFOs
  * using pthreads, C11 atomics, and standard C libraries.
  *
- * Copyright (C) 2025 Andrey VOLKOV <andrey@volkov.fr> and LuDLC Contributors
+ * Copyright (C) 2025-2026 Andrey VOLKOV <andrey@volkov.fr> & LuDLC Contributors
  *
  * This file is licensed under either the Apache License, Version 2.0,
  * or the GNU General Public License, version 2 or (at your option)
@@ -25,7 +25,6 @@
 #include <stdlib.h>
 #include <pthread.h>
 #include <time.h>
-#include <endian.h>
 #include <stdatomic.h>
 
 #include <ludlc_types.h>
@@ -118,6 +117,19 @@
  */
 typedef uint64_t 			ludlc_timestamp_t;
 
+/**
+ * @brief Platform atomic type, mapping to C11 `atomic_uint`.
+ */
+typedef atomic_uint ludlc_platform_atomic_t;
+
+struct ludlc_platform_connection {
+#define LUDLC_CONN_FORCE_TX_F		(1U << 0)
+#define LUDLC_PLATFORM_LAST_TX_EVENT	1
+	ludlc_platform_atomic_t tx_events;
+
+	int tx_pipe[2];
+};
+
 /* Values for CRC-16/KERMIT (little-endian version of XMODEM one) */
 /** @brief Initial value for the CRC-16/KERMIT checksum. */
 #define LUDLC_CSUM_INIT_VALUE		0
@@ -127,18 +139,46 @@ typedef uint64_t 			ludlc_timestamp_t;
 typedef uint16_t			ludlc_csum_t;
 
 /**
- * @brief Converts checksum to network byte order (which is little-endian
- * for CRC-16/KERMIT).
- * @param csum The host-order checksum.
- * @return The little-endian checksum.
+ * @brief Maps host-order CRC to on-wire little-endian (KERMIT field order).
+ *
+ * Avoids non-portable endian.h / htole16 (glibc). Uses @c __BYTE_ORDER__
+ * when available, otherwise a union probe, then the same 16-bit swap as GCC
+ * big-endian.
  */
-#define LUDLC_CSUM_HTON(csum)		htole16(csum)
+static inline ludlc_csum_t ludlc_platform_csum_to_le(ludlc_csum_t csum)
+{
+#if defined(__BYTE_ORDER__) && defined(__ORDER_LITTLE_ENDIAN__) && \
+	__BYTE_ORDER__ == __ORDER_LITTLE_ENDIAN__
+	return csum;
+#elif defined(__BYTE_ORDER__) && defined(__ORDER_BIG_ENDIAN__) && \
+	__BYTE_ORDER__ == __ORDER_BIG_ENDIAN__
+	return (ludlc_csum_t)(((uint32_t)csum << 8) | ((uint32_t)csum >> 8));
+#else
+	union {
+		uint16_t u16;
+		uint8_t u8[2];
+	} probe;
+
+	probe.u16 = 1U;
+	if (probe.u8[0] == 1U) {
+		return csum;
+	}
+	return (ludlc_csum_t)(((uint32_t)csum << 8) | ((uint32_t)csum >> 8));
+#endif
+}
+
+/**
+ * @brief Converts checksum to on-wire order (little-endian for CRC-16/KERMIT).
+ * @param csum The host-order checksum.
+ * @return Value to place in the frame (little-endian).
+ */
+#define LUDLC_CSUM_HTON(csum)		ludlc_platform_csum_to_le(csum)
 
 /**
  * @brief Declares a kfifo instance.
  * @param fifo The variable name for the kfifo structure.
  */
-#define LUDLC_DECLARE_KFIFO(fifo)	struct kfifo fifo
+#define LUDLC_DECLARE_RING_BUF(fifo)	struct kfifo fifo
 
 /**
  * @brief Initializes a kfifo instance.
@@ -146,10 +186,8 @@ typedef uint16_t			ludlc_csum_t;
  * @param buf Pointer to the data buffer.
  * @param sz The size of the buffer.
  */
-#define LUDLC_KFIFO_INIT(fifo, buf, sz) kfifo_init(fifo, buf, sz)
+#define LUDLC_RING_BUF_INIT(fifo, buf, sz) kfifo_init(fifo, buf, sz)
 
-/** @brief Flag indicating that platform allocation functions are inlined. */
-#define LUDLC_PLATFORM_ALLOC_INLINED	1
 /**
  * @brief (Inline) Allocates memory using standard `cmalloc`.
  * @param sz Size to allocate.
@@ -157,7 +195,7 @@ typedef uint16_t			ludlc_csum_t;
  */
 static inline void *ludlc_platform_alloc(size_t sz)
 {
-	return calloc(sz, 1);
+	return calloc(1, sz);
 }
 
 /**
@@ -168,6 +206,19 @@ static inline void ludlc_platform_free(void *ptr)
 {
 	free(ptr);
 }
+
+/* --- Timers --- */
+typedef struct ludlc_connection *ludlc_platform_timer_arg_t;
+
+/**
+ * @typedef ludlc_timer_cb_t
+ * @brief Callback function type for platform timers.
+ *
+ * @param conn Pointer to the LuDLC connection associated with the timer.
+ * This allows the callback to access the connection's state.
+ */
+
+typedef void (*ludlc_timer_cb_t)(ludlc_platform_timer_arg_t arg);
 
 /**
  @brief The LuDLC POSIX platform timer structure.
@@ -191,10 +242,11 @@ typedef struct {
 
 } ludlc_platform_timer_t;
 
-/**
- * @brief Platform atomic type, mapping to C11 `atomic_uint`.
- */
-typedef atomic_uint ludlc_platform_atomic_t;
+static inline struct ludlc_connection *ludlc_timer_arg_to_conn(
+		ludlc_platform_timer_arg_t arg)
+{
+	return arg;
+}
 
 /**
  * @brief (Inline) Atomically tests a bit in an atomic variable.
@@ -255,8 +307,5 @@ static inline bool ludlc_platform_test_and_set_bit(long nr,
 	uint prev_val = atomic_fetch_or(addr, 1U << nr);
 	return !!(prev_val & (1U << nr));
 }
-
-/* Include platform-specific hardware definitions (e.g., serial args) */
-#include "ludlc_hardware.h"
 
 #endif /*__LUDLC_CONFIG_H__*/

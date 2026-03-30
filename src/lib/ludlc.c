@@ -14,11 +14,47 @@
  * any later version.
  */
 
-#include <error.h>
 #include <errno.h>
+#include <stdint.h>
+#include <stdlib.h>
 
 #include <ludlc.h>
+#include <ludlc_platform.h>
 #include <ludlc_private.h>
+
+/**
+ * @def HANDLE_RX_CONTINUE_F
+ * @brief Flag indicating that packet handling should continue processing.
+ *        Implies a successful state transition to CONNECTED.
+ */
+#define HANDLE_RX_CONTINUE_F	(1U<<0)
+
+/**
+ * @def HANDLE_RX_REQUEST_TX_F
+ * @brief Flag indicating that a transmitter have to be called ASAP.
+ */
+#define HANDLE_RX_REQUEST_TX_F	(1U<<1)
+
+/**
+ * @def HANDLE_RX_ACCEPT_F
+ * @brief Flag indicating that packet is ok and should be transferred
+ *        to the upper layer.
+ */
+#define HANDLE_RX_ACCEPT_F	(1U<<2)
+
+/**
+ * @def HANDLE_RX_CONNECTED_F
+ * @brief Flag indicating that the connection has been established and
+ *        the upper level should be notified.
+ */
+#define HANDLE_RX_CONNECTED_F	(1U<<3)
+
+/**
+ * @def HANDLE_RX_DISCONNECTED_F
+ * @brief Flag indicating that the connection has been lost and
+ *        the upper level should be notified.
+ */
+#define HANDLE_RX_DISCONNECT_F	(1U<<4)
 
 /**
  * @brief Checks if a given packet ID represents a PING packet.
@@ -166,7 +202,7 @@ static void ludlc_on_confirm_lock(struct ludlc_connection *conn,
  * @param cq Unused.
  * @param confirmed_num Unused.
  */
-static void ludlc_confirm_unlocked(struct ludlc_connection *conn,
+static inline void ludlc_confirm_unlocked(struct ludlc_connection *conn,
 		struct packet_queue_item *cq, ludlc_id_t confirmed_num)
 {
 }
@@ -223,21 +259,6 @@ static void on_disconnect_lock(struct ludlc_connection *conn,
 }
 
 /**
- * @brief Requests an immediate transmission.
- *
- * This function signals the LuDLC transmit task/thread (if any) to wake
- * up and attempt to send a packet. It sets a flag to force transmission
- * even if no new data has been queued (e.g., to send a PING with ACK).
- *
- * @param conn Pointer to the connection structure.
- */
-void ludlc_request_tx(struct ludlc_connection *conn)
-{
-	LUDLC_WQ_WAKEUP(conn->tx_wq,
-		ludlc_platform_set_bit(LUDLC_CONN_FORCE_TX_F, &conn->flags));
-}
-
-/**
  * @brief Enqueues a data packet for transmission.
  *
  * Adds a data payload pointer to the transmit queue to be sent
@@ -248,16 +269,22 @@ void ludlc_request_tx(struct ludlc_connection *conn)
  * @param dst_chan The destination channel for the packet.
  * @param buf Pointer to the payload data buffer.
  * @param size The size of the payload data in bytes.
- * @param oneshot If true, the packet will only be tried once (TTL=1).
- * If false, it uses the default retry mechanism (LUDLC_MAX_TTL).
+ * @param ttl If value is equal zero, then packet will only be tried once (TTL=1).
+ * If greater, it uses the default retry mechanism (LUDLC_MAX_TTL).
  * @return 0 on success.
  * @return -EAGAIN if the transmit queue is full.
  */
 int ludlc_enqueue_data(struct ludlc_connection *conn,
 		ludlc_channel_t dst_chan,
-		const void *buf, ludlc_payload_size_t size, bool oneshot)
+		const void *buf, ludlc_payload_size_t size, uint8_t ttl)
 {
 	int ret;
+
+	if (ttl > LUDLC_MAX_TTL) {
+		ttl = LUDLC_MAX_TTL;
+	} else if(ttl == 0) {
+		ttl = 1;
+	}
 
 	LUDLC_LOCK(&conn->lock);
 	if (!ludlc_tx_queue_full(conn)) {
@@ -267,7 +294,7 @@ int ludlc_enqueue_data(struct ludlc_connection *conn,
 
 		/* Populate the queue slot */
 		conn->packets_q[q_idx].hdr.chan = dst_chan;
-		conn->packets_q[q_idx].ttl = oneshot ? 1 : LUDLC_MAX_TTL;
+		conn->packets_q[q_idx].ttl = ttl;
 		conn->packets_q[q_idx].payload = buf;
 		conn->packets_q[q_idx].size = size;
 
@@ -281,29 +308,10 @@ int ludlc_enqueue_data(struct ludlc_connection *conn,
 	LUDLC_UNLOCK(&conn->lock);
 
 	if (!ret)
-		ludlc_request_tx(conn); /* Signal TX task */
+		ludlc_platform_request_tx(conn); /* Signal TX task */
 
 	return ret;
 }
-
-/**
- * @def HANDLE_RX_CONTINUE_F
- * @brief Flag indicating that packet handling should continue processing.
- *        Implies a successful state transition to CONNECTED.
- */
-#define HANDLE_RX_CONTINUE_F	(1U<<0)
-/**
- * @def HANDLE_RX_REQUEST_TX_F
- * @brief Flag indicating that a transmitter have to be called ASAP.
- */
-#define HANDLE_RX_REQUEST_TX_F	(1U<<1)
-
-/**
- * @def HANDLE_RX_ACCEPT_F
- * @brief Flag indicating that packet is ok and should be transferred
- *        to the upper layer.
- */
-#define HANDLE_RX_ACCEPT_F	(1U<<2)
 
 /**
  * @brief Handles an incoming packet when the LuDLC FSM is in an
@@ -325,7 +333,8 @@ int ludlc_enqueue_data(struct ludlc_connection *conn,
  */
 static int rx_handle_handshake(
 		struct ludlc_connection *conn,
-		ludlc_packet_t *packet)
+		ludlc_packet_t *packet,
+		size_t pkt_sz)
 {
 	ludlc_id_t id = packet->hdr.id.tx_id;
 	int ret = HANDLE_RX_REQUEST_TX_F; /* Default to sending a response */
@@ -338,10 +347,10 @@ static int rx_handle_handshake(
 		 * start sending us normal packets, so we can do the same */
 		if (conn->conn_state == LUDLC_STATE_WAIT_CONN_2) {
 			conn->conn_state = LUDLC_STATE_CONNECTED;
-			on_connect_lock(conn);
+			LUDLC_INC_STATS(conn, on_conn);
 			/* and demands to continue handle the packet's header
 			 * as a normal one */
-			return ret | HANDLE_RX_CONTINUE_F;
+			return ret | HANDLE_RX_CONTINUE_F | HANDLE_RX_CONNECTED_F;
 		}
 		LUDLC_LOG_DEBUG(
 			"unexpected packet arrived: (%x, %x) when state = %d",
@@ -356,9 +365,17 @@ static int rx_handle_handshake(
 		 * (conn_state or conn_state + 1).
 		 */
 		if ((id - conn->conn_state) < 2U) {
+			/* Check the optional caps data */
+			if (id == LUDLC_STATE_WAIT_CONN_1 &&
+					pkt_sz > sizeof(ludlc_packet_hdr_t)) {
+				ret |= HANDLE_RX_ACCEPT_F;
+			}
+
 			/* This is the expected next handshake step */
-			if (++conn->conn_state == LUDLC_STATE_CONNECTED)
-				on_connect_lock(conn);
+			if (++conn->conn_state == LUDLC_STATE_CONNECTED) {
+				LUDLC_INC_STATS(conn, on_conn);
+				ret |= HANDLE_RX_CONNECTED_F;
+			}
 		} else if ((id + 1) != conn->conn_state) {
 			/* Check for an ID that is too far off
 			 * (not equal to conn_state - 1). Probably due to
@@ -411,7 +428,7 @@ static int rx_handle_nak(
 	ludlc_id_t wr_idx = (conn->last_ack + 1) & LUDLC_ID_MASK;
 	ludlc_id_t id = wr_idx;
 
-	/* Remove expired packages from the queue */
+	/* Update TTL counter and remove expired packages from the queue */
 	for (; num_wait; num_wait--) {
 		ludlc_id_t q_idx = id & LUDLC_WINDOW_MASK;
 
@@ -427,7 +444,7 @@ static int rx_handle_nak(
 			wr_idx = (wr_idx + 1) & LUDLC_ID_MASK;
 		} else {
 			/* Packet expired (TTL=0) */
-			conn->packets_q[q_idx].status.result = EREMOTEIO;
+			conn->packets_q[q_idx].status.result = ETIMEDOUT;
 			ludlc_on_confirm_lock(conn,
 					&conn->packets_q[q_idx],
 					cq, confirmed_num);
@@ -505,7 +522,7 @@ static int rx_handle_packet(
 	/* OK, the packet's integrity looks good,
 	 * so start handling the packet. */
 	if (conn->conn_state != LUDLC_STATE_CONNECTED) {
-		ret = rx_handle_handshake(conn, packet);
+		ret = rx_handle_handshake(conn, packet, pkt_sz);
 		if ((ret & HANDLE_RX_CONTINUE_F) == 0) {
 			/* Handshake not complete, stop further processing */
 			return ret;
@@ -516,7 +533,7 @@ static int rx_handle_packet(
 		ret = 0;
 	}
 
-	id = packet->hdr.id.tx_id & ~LUDLC_PING_FLAG;
+	id = packet->hdr.id.tx_id & LUDLC_ID_MASK;
 
 	/* Handle "tx_id" of the packet */
 	if (!ping && packet->hdr.chan == CONFIG_LUDLC_CONTROL_CHANNEL) {
@@ -524,9 +541,10 @@ static int rx_handle_packet(
 		if (id != LUDLC_STATE_WAIT_CONN_2) {
 			/* Any control packet other than last handshake step */
 			on_disconnect_lock(conn, confirmed_q, confirmed_num);
+			ret |= HANDLE_RX_DISCONNECT_F;
 		}
 		/* Respond to disconnect/handshake */
-		return HANDLE_RX_REQUEST_TX_F;
+		return ret | HANDLE_RX_REQUEST_TX_F;
 	}
 
 	/* Any valid packet (even ping) resets the connection watchdog */
@@ -586,10 +604,11 @@ static int rx_handle_packet(
 		}
 
 		/* Check if the NAK flag is set in the ACK ID, and handle it */
-		if (packet->hdr.id.ack_id & LUDLC_NAK_FLAG)
-			ret = rx_handle_nak(conn, packet, num_wait, confirmed_q,
+		if (packet->hdr.id.ack_id & LUDLC_NAK_FLAG) {
+			ret |= rx_handle_nak(conn, packet, num_wait,
+					confirmed_q,
 					confirmed_num);
-
+		}
 	} else {
 		// TODO:
 		/* Wow, this is strange case, peer ACK'd packets we haven't sent.
@@ -643,21 +662,34 @@ int ludlc_receive(struct ludlc_connection *conn,
 
 	/* --- Actions outside the lock --- */
 
-	if(ret & HANDLE_RX_REQUEST_TX_F)
-		ludlc_request_tx(conn);  /* Signal TX task */
+	if (ret & HANDLE_RX_CONNECTED_F) {
+		LUDLC_INC_STATS(conn, on_conn);
+		if (conn->cb->on_connect) {
+			conn->cb->on_connect(conn, conn->user_ctx);
+		}
+	}
+
+	if(ret & HANDLE_RX_REQUEST_TX_F) {
+		ludlc_platform_request_tx(conn);  /* Signal TX task */
+	}
 
 	/* Call deferred on_confirm callbacks (for MT) */
 	ludlc_confirm_unlocked(conn, confirmed_q, confirmed_num);
 
+	if (ret & HANDLE_RX_DISCONNECT_F) {
+		if (conn->cb->on_disconnect) {
+			conn->cb->on_disconnect(conn, conn->user_ctx);
+		}
+	}
+
 	/* Call "on_recv" callback if packet is ok */
-	if (ret & HANDLE_RX_ACCEPT_F) {
-		if(conn->cb->on_recv)
-			conn->cb->on_recv(conn,
-					packet->hdr.chan,
-					packet->payload,
-					pkt_sz - sizeof(packet->hdr),
-					tstamp,
-					conn->user_ctx);
+	if ((ret & HANDLE_RX_ACCEPT_F) && conn->cb->on_recv) {
+		conn->cb->on_recv(conn,
+				packet->hdr.chan,
+				packet->payload,
+				pkt_sz - sizeof(packet->hdr),
+				tstamp,
+				conn->user_ctx);
 	}
 
 	return 0;
@@ -786,10 +818,11 @@ int ludlc_get_packet_to_send(struct ludlc_connection *conn,
  *
  * @param conn Pointer to the connection structure (passed from timer context).
  */
-static void ludlc_ping_timer(struct ludlc_connection *conn)
+void ludlc_ping_timer(ludlc_platform_timer_arg_t arg)
 {
+	struct ludlc_connection *conn = ludlc_timer_arg_to_conn(arg);
 	LUDLC_LOG_DEBUG("Ping time");
-	ludlc_request_tx(conn);
+	ludlc_platform_request_tx(conn);
 }
 
 /**
@@ -802,8 +835,9 @@ static void ludlc_ping_timer(struct ludlc_connection *conn)
  *
  * @param conn Pointer to the connection structure (passed from timer context).
  */
-static void ludlc_wd_timer(struct ludlc_connection *conn)
+static void ludlc_wd_timer(ludlc_platform_timer_arg_t arg)
 {
+	struct ludlc_connection *conn = ludlc_timer_arg_to_conn(arg);
 	ludlc_platform_set_bit(LUDLC_CONN_TIMEOUT_F, &conn->flags);
 }
 
@@ -869,9 +903,7 @@ int ludlc_connection_init(struct ludlc_connection *conn,
 		return -EINVAL;
 
 	/* The "write", "read" and "get_timestamp" callbacks are obligatory */
-	if(!proto_cb->tx_write ||
-		!proto_cb->rx_read ||
-		!proto_cb->get_timestamp)
+	if (!proto_cb->get_timestamp)
 		return -EINVAL;
 
 	memset(conn, 0, sizeof(*conn));
@@ -883,7 +915,7 @@ int ludlc_connection_init(struct ludlc_connection *conn,
 	conn->ctrl_packet.chan = CONFIG_LUDLC_CONTROL_CHANNEL;
 	conn->conn_state = LUDLC_STATE_DISCONNECTED;
 
-	LUDLC_KFIFO_INIT(&conn->tx_fifo, conn->tx_buf, sizeof(conn->tx_buf));
+	ludlc_platform_conn_init(conn);
 
 	/* Initialize platform-specific timers */
 	ret = ludlc_platform_init_timer(conn, &conn->ping_timer,
@@ -903,4 +935,3 @@ int ludlc_connection_init(struct ludlc_connection *conn,
 
 	return ret;
 }
-

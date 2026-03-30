@@ -1,8 +1,8 @@
 // SPDX-License-Identifier: (Apache-2.0 OR GPL-2.0-or-later)
 /*
- * ludlc_hardware.h
+ * ludlc_platform_args.h
  *
- * LuDLC Posix hardware related definitions and declararions
+ * LuDLC platform hardware related definitions and declararions
  *
  * Copyright (C) 2025 Andrey VOLKOV <andrey@volkov.fr> and LuDLC Contributors
  *
@@ -11,8 +11,8 @@
  * any later version.
  */
 
-#ifndef __LUDLC_HARDWARE_H__
-#define __LUDLC_HARDWARE_H__
+#ifndef __LUDLC_PLATFORM_ARGS_H__
+#define __LUDLC_PLATFORM_ARGS_H__
 
 typedef struct ludlc_platform_args {
 	char *port;
@@ -20,4 +20,4 @@ typedef struct ludlc_platform_args {
 	unsigned int  parity;
 } ludlc_platform_args_t;
 
-#endif /* __LUDLC_HARDWARE_H__ */
+#endif /* __LUDLC_PLATFORM_ARGS_H__ */

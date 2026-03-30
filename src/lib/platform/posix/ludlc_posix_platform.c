@@ -4,7 +4,7 @@
  *
  * @brief LuDLC POSIX platform-specific implementations.
  *
- * Copyright (C) 2025 Andrey VOLKOV <andrey@volkov.fr> and LuDLC Contributors
+ * Copyright (C) 2025-2026 Andrey VOLKOV <andrey@volkov.fr> & LuDLC Contributors
  *
  * This file is licensed under either the Apache License, Version 2.0,
  * or the GNU General Public License, version 2 or (at your option)
@@ -12,8 +12,10 @@
  */
 
 #include <unistd.h>
+#include <stdint.h>
 #include <errno.h>
 #include <string.h>
+#include <fcntl.h>
 #include <stdlib.h>
 /* For thrd_yield (C11 standard yield) */
 #include <threads.h>
@@ -28,9 +30,9 @@
  * `SIGEV_THREAD`. It receives the pointer to our `ludlc_platform_timer_t`
  * struct and safely calls the user-specified LuDLC callback.
  *
- * It uses atomic flags to manage race conditions between `ludlc_platform_stop_timer`
- * and the timer's own expiration, ensuring the callback is not executed
- * if the timer was stopped.
+ * It uses atomic flags to manage race conditions between
+ * `ludlc_platform_stop_timer` and the timer's own expiration,
+ * ensuring the callback is not executed if the timer was stopped.
  *
  * @param sv The `sigval` union containing the pointer (`sival_ptr`) to
  * the `ludlc_platform_timer_t` structure.
@@ -210,4 +212,57 @@ void ludlc_platform_destroy_timer(ludlc_platform_timer_t *timer)
 
 		timer_delete(timer->posix_timer_id);
 	}
+}
+
+/**
+ * @brief Requests an immediate transmission.
+ *
+ * This function signals the LuDLC transmit task/thread (if any) to wake
+ * up and attempt to send a packet. It sets a flag to force transmission
+ * even if no new data has been queued (e.g., to send a PING with ACK).
+ *
+ * @param conn Pointer to the connection structure.
+ */
+void ludlc_platform_request_tx(struct ludlc_connection *conn)
+{
+	/* Set the force TX flag */
+	ludlc_platform_set_bit(LUDLC_CONN_FORCE_TX_F, &conn->pconn.tx_events);
+
+	/* Wake up the TX thread by writing to the pipe */
+	char msg = 'T';
+	if (write(conn->pconn.tx_pipe[1], &msg, 1) == -1) {
+		/* Handle error, e.g., pipe closed or full.
+		 * It's not a critical error if the pipe is full (EAGAIN),
+		 * as the FORCE_TX flag is already set. Only log other errors. */
+		if (errno != EAGAIN) {
+			LUDLC_LOG_ERROR("Failed to write to TX wakeup pipe: %s",
+				strerror(errno));
+		}
+	}
+}
+
+void ludlc_platform_conn_destroy(struct ludlc_connection *conn)
+{
+	if (conn->pconn.tx_pipe[0] >= 0) {
+		close(conn->pconn.tx_pipe[0]);
+		conn->pconn.tx_pipe[0] = -1;
+	}
+
+	if (conn->pconn.tx_pipe[1] >= 0) {
+		close(conn->pconn.tx_pipe[1]);
+		conn->pconn.tx_pipe[1] = -1;
+	}
+}
+
+int ludlc_platform_conn_init(struct ludlc_connection *conn)
+{
+	conn->pconn.tx_pipe[0] = -1;
+	conn->pconn.tx_pipe[1] = -1;
+
+	if (pipe(conn->pconn.tx_pipe) < 0) {
+		return -errno;
+	}
+
+	fcntl(conn->pconn.tx_pipe[0], F_SETFL, O_NONBLOCK);
+	return 0;
 }

@@ -21,7 +21,7 @@
 
 #include <ludlc_types.h>
 #include <ludlc_proto.h>
-#include <ludlc_platform_config.h>
+#include <ludlc_platform_args.h>
 
 /**
  * @struct ludlc_conn_cb
@@ -90,8 +90,6 @@ struct ludlc_conn_cb {
 			void *user_arg);
 };
 
-#include <ludlc_serial.h>
-
 /**
  * @brief Allocates and initializes a new LuDLC connection state.
  *
@@ -155,13 +153,15 @@ void ludlc_connection_cleanup(struct ludlc_connection *conn);
  * @param dst_chan The destination channel for the packet.
  * @param buf Pointer to the payload data buffer.
  * @param size The size of the payload data in bytes.
- * @param oneshot If true, the packet will only be tried once (TTL=1).
- * If false, it uses the default retry mechanism.
+ * @param ttl If greater than zero and less than MAX_TTL, the stack uses the
+ * default retry mechanism, and the packet will be resent up to ttl times.
+ * If 0, then this is a “one-shot” packet and will be sent just once.
+ * If ttl is MAX_TTL, then the packet will be resent indefinitely.
  * @return 0 on success.
  * @return -EAGAIN if the transmit queue (window) is full.
  */
 int ludlc_enqueue_data(struct ludlc_connection *conn,
 		ludlc_channel_t dst_chan,
-		const void *buf, ludlc_payload_size_t size, bool oneshot);
+		const void *buf, ludlc_payload_size_t size, uint8_t ttl);
 
 #endif /* __LUDLC_H__ */

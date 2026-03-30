@@ -58,6 +58,7 @@ endif(CONFIG_STATIC_LUDLC_LIBRARY)
 if(CONFIG_SHARED_LUDLC_LIBRARY)
 	set(CMAKE_LIBRARY_PATH ${CMAKE_CURRENT_BINARY_DIR})
 	add_library(${ludlc_lib} SHARED ${LUDLC})
-	set_target_properties(${ludlc_lib} PROPERTIES VERSION ${CMAKE_PROJECT_VERSION} SOVERSION 1)
+	set_target_properties(${ludlc_lib} PROPERTIES
+		VERSION ${CMAKE_PROJECT_VERSION} SOVERSION 1)
 	target_link_libraries(${ludlc_lib} PUBLIC ${libs})
 endif(CONFIG_SHARED_LUDLC_LIBRARY)

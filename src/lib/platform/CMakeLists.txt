@@ -7,11 +7,3 @@
 # any later version.
 
 add_subdirectory(${TARGET_PLATFORM})
-include_directories(
-	${TARGET_PLATFORM} 
-)
-
-target_include_directories(ludlc_includes INTERFACE
-	${TARGET_PLATFORM}
-	"${CMAKE_CURRENT_BINARY_DIR}/${TARGET_PLATFORM}"
-)

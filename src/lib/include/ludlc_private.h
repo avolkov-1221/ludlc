@@ -71,28 +71,6 @@ struct ludlc_stats {
 #define LUDLC_INC_STATS(state, var)
 #endif
 
-#ifdef CONFIG_LUDLC_MAX_TTL
-#if CONFIG_LUDLC_MAX_TTL > 126 || CONFIG_LUDLC_MAX_TTL < 1
-#error The CONFIG_LUDLC_MAX_TTL value is out of range [1; 126], please fix it!
-#endif
-/**
- * @def LUDLC_MAX_TTL
- * @brief Maximum Time-To-Live (retries) for a packet before it is failed.
- * Defaults to 4 if not configured.
- */
-#define LUDLC_MAX_TTL	CONFIG_LUDLC_MAX_TTL
-#else
-#define LUDLC_MAX_TTL	4
-#endif
-
-#ifndef CONFIG_TX_BUF_SIZE
-/**
- * @def CONFIG_TX_BUF_SIZE
- * @brief Size of the platform-level transmit buffer. Defaults to 64 bytes.
- */
-#define CONFIG_TX_BUF_SIZE	64
-#endif
-
 /**
  * @struct packet_queue_item_status
  * @brief Used in the confirmation queue/callback to report packet status.
@@ -151,23 +129,15 @@ struct ludlc_connection {
 	/**< Watchdog timer for connection timeout. */
 	ludlc_platform_timer_t	wd_timer;
 
-	/**< Platform-level TX buffer FIFO. */
-	LUDLC_DECLARE_KFIFO(tx_fifo);
-	/**< Wait queue to signal the TX task. */
-	LUDLC_DECLARE_WQ(tx_wq);
-
 /** @def LUDLC_CONN_SEND_NAK_F
  * @brief Atomic flag bit indicating a NAK (Negative Ack) should be sent. */
 #define LUDLC_CONN_SEND_NAK_F	0
-/** @def LUDLC_CONN_FORCE_TX_F
- * @brief Atomic flag bit to force a TX cycle (e.g., for ACK, PING). */
-#define LUDLC_CONN_FORCE_TX_F	1
 /** @def LUDLC_CONN_TIMEOUT_F
  * @brief Atomic flag bit indicating the watchdog timer has expired. */
-#define LUDLC_CONN_TIMEOUT_F	2
+#define LUDLC_CONN_TIMEOUT_F	1
 /** @def LUDLC_CONN_INITED_F
  * @brief Atomic flag bit indicating the connection is inited. */
-#define LUDLC_CONN_INITED_F	3
+#define LUDLC_CONN_INITED_F	2
 	/**< Atomic bitfield for connection flags. */
 	ludlc_platform_atomic_t	flags;
 
@@ -178,6 +148,8 @@ struct ludlc_connection {
 	ludlc_packet_hdr_t ctrl_packet;
 	/** @brief The sliding window packet queue. */
 	struct packet_queue_item packets_q[CONFIG_LUDLC_WINDOW];
+
+	struct ludlc_platform_connection pconn;
 
 	/**!< ID of the last packet enqueued by the user. */
 	ludlc_id_t last_queued;
@@ -190,9 +162,6 @@ struct ludlc_connection {
 
 	/**!< Current connection FSM state (see @ref ludlc_conn_state). */
 	uint8_t conn_state;
-
-	/** @brief Platform-level transmit buffer. */
-	uint8_t tx_buf[CONFIG_TX_BUF_SIZE];
 };
 
 /**
@@ -210,11 +179,5 @@ int ludlc_receive(struct ludlc_connection *conn,
 int ludlc_get_packet_to_send(struct ludlc_connection *conn,
 		const void **hdr, ludlc_payload_size_t *hdr_sz,
 		const void **payload, ludlc_payload_size_t *pay_sz);
-
-/**
- * @brief Requests an immediate transmission cycle.
- * @see ludlc_request_tx() implementation in ludlc.c
- */
-void ludlc_request_tx(struct ludlc_connection *conn);
 
 #endif /* __LUDLC_PRIVATE_H__ */

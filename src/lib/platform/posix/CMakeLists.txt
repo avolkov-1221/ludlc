@@ -20,7 +20,7 @@ target_include_directories(ludlc_includes INTERFACE
 )
 
 # enable Posix real-time (timer_xxx functions) and GNU extensions (htonl etc)
-set(PLATFORM_DEFS 
+set(PLATFORM_DEFS
 	"-D_GNU_SOURCE=1"
 	"-D_POSIX_C_SOURCE=200809L"
 	CACHE INTERNAL "posix RT defs")
@@ -33,9 +33,9 @@ set(CMAKE_C_EXTENSIONS ON CACHE BOOL "Enable C extensions globally" FORCE)
 set(COMMON
 	${CMAKE_CURRENT_SOURCE_DIR}/log.h
 	${CMAKE_CURRENT_SOURCE_DIR}/log.c
-	${CMAKE_CURRENT_SOURCE_DIR}/ludlc_posix.c
-	${CMAKE_CURRENT_SOURCE_DIR}/ludlc_platform_config.h
-	${CMAKE_CURRENT_SOURCE_DIR}/ludlc_hardware.h
+	${CMAKE_CURRENT_SOURCE_DIR}/ludlc_posix_platform.c
+	${CMAKE_CURRENT_SOURCE_DIR}/ludlc_platform.h
+	${CMAKE_CURRENT_SOURCE_DIR}/ludlc_platform_args.h
 	${CMAKE_CURRENT_SOURCE_DIR}/kfifo.h
 )
 
@@ -51,4 +51,3 @@ set(PLATFORM_SRC
 	${CMAKE_CURRENT_BINARY_DIR}/ludlc_autoconf.h
 	CACHE INTERNAL "posix sources"
 )
-

@@ -9,7 +9,7 @@
  * connection setup, teardown, sending data, and handling asynchronous
  * receive and confirmation callbacks.
  *
- * Copyright (C) 2025 Andrey VOLKOV <andrey@volkov.fr> and LuDLC Contributors
+ * Copyright (C) 2025-2026 Andrey VOLKOV <andrey@volkov.fr> & LuDLC Contributors
  *
  * This file is licensed under either the Apache License, Version 2.0,
  * or the GNU General Public License, version 2 or (at your option)
@@ -18,12 +18,18 @@
 
 #include <stdio.h>
 #include <signal.h>
+#include <stdint.h>
+#include <stdlib.h>
+#include <string.h>
 #include <errno.h>
 #include <error.h>
 #include <getopt.h>
 #include <sys/queue.h>
+#include <pthread.h>
+#include <stdatomic.h>
 
 #include <ludlc.h>
+#include <ludlc_serial.h>
 #include <ludlc_logger.h>
 
 /** @brief LuDLC channel used for the echo demo protocol. */
@@ -90,7 +96,7 @@ static int send_echo_resp(struct ludlc_connection *conn, const uint8_t *data,
 	if (!data[0])
 		return ret;
 
-	item = ludlc_platform_alloc(sizeof(struct wait_ack_litem) + size);
+	item = calloc(1, sizeof(struct wait_ack_litem) + size);
 	if (!item)
 		return -ENOMEM;
 
@@ -99,13 +105,13 @@ static int send_echo_resp(struct ludlc_connection *conn, const uint8_t *data,
 	item->payload[0]--; /* Decrement the 'TTL' */
 
 	TAILQ_INSERT_TAIL(&wait_ack_lhead, item, list);
-	ret = ludlc_enqueue_data(conn, ECHO_CHANNEL, item->payload, size, false);
+	ret = ludlc_enqueue_data(conn, ECHO_CHANNEL, item->payload, size, 1);
 	if (ret) {
 		LUDLC_LOG_INFO("fail to send ECHO packet (%p)", conn);
 		/* If enqueue fails, remove from list and
 		 * free immediately */
 		TAILQ_REMOVE(&wait_ack_lhead, item, list);
-		ludlc_platform_free(item);
+		free(item);
 		return ret;
 	}
 	return 0;
@@ -143,7 +149,7 @@ static void free_echo_item(struct ludlc_connection *conn, const void *data,
 	TAILQ_FOREACH(item, &wait_ack_lhead, list) {
 		if(item->payload == data && item->size == size) {
 			TAILQ_REMOVE(&wait_ack_lhead, item, list);
-			ludlc_platform_free(item);
+			free(item);
 			break;
 		}
 	}
@@ -374,12 +380,12 @@ int main (int argc, char **argv)
 	int option_index = 0;
 	unsigned long baud;
 	sigset_t set;
-	ludlc_platform_args_t ser_args;
 	struct sigaction sa;
 	struct ludlc_connection *conn = NULL;
 
-	/* Get default serial arguments (e.g., /dev/ttyV0 @ 115200) */
-	ludlc_default_serial_platform_args(&ser_args);
+	ludlc_platform_args_t ser_args = {
+		.baudrate = 115200UL,
+	};
 
 	/* Parse command-line options */
 	while ((c = getopt_long(argc, argv, "b:sh", long_options,
@@ -425,12 +431,12 @@ int main (int argc, char **argv)
 				struct wait_ack_litem *item =
 						TAILQ_FIRST(&wait_ack_lhead);
 				TAILQ_REMOVE(&wait_ack_lhead, item, list);
-				ludlc_platform_free(item);
+				free(item);
 			}
 
 		} else {
 			LUDLC_LOG_ERROR("Creation of LuDLC serial connection "
-					"failed %d. Exit", ret);
+					"failed: %s. Exit", strerror(-ret));
 			ret = EXIT_FAILURE;
 		}
 	} else {
@@ -440,4 +446,3 @@ int main (int argc, char **argv)
 
 	return ret;
 }
-
