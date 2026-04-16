@@ -78,7 +78,15 @@ struct ludlc_serial_connection {
 };
 
 #ifdef CONFIG_LUDLC_STATIC_CONN
-/** @brief Static pool of serial connections. */
+#define BITS_PER_WORD	\
+	((const unsigned int)(CHAR_BIT * sizeof(ludlc_platform_atomic_t)))
+
+#define LUDLC_NUM_CONN_WORDS	\
+	((CONFIG_LUDLC_STATIC_CONN_NUM + BITS_PER_WORD - 1) / BITS_PER_WORD)
+
+static pthread_mutex_t g_allock_lock = PTHREAD_MUTEX_INITIALIZER;
+
+static unsigned long g_conn_busy_flags[LUDLC_NUM_CONN_WORDS];
 static struct ludlc_serial_connection g_conn[CONFIG_LUDLC_STATIC_CONN_NUM];
 
 /**
@@ -87,24 +95,37 @@ static struct ludlc_serial_connection g_conn[CONFIG_LUDLC_STATIC_CONN_NUM];
  */
 static inline struct ludlc_serial_connection *alloc_serial_connection(void)
 {
-	/* TODO: Implement static pool allocation logic */
-	if(free_conn != 0) {
+	pthread_mutex_lock(&g_allock_lock);
 
+	for (size_t i = 0; i < CONFIG_LUDLC_STATIC_CONN_NUM; i++) {
+		unsigned int idx = i / BITS_PER_WORD;
+		unsigned int bit = i % BITS_PER_WORD;
+
+		if ((g_conn_busy_flags[idx] & (1ul << bit)) == 0) {
+			g_conn_busy_flags[idx] |= 1ul << bit;
+			pthread_mutex_unlock(&g_allock_lock);
+			return &g_conn[i];
+		}
 	}
+
+	pthread_mutex_unlock(&g_allock_lock);
 	return NULL;
 }
 
 /**
  * @brief Returns a serial connection to the static pool.
- * @param conn The connection to free.
+ * @param sconn The connection to release (must be from @ref g_conn).
  */
-static inline void free_serial_connection(struct ludlc_connection *conn)
+static inline void free_serial_connection(struct ludlc_serial_connection *sconn)
 {
-	/* TODO: Implement static pool free logic */
-	size_t idx = conn - g_conn;
+	const ptrdiff_t idx = sconn - g_conn;
 
-	if(idx < sizeof(g_conn) / sizeof(g_conn[0]))
-		idx;
+	pthread_mutex_lock(&g_allock_lock);
+
+	g_conn_busy_flags[idx / BITS_PER_WORD] &=
+					 ~(1ul << (idx % BITS_PER_WORD));
+
+	pthread_mutex_unlock(&g_allock_lock);
 }
 #else
 /**
