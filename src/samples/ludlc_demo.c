@@ -182,7 +182,7 @@ static void on_disconnect(struct ludlc_connection *conn, void *user_arg)
  */
 static void on_connect(struct ludlc_connection *conn, void *user_arg)
 {
-	LUDLC_LOG_INFO("connection extablished (%p)", conn);
+	LUDLC_LOG_INFO("connection established (%p)", conn);
 }
 
 /**
@@ -382,15 +382,27 @@ int main (int argc, char **argv)
 	sigset_t set;
 	struct sigaction sa;
 	struct ludlc_connection *conn = NULL;
+	int verb = LOG_INFO;
 
 	ludlc_platform_args_t ser_args = {
 		.baudrate = 115200UL,
 	};
 
 	/* Parse command-line options */
-	while ((c = getopt_long(argc, argv, "b:sh", long_options,
+	while ((c = getopt_long(argc, argv, "b:shvq", long_options,
 				&option_index)) != -1) {
 		switch (c) {
+		case 'v':
+			if (++verb > LOG_TRACE) {
+				verb = LOG_TRACE;
+			}
+			break;
+		case 'q':
+			if (verb) {
+				verb--;
+			}
+			break;
+
 		case 's':
 /* TODO: */
 			g_server = true;
@@ -401,6 +413,8 @@ int main (int argc, char **argv)
 			break;
 		}
 	}
+
+	log_set_level(verb);
 
 	/* Use the remaining non-option argument as the port name */
 	if (optind < argc)

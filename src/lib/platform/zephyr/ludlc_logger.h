@@ -37,6 +37,8 @@
 #define LUDLC_LOG_DEBUG(...) do { (void)0; } while(0)
 #endif
 
+#define LUDLC_LOG_TRACE	LUDLC_LOG_DEBUG
+
 #if MAX_LUDLC_LOG_LEVEL <= LOG_INFO
 #define LUDLC_LOG_INFO(...) LOG_INF(__VA_ARGS__)
 #else

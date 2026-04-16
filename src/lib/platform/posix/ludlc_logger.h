@@ -34,7 +34,13 @@
  * If not defined, it defaults to LOG_LEVEL_DEBUG (i.e., log everything).
  */
 #ifndef MAX_LOG_LEVEL
-#define MAX_LOG_LEVEL LOG_DEBUG
+#define MAX_LOG_LEVEL LOG_INFO
+#endif
+
+#if MAX_LUDLC_LOG_LEVEL <= LOG_TRACE
+#define LUDLC_LOG_TRACE(...) log_trace(__VA_ARGS__)
+#else
+#define LUDLC_LOG_TRACE(...) do { (void)0; } while(0)
 #endif
 
 #if MAX_LUDLC_LOG_LEVEL <= LOG_DEBUG
@@ -62,4 +68,3 @@
 #endif
 
 #endif /* __LUDLC_LOGGER_H__ */
-
