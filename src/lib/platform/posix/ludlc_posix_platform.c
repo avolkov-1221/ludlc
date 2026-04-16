@@ -104,6 +104,31 @@ int ludlc_platform_init_timer(struct ludlc_connection *conn,
 }
 
 /**
+ * @brief Implements @c ludlc_proto_cb::get_timestamp (POSIX).
+ *
+ * Uses @c CLOCK_MONOTONIC; writes microseconds to @a out_ts.
+ *
+ * @param[out] out_ts Receives elapsed time in microseconds.
+ * @return 0 on success, \c -EINVAL if @a out_ts is NULL, or \c -errno
+ * from @c clock_gettime.
+ */
+int ludlc_default_get_timestamp(ludlc_timestamp_t *out_ts)
+{
+	struct timespec ts;
+
+	if (!out_ts) {
+		return -EINVAL;
+	}
+
+	if (clock_gettime(CLOCK_MONOTONIC, &ts) == -1) {
+		return -errno;
+	}
+
+	*out_ts = ts.tv_sec * 1000000U + (ludlc_timestamp_t)(ts.tv_nsec / 1000);
+	return 0;
+}
+
+/**
  * @brief Starts or restarts a LuDLC platform timer.
  *
  * This function arms (or re-arms) the specified POSIX timer with a

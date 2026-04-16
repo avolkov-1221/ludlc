@@ -41,6 +41,26 @@ int ludlc_platform_init_timer(struct ludlc_connection *conn,
 }
 
 /**
+ * @brief Retrieves the current system timestamp in microseconds.
+ *
+ * This function is part of the LuDLC protocol callback structure.
+ * @return The current timestamp in microseconds. */
+/* --- Timestamp --- */
+int ludlc_default_get_timestamp(ludlc_timestamp_t *ts)
+{
+	if (!ts)
+		return -EINVAL;
+
+	if (!IS_ENABLED(CONFIG_TIMER_HAS_64BIT_CYCLE_COUNTER)) {
+		*ts = (ludlc_timestamp_t)k_cyc_to_us_floor64(k_cycle_get_32());
+	} else {
+		*ts = (ludlc_timestamp_t)k_cyc_to_us_floor64(k_cycle_get_64());
+	}
+
+	return 0;
+}
+
+/**
  * @brief Requests an immediate transmission.
  *
  * This function signals the LuDLC transmit task/thread (if any) to wake

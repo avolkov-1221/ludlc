@@ -903,7 +903,7 @@ int ludlc_connection_init(struct ludlc_connection *conn,
 	if (!conn || !proto_cb)
 		return -EINVAL;
 
-	/* The "write", "read" and "get_timestamp" callbacks are obligatory */
+	/* The "get_timestamp" callback is obligatory */
 	if (!proto_cb->get_timestamp)
 		return -EINVAL;
 

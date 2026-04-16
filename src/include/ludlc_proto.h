@@ -2,11 +2,12 @@
 /**
  * @file ludlc_proto.h
  *
- * @brief LuDLC protocol interface callbacks and type definitions.
+ * @brief LuDLC protocol parameters, packet-related types, and core service hooks.
  *
- * This file defines the transport-layer callbacks, protocol-wide types
- * (like packet IDs and sizes), and configurable parameters (like
- * window size and ping times) required for a LuDLC implementation.
+ * This header holds compile-time protocol limits (window size, ping period,
+ * payload bounds, channel IDs), typedefs for IDs and sizes, and the small
+ * @ref ludlc_proto_cb table the engine uses for checksum and time—**not**
+ * for serial framing or byte I/O (those live in the transport layer).
  *
  * Copyright (C) 2025-2026 Andrey VOLKOV <andrey@volkov.fr> & LuDLC Contributors
  *
@@ -70,7 +71,7 @@ BUILD_ASSERT(((ludlc_id_t)0 < (ludlc_id_t)-1));
 #elif defined(BUILD_BUG_ON)
 BUILD_BUG_ON(!((ludlc_id_t)0 < (ludlc_id_t)-1));
 #else
-/* Simulate static_assert() from C11 (borrowed from Zephyr */
+/* C11-style build-time check without static_assert (borrowed from Zephyr). */
 enum __build_assert_enum_ludlc_id_t__ {
 	__build_assert_enum_ludlc_id_t__ = 1 / !!((ludlc_id_t)0 < (ludlc_id_t)-1)
 };
@@ -150,8 +151,10 @@ typedef CONFIG_LUDLC_CHANNEL_TYPE	ludlc_channel_t;
 
 /**
  * @def CONFIG_LUDLC_DEFAULT_TTL
- * @brief Maximum Time-To-Live (retries) for a packet before it is failed.
- * Defaults to 4 if not configured.
+ * @brief Transmit retry budget (TTL) for queued packets before failing them.
+ *
+ * If defined, must lie in @c [1, 126]. When not defined, @ref LUDLC_DEFAULT_TTL
+ * falls back to 4.
  */
 #ifdef CONFIG_LUDLC_DEFAULT_TTL
 #if CONFIG_LUDLC_DEFAULT_TTL >= LUDLC_MAX_TTL || CONFIG_LUDLC_DEFAULT_TTL < 1
@@ -164,12 +167,13 @@ typedef CONFIG_LUDLC_CHANNEL_TYPE	ludlc_channel_t;
 
 /**
  * @struct ludlc_proto_cb
- * @brief Transport-layer callback structure.
+ * @brief Services the LuDLC engine needs from below: running CRC and a monotonic clock.
  *
- * This structure defines the set of functions that the platform/transport
- * must provide to the LuDLC core. These functions handle the actual
- * reading and writing of bytes to the physical medium, as well as
- * checksumming and timestamping.
+ * Pass a filled-in instance to @c ludlc_connection_init(). The core uses it for
+ * packet integrity and protocol timing (microsecond timestamps).
+ * **Framing and encoding are not part of this structure** - they are implemented by
+ * the serial (or other) transport.
+ *
  */
 struct ludlc_proto_cb {
 	/**
@@ -185,11 +189,23 @@ struct ludlc_proto_cb {
 	 */
 	ludlc_csum_t (*csum_byte)(ludlc_csum_t csum, uint8_t data);
 	/**
-	 * @brief (Mandatory) Gets the current high-resolution timestamp.
+	 * @brief Monotonic time in microseconds (e.g. @c CLOCK_MONOTONIC on POSIX).
 	 *
-	 * @return The current time in microseconds.
+	 * **Mandatory.** Used for RTT-oriented logic and timers; must not jump
+	 * backward when the wall clock is adjusted.
+	 *
+	 * @param[out] ts Filled with the current time on success; left
+	 * unchanged on failure.
+	 * @return 0 on success, or a negative value (e.g. \c -EINVAL
+	 * if \a ts is NULL, or \c -errno from the platform clock API).
 	 */
-	ludlc_timestamp_t (*get_timestamp)(void);
+	int (*get_timestamp)(ludlc_timestamp_t *ts);
 };
+
+/**
+ * @brief Default @c get_timestamp for POSIX builds (monotonic, microseconds).
+ * @see ludlc_proto_cb::get_timestamp
+ */
+int ludlc_default_get_timestamp(ludlc_timestamp_t *out_ts);
 
 #endif /* __LUDLC_PROTO_H__ */
