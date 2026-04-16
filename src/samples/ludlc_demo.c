@@ -18,15 +18,25 @@
 
 #include <stdio.h>
 #include <signal.h>
+#include <stdbool.h>
 #include <stdint.h>
 #include <stdlib.h>
 #include <string.h>
+#include <stdarg.h>
+#include <limits.h>
 #include <errno.h>
 #include <error.h>
 #include <getopt.h>
 #include <sys/queue.h>
 #include <pthread.h>
 #include <stdatomic.h>
+#include <time.h>
+#ifdef _WIN32
+#include <windows.h>
+#else
+#include <unistd.h>
+#include <termios.h>
+#endif
 
 #include <ludlc.h>
 #include <ludlc_serial.h>
@@ -37,18 +47,49 @@ enum {
 	ECHO_CHANNEL = CONFIG_LUDLC_CONTROL_CHANNEL + 1,
 };
 
-/** @brief Global flag, true if running in server mode (TODO). */
-static bool g_server = false;
-/** @brief Global condition variable for exit synchronization (currently unused). */
-static pthread_cond_t g_exit_cv = PTHREAD_COND_INITIALIZER;
+enum demo_flags {
+	DEMO_F_SERVER = (1U << 0),
+	DEMO_F_UI_INITIALIZED = (1U << 1),
+	DEMO_F_UI_INPUT_ACTIVE = (1U << 2),
+	DEMO_F_UI_TS_INITIALIZED = (1U << 3),
+};
+
+/** @brief Bitfield for rarely-modified demo state/config toggles. */
+static uint32_t g_demo_flags;
+
+static inline bool demo_flag_test(enum demo_flags flag)
+{
+	return (g_demo_flags & (uint32_t)flag) != 0U;
+}
+
+static inline void demo_flag_set(enum demo_flags flag)
+{
+	g_demo_flags |= (uint32_t)flag;
+}
+
+static inline void demo_flag_clear(enum demo_flags flag)
+{
+	g_demo_flags &= ~((uint32_t)flag);
+}
+
 /** @brief Atomic flag set by the signal handler to request application exit. */
 atomic_bool g_stop_flag = 0;
+#ifndef _WIN32
+/** @brief Atomic flag set when terminal geometry changes. */
+atomic_bool g_resize_flag = 0;
+#endif
+
+enum long_option_id {
+	OPT_LOG_HISTORY = 1000,
+};
 
 /** @brief Command-line options for getopt_long. */
 static struct option long_options[] = {
 	/* These options set a flag. */
 	{ "help", no_argument, NULL, 'h' },
+	{ "baudrate", required_argument, NULL, 'b' },
 	{ "server", no_argument, NULL, 's' },
+	{ "log-history", required_argument, NULL, OPT_LOG_HISTORY },
 	{ 0, 0, 0, 0 }
 };
 
@@ -73,6 +114,412 @@ TAILQ_HEAD(wait_ack_lhead, wait_ack_litem);
 static struct wait_ack_lhead wait_ack_lhead =
 		TAILQ_HEAD_INITIALIZER(wait_ack_lhead);
 
+#define UI_LOG_LINE_LEN  256U
+#define UI_LOG_HISTORY_DEFAULT 2000U
+#define UI_LOG_HISTORY_MAX_LIMIT 100000U
+
+enum menu_action_result {
+	MENU_ACTION_CONTINUE = 0,
+	MENU_ACTION_EXIT = 1,
+};
+
+struct menu_item {
+	int id;
+	const char *label;
+	enum menu_action_result (*handler)(struct ludlc_connection *conn);
+};
+
+static char *g_ui_log_history;
+static size_t g_ui_log_capacity = UI_LOG_HISTORY_DEFAULT;
+static size_t g_ui_log_head;
+static size_t g_ui_log_count;
+static char g_ui_input_buf[64];
+static size_t g_ui_input_len;
+
+static pthread_mutex_t g_ui_lock = PTHREAD_MUTEX_INITIALIZER;
+
+#ifdef _WIN32
+static LARGE_INTEGER g_ui_ts_start_counter;
+static LARGE_INTEGER g_ui_ts_frequency;
+#else
+static struct timespec g_ui_ts_start;
+#endif
+
+static void ui_redraw_locked(void);
+
+static enum menu_action_result menu_action_reconnect(struct ludlc_connection *conn);
+static enum menu_action_result menu_action_disconnect(struct ludlc_connection *conn);
+static enum menu_action_result menu_action_send_echo(struct ludlc_connection *conn);
+static enum menu_action_result menu_action_exit(struct ludlc_connection *conn);
+
+static const struct menu_item g_menu_items[] = {
+	{ 3, "Send disconnect", menu_action_disconnect },
+	{ 2, "Try reconnect", menu_action_reconnect },
+	{ 1, "Send Hello World packet to the ECHO channel", menu_action_send_echo },
+	{ 0, "Exit", menu_action_exit },
+};
+
+static const size_t g_menu_items_count =
+	sizeof(g_menu_items) / sizeof(g_menu_items[0]);
+
+static size_t ui_footer_lines(void)
+{
+	/* menu header + items + separator + prompt */
+	return g_menu_items_count + 3U;
+}
+
+static void ui_timestamp_init(void)
+{
+	if (demo_flag_test(DEMO_F_UI_TS_INITIALIZED)) {
+		return;
+	}
+
+#ifdef _WIN32
+	(void)QueryPerformanceFrequency(&g_ui_ts_frequency);
+	(void)QueryPerformanceCounter(&g_ui_ts_start_counter);
+#else
+	(void)clock_gettime(CLOCK_MONOTONIC, &g_ui_ts_start);
+#endif
+	demo_flag_set(DEMO_F_UI_TS_INITIALIZED);
+}
+
+static uint64_t ui_timestamp_us(void)
+{
+#ifdef _WIN32
+	LARGE_INTEGER now;
+	uint64_t ticks;
+	uint64_t freq;
+
+	if (!demo_flag_test(DEMO_F_UI_TS_INITIALIZED)) {
+		ui_timestamp_init();
+	}
+
+	(void)QueryPerformanceCounter(&now);
+	ticks = (uint64_t)(now.QuadPart - g_ui_ts_start_counter.QuadPart);
+	freq = (uint64_t)g_ui_ts_frequency.QuadPart;
+	if (freq == 0U) {
+		return 0U;
+	}
+
+	return (ticks * 1000000ULL) / freq;
+#else
+	struct timespec now;
+	uint64_t sec;
+	uint64_t nsec;
+
+	if (!demo_flag_test(DEMO_F_UI_TS_INITIALIZED)) {
+		ui_timestamp_init();
+	}
+
+	(void)clock_gettime(CLOCK_MONOTONIC, &now);
+	sec = (uint64_t)(now.tv_sec - g_ui_ts_start.tv_sec);
+	if (now.tv_nsec >= g_ui_ts_start.tv_nsec) {
+		nsec = (uint64_t)(now.tv_nsec - g_ui_ts_start.tv_nsec);
+	} else {
+		sec -= 1U;
+		nsec = 1000000000ULL + (uint64_t)now.tv_nsec -
+			(uint64_t)g_ui_ts_start.tv_nsec;
+	}
+
+	return sec * 1000000ULL + nsec / 1000ULL;
+#endif
+}
+
+static void ui_make_timestamp(char *buffer, size_t size)
+{
+	if (!buffer || size == 0) {
+		return;
+	}
+
+	snprintf(buffer, size, "%012lluus",
+		(unsigned long long)ui_timestamp_us());
+}
+
+static int ui_configure_log_history(size_t capacity)
+{
+	char *buffer;
+
+	if (capacity == 0 || capacity > UI_LOG_HISTORY_MAX_LIMIT) {
+		return -EINVAL;
+	}
+
+	buffer = calloc(capacity, UI_LOG_LINE_LEN);
+	if (!buffer) {
+		return -ENOMEM;
+	}
+
+	free(g_ui_log_history);
+
+	g_ui_log_history = buffer;
+	g_ui_log_capacity = capacity;
+	g_ui_log_head = 0;
+	g_ui_log_count = 0;
+
+	return 0;
+}
+
+static void ui_free_log_history(void)
+{
+	free(g_ui_log_history);
+
+	g_ui_log_history = NULL;
+	g_ui_log_head = 0;
+	g_ui_log_count = 0;
+}
+
+static void ui_store_log_locked(const char *line)
+{
+	size_t idx;
+
+	if (!line)
+		line = "";
+
+	if (!g_ui_log_history || g_ui_log_capacity == 0) {
+		return;
+	}
+
+	if (g_ui_log_count < g_ui_log_capacity) {
+		idx = (g_ui_log_head + g_ui_log_count) % g_ui_log_capacity;
+		g_ui_log_count++;
+	} else {
+		idx = g_ui_log_head;
+		g_ui_log_head = (g_ui_log_head + 1U) % g_ui_log_capacity;
+	}
+
+	snprintf(g_ui_log_history + (idx * UI_LOG_LINE_LEN), UI_LOG_LINE_LEN,
+		"%s", line);
+}
+
+static void ui_reset_input_state_locked(void)
+{
+	demo_flag_clear(DEMO_F_UI_INPUT_ACTIVE);
+	g_ui_input_len = 0;
+	g_ui_input_buf[0] = '\0';
+	ui_redraw_locked();
+}
+
+#ifdef _WIN32
+static bool ui_take_resize_event(void)
+{
+	return false;
+}
+
+static int ui_install_resize_handler(void)
+{
+	return 0;
+}
+#else
+static void handle_sigwinch(int sig)
+{
+	(void)sig;
+	g_resize_flag = true;
+}
+
+static bool ui_take_resize_event(void)
+{
+	if (g_resize_flag) {
+		g_resize_flag = false;
+		return true;
+	}
+
+	return false;
+}
+
+static int ui_install_resize_handler(void)
+{
+	struct sigaction sa_winch;
+
+	sa_winch.sa_handler = handle_sigwinch;
+	sigemptyset(&sa_winch.sa_mask);
+	sa_winch.sa_flags = 0;
+
+	return sigaction(SIGWINCH, &sa_winch, NULL);
+}
+#endif
+
+static void ui_print_menu_locked(void)
+{
+	size_t i;
+
+	printf("=== MAIN MENU ===\n");
+	for (i = 0; i < g_menu_items_count; i++) {
+		printf("[%d] %s\n", g_menu_items[i].id, g_menu_items[i].label);
+	}
+	printf("=================\n");
+}
+
+static void ui_format_menu_choices(char *buffer, size_t size)
+{
+	size_t i;
+	size_t used = 0;
+
+	if (!buffer || !size)
+		return;
+
+	buffer[0] = '\0';
+	for (i = 0; i < g_menu_items_count; i++) {
+		int written = snprintf(buffer + used, size - used, "%s%d",
+			(i == 0) ? "" : ",", g_menu_items[i].id);
+		if (written < 0 || (size_t)written >= (size - used)) {
+			break;
+		}
+		used += (size_t)written;
+	}
+}
+
+static void ui_print_prompt_locked(void)
+{
+	char choices[64];
+
+	ui_format_menu_choices(choices, sizeof(choices));
+	printf("Select option [%s]: ", choices);
+	if (demo_flag_test(DEMO_F_UI_INPUT_ACTIVE) && g_ui_input_len > 0) {
+		printf("%s", g_ui_input_buf);
+	}
+}
+
+static void ui_print_footer_locked(void)
+{
+	ui_print_menu_locked();
+	ui_print_prompt_locked();
+}
+
+static void ui_update_layout_locked(void)
+{
+	if (!demo_flag_test(DEMO_F_UI_INITIALIZED)) {
+		printf("=== LOG OUTPUT ===\n");
+		demo_flag_set(DEMO_F_UI_INITIALIZED);
+	}
+}
+
+static void ui_redraw_locked(void)
+{
+	bool had_layout = demo_flag_test(DEMO_F_UI_INITIALIZED);
+
+	ui_update_layout_locked();
+	if (had_layout) {
+		/* Replace previous footer in-place (menu + prompt). */
+		printf("\r\033[%zuA\033[J", ui_footer_lines() - 1U);
+	}
+	ui_print_footer_locked();
+	fflush(stdout);
+}
+
+static void ui_handle_resize_event(void)
+{
+	if (ui_take_resize_event()) {
+		pthread_mutex_lock(&g_ui_lock);
+		ui_redraw_locked();
+		pthread_mutex_unlock(&g_ui_lock);
+	}
+}
+
+static void ui_append_log_locked(const char *line)
+{
+	bool had_layout = demo_flag_test(DEMO_F_UI_INITIALIZED);
+	char rendered[UI_LOG_LINE_LEN];
+	char tbuf[16];
+
+	ui_make_timestamp(tbuf, sizeof(tbuf));
+	snprintf(rendered, sizeof(rendered), "%s %s", tbuf, line ? line : "");
+
+	ui_store_log_locked(rendered);
+	ui_update_layout_locked();
+
+	/* Replace previous footer with one new log line + fresh footer. */
+	if (had_layout) {
+		printf("\r\033[%zuA\033[J", ui_footer_lines() - 1U);
+	}
+
+	printf("%s\n", rendered);
+	ui_print_footer_locked();
+	fflush(stdout);
+}
+
+static void ui_shutdown(void)
+{
+	pthread_mutex_lock(&g_ui_lock);
+
+	if (demo_flag_test(DEMO_F_UI_INITIALIZED)) {
+		printf("\n");
+		fflush(stdout);
+	}
+
+	pthread_mutex_unlock(&g_ui_lock);
+}
+
+static void ui_logf(const char *fmt, ...)
+{
+	char line[UI_LOG_LINE_LEN];
+	va_list args;
+
+	va_start(args, fmt);
+	vsnprintf(line, sizeof(line), fmt, args);
+	va_end(args);
+
+	pthread_mutex_lock(&g_ui_lock);
+	ui_append_log_locked(line);
+	pthread_mutex_unlock(&g_ui_lock);
+}
+
+static void ui_log_packet_hex(const void *data, ludlc_payload_size_t size)
+{
+	const uint8_t *payload = data;
+	char hex_part[3 * 8 + 1];
+	char ascii_part[8 + 1];
+	ludlc_payload_size_t i;
+
+	if (!size || !payload) {
+		ui_logf("payload(len=0): (empty)");
+		return;
+	}
+
+	ui_logf("payload(len=%zu):", size);
+
+	for (i = 0; i < size; i += 8U) {
+		size_t j;
+		size_t pos = 0;
+		size_t chunk_len = (size - i) < 8U ? (size - i) : 8U;
+
+		for (j = 0; j < 8U; j++) {
+			if (j < chunk_len) {
+				uint8_t c = *payload++;
+
+				pos += (size_t)snprintf(hex_part + pos,
+					sizeof(hex_part) - pos, "%02X ", c);
+				ascii_part[j] = (c >= 32U && c <= 126U) ?
+					(char)c : '.';
+			} else {
+				pos += (size_t)snprintf(hex_part + pos,
+					sizeof(hex_part) - pos, "   ");
+				ascii_part[j] = ' ';
+			}
+		}
+		ascii_part[8] = '\0';
+		ui_logf("  %04zu: %-24s |%s|", (size_t)i, hex_part, ascii_part);
+	}
+}
+
+static void ui_log_backend_callback(log_Event *ev)
+{
+	char msg[UI_LOG_LINE_LEN];
+	char line[UI_LOG_LINE_LEN];
+
+	if (!ev) {
+		return;
+	}
+
+	msg[0] = '\0';
+	(void)vsnprintf(msg, sizeof(msg), ev->fmt, ev->ap);
+
+	(void)snprintf(line, sizeof(line), "%-5s: %s",
+		       log_level_string(ev->level), msg);
+
+	pthread_mutex_lock(&g_ui_lock);
+	ui_append_log_locked(line);
+	pthread_mutex_unlock(&g_ui_lock);
+}
+
 /**
  * @brief Sends an echo packet and tracks it for acknowledgment.
  *
@@ -87,18 +534,20 @@ static struct wait_ack_lhead wait_ack_lhead =
  * @return 0 on success, or -ENOMEM if allocation fails.
  */
 static int send_echo_resp(struct ludlc_connection *conn, const uint8_t *data,
-		ludlc_payload_size_t size)
+			  ludlc_payload_size_t size)
 {
 	struct wait_ack_litem *item;
 	int ret = 0;
 
 	/* The first byte is a 'TTL' counter; stop if 0. */
-	if (!data[0])
+	if (!data[0]) {
 		return ret;
+	}
 
 	item = calloc(1, sizeof(struct wait_ack_litem) + size);
-	if (!item)
+	if (!item) {
 		return -ENOMEM;
+	}
 
 	item->size = size;
 	memcpy(item->payload, data, size);
@@ -107,13 +556,14 @@ static int send_echo_resp(struct ludlc_connection *conn, const uint8_t *data,
 	TAILQ_INSERT_TAIL(&wait_ack_lhead, item, list);
 	ret = ludlc_enqueue_data(conn, ECHO_CHANNEL, item->payload, size, 1);
 	if (ret) {
-		LUDLC_LOG_INFO("fail to send ECHO packet (%p)", conn);
+		ui_logf("failed to queue ECHO packet (%p)", conn);
 		/* If enqueue fails, remove from list and
 		 * free immediately */
 		TAILQ_REMOVE(&wait_ack_lhead, item, list);
 		free(item);
 		return ret;
 	}
+
 	return 0;
 }
 
@@ -128,7 +578,56 @@ static int send_echo_resp(struct ludlc_connection *conn, const uint8_t *data,
 static int send_echo(struct ludlc_connection *conn)
 {
 	static const char data[] = "\2Hello World!";
+
 	return send_echo_resp(conn, data, sizeof(data));
+}
+
+static enum menu_action_result menu_action_reconnect(
+					struct ludlc_connection *conn)
+{
+	int ret = ludlc_connect(conn);
+
+	if (ret) {
+		ui_logf("failed to connect: %s", strerror(-ret));
+	} else {
+		ui_logf("connection procedure has started");
+	}
+
+	return MENU_ACTION_CONTINUE;
+}
+
+static enum menu_action_result menu_action_disconnect(
+					struct ludlc_connection *conn)
+{
+	int ret = ludlc_send_disconnect(conn);
+
+	if (ret) {
+		ui_logf("failed to send DISCONECT packet: %s", strerror(-ret));
+	} else {
+		ui_logf("DISCONECT packet queued");
+	}
+
+	return MENU_ACTION_CONTINUE;
+}
+
+static enum menu_action_result menu_action_send_echo(struct ludlc_connection *conn)
+{
+	int ret = send_echo(conn);
+
+	if (ret) {
+		ui_logf("failed to send ECHO packet: %s", strerror(-ret));
+	} else {
+		ui_logf("ECHO packet queued");
+	}
+
+	return MENU_ACTION_CONTINUE;
+}
+
+static enum menu_action_result menu_action_exit(struct ludlc_connection *conn)
+{
+	(void)conn;
+	ui_logf("Exiting. Goodbye!");
+	return MENU_ACTION_EXIT;
 }
 
 /**
@@ -157,12 +656,32 @@ static void free_echo_item(struct ludlc_connection *conn, const void *data,
 
 /**
  * @brief Prints the command-line usage instructions.
- * @return 1 (indicating error).
+ * @param prog Program name for usage prefix.
+ * @param out Output stream (`stdout` for help, `stderr` for errors).
+ * @return EXIT_SUCCESS when printing help, EXIT_FAILURE on error usage.
  */
-static int usage(void)
+static int usage(const char *prog, FILE *out)
 {
-	fprintf(stderr, "Usage: ludlc [-h] [-s] /dev/ttyPort\n");
-	return EXIT_FAILURE;
+	if (!prog || !*prog) {
+		prog = "ludlc_demo";
+	}
+	if (!out) {
+		out = stderr;
+	}
+
+	fprintf(out,
+		"Usage: %s [options] <serial-port>\n"
+		"\n"
+		"Options:\n"
+		"  -h, --help              Show this help and exit\n"
+		"  -b, --baudrate <rate>   Serial baudrate (default: 115200)\n"
+		"  -s, --server            Enable server mode (reserved/TODO)\n"
+		"      --log-history <N>   Keep N UI log lines (1..%u)\n"
+		"  -v                      Increase log verbosity (repeatable)\n"
+		"  -q                      Decrease log verbosity (repeatable)\n",
+		prog, UI_LOG_HISTORY_MAX_LIMIT);
+
+	return (out == stdout) ? EXIT_SUCCESS : EXIT_FAILURE;
 }
 
  /**
@@ -172,7 +691,8 @@ static int usage(void)
   */
 static void on_disconnect(struct ludlc_connection *conn, void *user_arg)
 {
-	LUDLC_LOG_INFO("connection lost (%p)", conn);
+	(void)user_arg;
+	ui_logf("connection lost (%p)", conn);
 }
 
 /**
@@ -182,7 +702,8 @@ static void on_disconnect(struct ludlc_connection *conn, void *user_arg)
  */
 static void on_connect(struct ludlc_connection *conn, void *user_arg)
 {
-	LUDLC_LOG_INFO("connection established (%p)", conn);
+	(void)user_arg;
+	ui_logf("connection established (%p)", conn);
 }
 
 /**
@@ -205,22 +726,10 @@ static void handle_rx_packet(struct ludlc_connection *conn,
 			ludlc_timestamp_t tstamp,
 			void *user_arg)
 {
-	printf("--- packet arrive @%ull  ---\n",
-			(unsigned long long)tstamp);
-	printf(" channel: %u\n", chan);
-	printf(" payload (len=%zu):\n  ", size);
-	if (size == 0) {
-		printf("(empty)");
-	} else {
-		const uint8_t *payload = data;
-		for (ludlc_payload_size_t i = 0; i < size; i++) {
-			printf("%02X ", payload[i]);
-			if ((i + 1) % 16 == 0 && (i + 1) < size) {
-				printf("\n  ");
-			}
-		}
-	}
-	printf("\n-------------------------\n\n");
+	(void)user_arg;
+	ui_logf("packet received @%llu on channel %u",
+		(unsigned long long)tstamp, chan);
+	ui_log_packet_hex(data, size);
 
 	switch (chan) {
 	case ECHO_CHANNEL:
@@ -252,10 +761,9 @@ void on_packet_confirm(struct ludlc_connection *conn,
 		ludlc_payload_size_t data_size,
 		void *user_arg)
 {
-	printf("--- packet to channel %u confirmed  ---\n", chan);
-	printf(" error code: %d\n", error);
-	printf(" payload (len=%zu): %p\n  ", data_size, data);
-	printf("-------------------------\n\n");
+	(void)user_arg;
+	ui_logf("packet confirm: chan=%u, error=%d, payload=%p, len=%zu",
+		chan, error, data, data_size);
 
 	switch (chan) {
 	case ECHO_CHANNEL:
@@ -333,7 +841,7 @@ static struct ludlc_proto_cb proto = {
  */
 static void handle_sigint(int sig)
 {
-	(void)sig; // unused
+	(void)sig;
 	g_stop_flag = true;
 }
 
@@ -346,82 +854,176 @@ static struct ludlc_conn_cb cb = {
 };
 
 /**
- * @brief Displays the main menu to the user.
+ * @brief Reads one numeric menu choice.
+ *
+ * @param out_choice Destination for parsed integer choice.
+ * @return 0 on success, -1 on EOF/read error, -2 on invalid numeric input.
  */
-static void displayMenu()
+static int ui_read_number(int *out_choice)
 {
-	printf("\n\n--- MAIN MENU ---\n");
-	printf("1. Send Hello World packet to the ECHO channel \n");
-	printf("0. Exit\n");
-	printf("-----------------\n");
-	printf("Enter your choice: ");
+	char line[64];
+	char *end = NULL;
+	long value;
+
+	if (!out_choice)
+		return -1;
+
+#ifdef _WIN32
+	if (!fgets(line, sizeof(line), stdin)) {
+		if (errno == EINTR) {
+			return 1;
+		}
+		return -1;
+	}
+#else
+	struct termios oldt;
+	struct termios raw;
+
+	if (tcgetattr(STDIN_FILENO, &oldt) != 0) {
+		return -1;
+	}
+
+	raw = oldt;
+	raw.c_lflag &= ~(ICANON | ECHO);
+	raw.c_cc[VMIN] = 1;
+	raw.c_cc[VTIME] = 0;
+	if (tcsetattr(STDIN_FILENO, TCSANOW, &raw) != 0) {
+		return -1;
+	}
+
+	pthread_mutex_lock(&g_ui_lock);
+	demo_flag_set(DEMO_F_UI_INPUT_ACTIVE);
+	g_ui_input_len = 0;
+	g_ui_input_buf[0] = '\0';
+	ui_redraw_locked();
+	pthread_mutex_unlock(&g_ui_lock);
+
+	while (true) {
+		char ch = 0;
+		ssize_t rd = read(STDIN_FILENO, &ch, 1);
+
+		if (rd != 1) {
+			if (rd < 0 && errno == EINTR) {
+				pthread_mutex_lock(&g_ui_lock);
+				ui_reset_input_state_locked();
+				pthread_mutex_unlock(&g_ui_lock);
+				(void)tcsetattr(STDIN_FILENO, TCSANOW, &oldt);
+				return 1;
+			}
+			pthread_mutex_lock(&g_ui_lock);
+			ui_reset_input_state_locked();
+			pthread_mutex_unlock(&g_ui_lock);
+			(void)tcsetattr(STDIN_FILENO, TCSANOW, &oldt);
+			return -1;
+		}
+
+		if (ch == '\n' || ch == '\r') {
+			break;
+		}
+
+		pthread_mutex_lock(&g_ui_lock);
+		if ((ch == 0x7f || ch == 0x08) && g_ui_input_len > 0) {
+			g_ui_input_len--;
+			g_ui_input_buf[g_ui_input_len] = '\0';
+			ui_redraw_locked();
+		} else if (ch >= 32 && ch <= 126 &&
+				g_ui_input_len + 1U < sizeof(g_ui_input_buf)) {
+			g_ui_input_buf[g_ui_input_len++] = ch;
+			g_ui_input_buf[g_ui_input_len] = '\0';
+			ui_redraw_locked();
+		}
+		pthread_mutex_unlock(&g_ui_lock);
+	}
+
+	pthread_mutex_lock(&g_ui_lock);
+	snprintf(line, sizeof(line), "%s", g_ui_input_buf);
+	ui_reset_input_state_locked();
+	pthread_mutex_unlock(&g_ui_lock);
+
+	(void)tcsetattr(STDIN_FILENO, TCSANOW, &oldt);
+#endif
+
+	errno = 0;
+	value = strtol(line, &end, 10);
+	if (end == line) {
+		return -2;
+	}
+
+	while (*end == ' ' || *end == '\t') {
+		end++;
+	}
+	if (*end != '\n' && *end != '\0') {
+		return -2;
+	}
+
+	if (errno == ERANGE || value < INT_MIN || value > INT_MAX) {
+		return -2;
+	}
+
+	*out_choice = (int)value;
+	return 0;
 }
 
 /**
  * @brief Handles the interactive user menu.
  *
- * Reads user input from stdin and triggers actions (like sending
- * an echo packet). This blocks the main thread, which is fine for a demo.
+ * Menu is always visible. Choice is parsed as a number.
  *
  * @param conn The LuDLC connection to use for actions.
- * @return 0 to exit the menu, -1 to continue.
+ * @return 0 when user requests exit.
  */
 static int menu_handler(struct ludlc_connection *conn)
 {
-	int choice = -1; /* Initialize choice to a value that doesn't exit */
+	pthread_mutex_lock(&g_ui_lock);
+	ui_redraw_locked();
+	pthread_mutex_unlock(&g_ui_lock);
 
-	/* The main menu loop */
-	do {
-		displayMenu();
+	while (!g_stop_flag) {
+		size_t i;
+		const struct menu_item *selected = NULL;
+		int choice = 0;
+		int read_ret;
+		char choices[64];
 
-		int scanResult = scanf(" %d", &choice);
+		ui_handle_resize_event();
 
-		if (scanResult != 1) {
-			/* Check for EOF (e.g., Ctrl+D) or read error */
-			if(errno != 0) {
-				choice = 0;
-			} else {
-				printf(
-				 "\nError: Invalid input. Please enter a number.\n");
+		read_ret = ui_read_number(&choice);
+		if (read_ret == 1) {
+			ui_handle_resize_event();
+			continue;
+		}
+		if (read_ret == -1) {
+			if (g_stop_flag) {
+				return 0;
+			}
+			ui_logf("input error while reading menu choice");
+			continue;
+		}
+		if (read_ret == -2) {
+			ui_format_menu_choices(choices, sizeof(choices));
+			ui_logf("invalid choice (use %s)", choices);
+			continue;
+		}
 
-				/* Clear the invalid input from the buffer */
-				/* Read and discard characters until a newline is found */
-				while (getchar() != '\n')
-					;
-
-				choice = -1; /* Reset choice to loop again */
-				/* Skip the rest of this loop iteration */
-				continue;
+		for (i = 0; i < g_menu_items_count; i++) {
+			if (g_menu_items[i].id == choice) {
+				selected = &g_menu_items[i];
+				break;
 			}
 		}
 
-		/* Process the user's choice */
-		switch (choice) {
-		case 0:
-			printf("\n>>> Exiting. Goodbye!\n");
-			break;
-
-		case 1:
-			send_echo(conn);
-			break;
-
-		default:
-			printf("\n>>> Invalid choice. "
-				"Please select a number from 0 to 1.\n");
-			break;
+		if (!selected) {
+			ui_format_menu_choices(choices, sizeof(choices));
+			ui_logf("invalid choice %d (use %s)", choice, choices);
+			continue;
 		}
 
-		/* Pause for the user to see the result before looping */
-		if (choice != 0) {
-			printf("\nPress Enter to continue...");
-			/* Clear the input buffer from the previous scanf */
-			while (getchar() != '\n')
-				;
-			/* Wait for the user to press Enter */
-			getchar();
+		if (selected->handler(conn) == MENU_ACTION_EXIT) {
+			return 0;
 		}
+	}
 
-	} while (choice != 0);
+	return 0;
 }
 
 /**
@@ -436,8 +1038,7 @@ int main (int argc, char **argv)
 	int ret = EXIT_SUCCESS;
 	int c;
 	int option_index = 0;
-	unsigned long baud;
-	sigset_t set;
+	size_t requested_log_history = UI_LOG_HISTORY_DEFAULT;
 	struct sigaction sa;
 	struct ludlc_connection *conn = NULL;
 	int verb = LOG_INFO;
@@ -446,10 +1047,31 @@ int main (int argc, char **argv)
 		.baudrate = 115200UL,
 	};
 
+	ui_timestamp_init();
+
 	/* Parse command-line options */
 	while ((c = getopt_long(argc, argv, "b:shvq", long_options,
 				&option_index)) != -1) {
 		switch (c) {
+		case 'h':
+			return usage(argv[0], stdout);
+		case 'b': {
+			char *end = NULL;
+			unsigned long value;
+
+			errno = 0;
+			value = strtoul(optarg, &end, 10);
+			if (errno == ERANGE || end == optarg || *end != '\0' ||
+			    value == 0 || value > UINT_MAX) {
+				fprintf(stderr,
+					"Invalid baudrate '%s' (expected 1..%u)\n",
+					optarg, UINT_MAX);
+				return usage(argv[0], stderr);
+			}
+
+			ser_args.baudrate = value;
+			break;
+		}
 		case 'v':
 			if (++verb > LOG_TRACE) {
 				verb = LOG_TRACE;
@@ -463,41 +1085,70 @@ int main (int argc, char **argv)
 
 		case 's':
 /* TODO: */
-			g_server = true;
+			demo_flag_set(DEMO_F_SERVER);
 		break;
-		default:
-/* TODO: */
-//			return usage();
+		case OPT_LOG_HISTORY: {
+			char *end = NULL;
+			unsigned long value;
+
+			errno = 0;
+			value = strtoul(optarg, &end, 10);
+			if (errno == ERANGE || end == optarg || *end != '\0' ||
+			    value == 0 || value > UI_LOG_HISTORY_MAX_LIMIT) {
+				fprintf(stderr,
+					"Invalid --log-history value '%s' "
+					"(expected 1..%u)\n",
+					optarg, UI_LOG_HISTORY_MAX_LIMIT);
+				return usage(argv[0], stderr);
+			}
+			requested_log_history = (size_t)value;
 			break;
+		}
+		default:
+			return usage(argv[0], stderr);
 		}
 	}
 
-	log_set_level(verb);
+	ret = ui_configure_log_history(requested_log_history);
+	if (ret) {
+		fprintf(stderr, "Failed to allocate %zu log lines: %s\n",
+			requested_log_history, strerror(-ret));
+		return EXIT_FAILURE;
+	}
+
+	/* Keep the screen stable by suppressing direct stderr logger output. */
+	log_set_quiet(true);
+	if (log_add_callback(ui_log_backend_callback, NULL, verb) != 0) {
+		ui_logf("warning: failed to register logger callback; "
+			"LUDLC_LOG output will be suppressed");
+	}
 
 	/* Use the remaining non-option argument as the port name */
 	if (optind < argc)
 		ser_args.port = argv[optind];
 
-	if (!ser_args.port)
-		return usage();
+	if (!ser_args.port) {
+		ui_free_log_history();
+		return usage(argv[0], stderr);
+	}
 
 	/* Install signal handler for Ctrl+C */
 	sa.sa_handler = handle_sigint;
 	sigemptyset(&sa.sa_mask);
 	sa.sa_flags = 0;
 	if (sigaction(SIGINT, &sa, NULL) == 0) {
-		LUDLC_LOG_INFO("Create connection...");
+		if (ui_install_resize_handler() != 0) {
+			ui_logf("warning: failed to install SIGWINCH handler");
+		}
+		ui_logf("creating connection...");
 
 		ret = ludlc_serial_connection_create(&ser_args, &conn,
 							&proto, &cb);
 		if ( !ret ) {
-			/* Run main loop until stop flag is set (by menu or Ctrl+C) */
-			while (!g_stop_flag) {
-				if (!menu_handler(conn))
-					break;
-			}
+			/* Run interactive menu until user exits or Ctrl+C. */
+			(void)menu_handler(conn);
 
-			LUDLC_LOG_INFO("Exiting...");
+			ui_logf("exiting...");
 			ludlc_serial_connection_destroy(conn);
 
 			/* Clean up any packets still waiting for ack */
@@ -509,8 +1160,8 @@ int main (int argc, char **argv)
 			}
 
 		} else {
-			LUDLC_LOG_ERROR("Creation of LuDLC serial connection "
-					"failed: %s. Exit", strerror(-ret));
+			ui_logf("failed to create LuDLC serial connection: %s",
+				strerror(-ret));
 			ret = EXIT_FAILURE;
 		}
 	} else {
@@ -518,5 +1169,7 @@ int main (int argc, char **argv)
 		ret =  EXIT_FAILURE;
 	}
 
+	ui_shutdown();
+	ui_free_log_history();
 	return ret;
 }
