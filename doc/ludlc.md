@@ -1,7 +1,7 @@
 # Lightweight Micro Devices Link Control (LuDLC)
 
 **Version:** 1.0 \
-**Author:** Andrey VOLKOV <andrey@volkov.fr> and LuDLC Contributors
+**Author:** Andrey VOLKOV <andrey@volkov.fr> & LuDLC Contributors
 
 The Lightweight Micro Devices Link Control (LuDLC) is a reliable
 point-to-point communication protocol specifically developed for

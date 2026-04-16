@@ -8,7 +8,7 @@
  * (like packet IDs and sizes), and configurable parameters (like
  * window size and ping times) required for a LuDLC implementation.
  *
- * Copyright (C) 2025 Andrey VOLKOV <andrey@volkov.fr> and LuDLC Contributors
+ * Copyright (C) 2025-2026 Andrey VOLKOV <andrey@volkov.fr> & LuDLC Contributors
  *
  * This file is licensed under either the Apache License, Version 2.0,
  * or the GNU General Public License, version 2 or (at your option)
@@ -193,4 +193,3 @@ struct ludlc_proto_cb {
 };
 
 #endif /* __LUDLC_PROTO_H__ */
-

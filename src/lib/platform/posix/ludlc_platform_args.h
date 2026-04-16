@@ -4,7 +4,7 @@
  *
  * LuDLC platform hardware related definitions and declararions
  *
- * Copyright (C) 2025 Andrey VOLKOV <andrey@volkov.fr> and LuDLC Contributors
+ * Copyright (C) 2025-2026 Andrey VOLKOV <andrey@volkov.fr> & LuDLC Contributors
  *
  * This file is licensed under either the Apache License, Version 2.0,
  * or the GNU General Public License, version 2 or (at your option)
