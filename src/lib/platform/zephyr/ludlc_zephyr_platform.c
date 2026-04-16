@@ -30,7 +30,6 @@ int ludlc_platform_init_timer(struct ludlc_connection *conn,
 			      ludlc_timer_cb_t cb)
 {
 	if (timer) {
-		/* Initialize Zephyr's timer with the above trampoline */
 		k_timer_init(timer, cb, NULL);
 		k_timer_user_data_set(timer, (void *)conn);
 
@@ -76,13 +75,15 @@ void ludlc_platform_request_tx(struct ludlc_connection *conn)
 
 void ludlc_platform_conn_timeout(struct ludlc_connection *conn)
 {
-
+	k_event_post(&conn->pconn.rx_event, LUDLC_CONN_RX_TOUT_EVT);
 }
 
 int ludlc_platform_conn_init(struct ludlc_connection *conn)
 {
 	k_event_init(&conn->pconn.tx_events);
+	k_event_init(&conn->pconn.rx_event);
+
 	return 0;
 }
 
-LOG_MODULE_REGISTER(ludlc);
+LOG_MODULE_REGISTER(ludlc, LOG_LEVEL_DBG);

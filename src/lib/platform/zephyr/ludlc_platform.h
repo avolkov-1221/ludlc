@@ -33,7 +33,11 @@ struct ludlc_platform_connection {
 #define LUDLC_CONN_FORCE_TX_F		BIT(0)
 #define LUDLC_CONN_TX_EXIT_EVT		BIT(1)
 #define LUDLC_PLATFORM_LAST_TX_EVENT	2
+
 	struct k_event		tx_events;
+
+#define LUDLC_CONN_RX_TOUT_EVT		BIT(0)
+	struct k_event		rx_event;
 };
 
 /* --- Atomics --- */
@@ -119,7 +123,8 @@ static inline int ludlc_platform_start_timer(ludlc_platform_timer_t *timer,
 {
 	if (timer) {
 		/* k_timer_start uses k_timeout_t structures (ms or us) */
-		k_timer_start(timer, K_USEC(delay), K_USEC(period));
+		k_timer_start(timer, K_USEC(delay),
+			      period ? K_USEC(period) : K_NO_WAIT);
 		return 0;
 	}
 	return -EINVAL;
