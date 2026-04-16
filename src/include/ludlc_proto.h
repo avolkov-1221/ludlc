@@ -19,6 +19,8 @@
 #ifndef __LUDLC_PROTO_H__
 #define __LUDLC_PROTO_H__
 
+#include <ludlc_types.h>
+
 /**
  * @def CONFIG_LUDLC_WINDOW
  * @brief Defines the maximal size of the packets waiting queue (sliding window).
@@ -146,6 +148,15 @@ typedef CONFIG_LUDLC_CHANNEL_TYPE	ludlc_channel_t;
 #ifndef CONFIG_LUDLC_CONTROL_CHANNEL
 #define CONFIG_LUDLC_CONTROL_CHANNEL	0
 #endif
+
+/**
+ * @def LUDLC_CTRL_OP_NOP
+ * @brief Control-channel opcode: no operation / user-defined extension point.
+ *
+ * This value is reserved as a neutral control payload marker. It has no
+ * built-in semantics in the core and can be used by upper control protocols.
+ */
+#define LUDLC_CTRL_OP_NOP		0x00U
 
 #define LUDLC_MAX_TTL		127
 

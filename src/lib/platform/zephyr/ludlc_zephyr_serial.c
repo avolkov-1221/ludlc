@@ -47,6 +47,7 @@
 #define RX_TOUT_EVT	BIT(3)
 
 #define TX_SPACE_AVAIL_EVT	BIT(LUDLC_PLATFORM_LAST_TX_EVENT)
+#define TX_EMPTY_EVT		BIT(LUDLC_PLATFORM_LAST_TX_EVENT + 1)
 
 #define TX_BUF_SIZE	ROUND_UP(2*LUDLC_MAX_PACKET_SIZE, sizeof(void *))
 
@@ -90,6 +91,34 @@ struct ludlc_serial_connection {
 
 	struct ludlc_connection	conn;  /* Core LuDLC connection */
 };
+
+static inline bool is_tx_path_empty(struct ludlc_serial_connection *sconn)
+{
+	return ring_buf_space_get(&sconn->tx_rb) ==
+			sizeof(sconn->tx_rb_buffer) &&
+		!ludlc_platform_test_bit(TX_ASYNC_BUSY, &sconn->flags);
+}
+
+static inline void post_tx_events(struct ludlc_serial_connection *sconn)
+{
+	uint32_t evt = TX_SPACE_AVAIL_EVT;
+
+	if (ludlc_platform_test_bit(LUDLC_CONN_DISC_AFTER_TX_F,
+			&sconn->conn.flags) &&
+			is_tx_path_empty(sconn)) {
+		evt |= TX_EMPTY_EVT;
+	}
+
+	k_event_post(&sconn->conn.pconn.tx_events, evt);
+}
+
+static inline void complete_disconnect_after_tx(
+					struct ludlc_serial_connection *sconn)
+{
+	ludlc_handle_disconnect(&sconn->conn);
+	ludlc_platform_clear_bit(LUDLC_CONN_DISC_AFTER_TX_F,
+				 &sconn->conn.flags);
+}
 
 #ifdef CONFIG_LUDLC_STATIC_SERIAL_CONN
 /** @brief Static pool of serial connections. */
@@ -163,10 +192,10 @@ static void uart_irq_cb(const struct device *dev, void *user_data)
 		if (len > 0) {
 			int written = uart_fifo_fill(dev, data_ptr, len);
 			ring_buf_get_finish(&sconn->tx_rb, written);
-			k_event_post(&sconn->conn.pconn.tx_events,
-				TX_SPACE_AVAIL_EVT);
+			post_tx_events(sconn);
 		} else {
 			uart_irq_tx_disable(dev);
+			post_tx_events(sconn);
 		}
 	}
 
@@ -288,9 +317,11 @@ static void serial_start_tx(struct ludlc_serial_connection *sconn)
 				ring_buf_get_finish(&sconn->tx_rb, 0);
 				ludlc_platform_clear_bit(TX_ASYNC_BUSY,
 						&sconn->flags);
+				post_tx_events(sconn);
 			}
 		} else {
 			ludlc_platform_clear_bit(TX_ASYNC_BUSY, &sconn->flags);
+			post_tx_events(sconn);
 		}
 
 	} else if (IS_ENABLED(CONFIG_UART_INTERRUPT_DRIVEN)) {
@@ -321,8 +352,7 @@ static void uart_async_callback(const struct device *dev,
 		ludlc_platform_clear_bit(TX_ASYNC_BUSY, &sconn->flags);
 
 		/* Signal thread */
-		k_event_post(&sconn->conn.pconn.tx_events,
-			TX_SPACE_AVAIL_EVT);
+		post_tx_events(sconn);
 
 		/* Re-trigger */
 		serial_start_tx(sconn);
@@ -330,17 +360,19 @@ static void uart_async_callback(const struct device *dev,
 		ring_buf_get_finish(&sconn->tx_rb, evt->data.tx.len);
 		ludlc_platform_clear_bit(TX_ASYNC_BUSY, &sconn->flags);
 		/* Signal thread */
-		k_event_post(&sconn->conn.pconn.tx_events,
-			TX_SPACE_AVAIL_EVT);
+		post_tx_events(sconn);
 	}
 }
+
+
+#define TX_SERIAL_EVENTS (LUDLC_CONN_FORCE_TX_F | LUDLC_CONN_TX_EXIT_EVT)
 
 /**
  * @brief TX serial thread entry point.
  *
  * This thread is responsible for encoding LuDLC packets and queuing them
- * for transmission via the UART. It waits for events to send new packets
- * or when transmit space becomes available.
+ * for transmission via the UART. It waits for force-tx/exit events and, when
+ * draining a disconnect packet, for an explicit TX-empty event.
  * @param p1 Pointer to the `ludlc_serial_connection` structure.
  * @param p2 Unused.
  * @param p3 Unused. */
@@ -348,6 +380,7 @@ static void tx_serial_thread(void *p1, void *p2, void *p3)
 {
 	struct ludlc_serial_connection *sconn = p1;
 	struct ludlc_senc_state enc_state;
+	bool disconnect_after_tx = false;
 	bool packet_done = true;
 
 	ARG_UNUSED(p2);
@@ -364,19 +397,49 @@ static void tx_serial_thread(void *p1, void *p2, void *p3)
 		 * 3) The FIFO is not full
 		 * 4) We are told to terminate
 		 */
-		if (packet_done) {
-			uint32_t evt = k_event_wait_safe(
-				&sconn->conn.pconn.tx_events,
-				LUDLC_CONN_FORCE_TX_F  |
-				LUDLC_CONN_TX_EXIT_EVT |
-				TX_SPACE_AVAIL_EVT,
-				false, K_FOREVER);
+		uint32_t evt;
+		uint32_t wait_mask = 0U;
+
+		if (disconnect_after_tx) {
+			if (is_tx_path_empty(sconn)) {
+				complete_disconnect_after_tx(sconn);
+				disconnect_after_tx = false;
+				continue;
+			}
+
+			wait_mask = LUDLC_CONN_TX_EXIT_EVT | TX_EMPTY_EVT;
+		} else if (packet_done) {
+			wait_mask = TX_SERIAL_EVENTS;
+		} else if (ring_buf_space_get(&sconn->tx_rb) == 0U) {
+			wait_mask = TX_SERIAL_EVENTS | TX_SPACE_AVAIL_EVT;
+		}
+
+		if (wait_mask != 0U) {
+			evt = k_event_wait_safe(&sconn->conn.pconn.tx_events,
+					wait_mask, false, K_FOREVER);
 
 			if (evt & LUDLC_CONN_TX_EXIT_EVT) {
 				break;
 			}
 
-			if ((evt & LUDLC_CONN_FORCE_TX_F) == 0) {
+			if (disconnect_after_tx) {
+				if ((evt & TX_EMPTY_EVT) ||
+						is_tx_path_empty(sconn)) {
+					complete_disconnect_after_tx(sconn);
+					disconnect_after_tx = false;
+				}
+				/* Sleep/wait until TX path drains,
+				 * do not dequeue new frames.
+				 */
+				continue;
+			}
+
+			if (packet_done && ((evt & LUDLC_CONN_FORCE_TX_F) == 0)) {
+				continue;
+			}
+
+			if ((wait_mask & TX_SPACE_AVAIL_EVT) &&
+					((evt & TX_SPACE_AVAIL_EVT) == 0U)) {
 				continue;
 			}
 		}
@@ -395,6 +458,12 @@ static void tx_serial_thread(void *p1, void *p2, void *p3)
 				continue;
 			}
 
+			disconnect_after_tx =
+				ludlc_is_disconnect_after_tx_packet(
+					&sconn->conn, enc_state.hdr,
+					enc_state.hdr_size,
+					enc_state.payload_size);
+
 			/* Postpone the ping timer for one PING_TIME later */
 			ludlc_platform_start_timer(&sconn->conn.ping_timer,
 					CONFIG_LUDLC_PING_TIME,
@@ -412,7 +481,7 @@ static void tx_serial_thread(void *p1, void *p2, void *p3)
 		}
 
 		/* Generate one octet from the encoder and queue it */
-		if (ring_buf_space_get(&sconn->tx_rb)) {
+		if (ring_buf_space_get(&sconn->tx_rb) != 0U) {
 			uint8_t byte = ludlc_serial_encode(&sconn->conn,
 					&enc_state);
 			ring_buf_put(&sconn->tx_rb, &byte, 1);
@@ -581,8 +650,10 @@ int ludlc_serial_connection_create(const ludlc_platform_args_t *arg,
 	}
 
 	*conn = &sconn->conn;
-	ludlc_platform_request_tx(&sconn->conn); /* Start handshake */
-	return 0;
+	ret = ludlc_connect(&sconn->conn); /* Start handshake */
+	if (!ret) {
+		return 0;
+	}
 
 err:
 	ludlc_serial_connection_destroy(&sconn->conn);

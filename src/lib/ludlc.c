@@ -119,8 +119,8 @@ static inline void ludlc_call_on_disconnect(struct ludlc_connection *conn)
 }
 
 #ifdef CONFIG_LUDLC_MT
-#define LUDLC_DECLARE_CONFIRMED_QUEUE() \
-	struct packet_queue_item confirmed_q[CONFIG_LUDLC_WINDOW]
+#define LUDLC_DECLARE_CONFIRMED_QUEUE(q_name) \
+	struct packet_queue_item q_name[CONFIG_LUDLC_WINDOW]
 /**
  * @brief (MT) Adds a confirmed packet to a temporary queue for later processing.
  *
@@ -167,8 +167,8 @@ static void ludlc_confirm_unlocked(struct ludlc_connection *conn,
 	}
 }
 #else
-#define LUDLC_DECLARE_CONFIRMED_QUEUE() \
-	struct packet_queue_item *confirmed_q = NULL
+#define LUDLC_DECLARE_CONFIRMED_QUEUE(q_name) \
+	struct packet_queue_item q_name = NULL
 /**
  * @brief (non-MT) Immediately invokes the user confirmation callback.
  *
@@ -231,7 +231,6 @@ static void on_disconnect_lock(struct ludlc_connection *conn,
 		ludlc_id_t *confirmed_num)
 {
 	ludlc_id_t i, cnt;
-	ludlc_platform_atomic_t keep_flags;
 
 	LUDLC_LOG_DEBUG("on_disconnect_lock");
 
@@ -239,11 +238,17 @@ static void on_disconnect_lock(struct ludlc_connection *conn,
 	ludlc_platform_stop_timer(&conn->ping_timer);
 
 	conn->conn_state = LUDLC_STATE_DISCONNECTED;
-	/* Keep lifecycle bit; clear runtime protocol flags. */
-	keep_flags = conn->flags & (1U << LUDLC_CONN_INITED_F);
-	conn->flags = keep_flags;
 
-	/* Packets (last_ack+1)..last_queued inclusive — use ID space, not window mask */
+	/* Keep lifecycle bit; clear runtime protocol flags. */
+
+	conn->flags =
+		ludlc_platform_test_bit(LUDLC_CONN_INITED_F, &conn->flags)
+			? 1U << LUDLC_CONN_INITED_F
+			: 0;
+
+	/* Packets (last_ack+1)..last_queued inclusive,
+	 * use ID space, not window mask
+	 */
 	cnt = (conn->last_queued - conn->last_ack) & LUDLC_ID_MASK;
 
 	/* Iterate and fail all pending packets */
@@ -253,7 +258,8 @@ static void on_disconnect_lock(struct ludlc_connection *conn,
 		conn->packets_q[i & LUDLC_WINDOW_MASK].status.result = EPIPE;
 		ludlc_on_confirm_lock(
 			conn,
-			&conn->packets_q[i & LUDLC_WINDOW_MASK], cq, confirmed_num);
+			&conn->packets_q[i & LUDLC_WINDOW_MASK],
+			cq, confirmed_num);
 	}
 
 	/* Reset queue pointers */
@@ -287,6 +293,10 @@ int ludlc_enqueue_data(struct ludlc_connection *conn,
 {
 	int ret;
 
+	if (!buf && size) {
+		return -EINVAL;
+	}
+
 	if (ttl > LUDLC_MAX_TTL) {
 		ttl = LUDLC_MAX_TTL;
 	} else if(ttl == 0) {
@@ -316,6 +326,59 @@ int ludlc_enqueue_data(struct ludlc_connection *conn,
 
 	if (!ret)
 		ludlc_platform_request_tx(conn); /* Signal TX task */
+
+	return ret;
+}
+
+int ludlc_send_disconnect(struct ludlc_connection *conn)
+{
+	int ret;
+
+	if (!conn) {
+		return -EINVAL;
+	}
+
+	/*
+	 * Request local disconnect after TX thread drains this control packet.
+	 * Set the flag before enqueue to avoid missing the packet due to races.
+	 */
+	ludlc_platform_set_bit(LUDLC_CONN_DISC_AFTER_TX_F, &conn->flags);
+	ret = ludlc_enqueue_data(conn, CONFIG_LUDLC_CONTROL_CHANNEL, NULL, 0, 1);
+	if (ret) {
+		ludlc_platform_clear_bit(LUDLC_CONN_DISC_AFTER_TX_F, &conn->flags);
+	}
+
+	return ret;
+}
+
+int ludlc_connect(struct ludlc_connection *conn)
+{
+	LUDLC_DECLARE_CONFIRMED_QUEUE(confirmed_q);
+	ludlc_id_t confirmed_num = 0;
+	int ret = 0;
+
+	if (!conn ||
+	    !ludlc_platform_test_bit(LUDLC_CONN_INITED_F, &conn->flags)) {
+		return -EINVAL;
+	}
+
+	LUDLC_LOCK(&conn->lock);
+	if (conn->conn_state == LUDLC_STATE_TERMINATE) {
+		ret = -ESHUTDOWN;
+	} else {
+		/*
+		 * Reuse disconnect cleanup path for reconnect:
+		 * stop timers, clear runtime flags, reset FSM/queue state,
+		 * and fail any pending packets through normal confirm path.
+		 */
+		on_disconnect_lock(conn, confirmed_q, &confirmed_num);
+	}
+	LUDLC_UNLOCK(&conn->lock);
+
+	ludlc_confirm_unlocked(conn, confirmed_q, confirmed_num);
+	if (!ret) {
+		ludlc_platform_request_tx(conn);
+	}
 
 	return ret;
 }
@@ -490,7 +553,8 @@ static int rx_handle_nak(
  * called with the connection lock held. It performs the following steps:
  * 1. Validates packet size.
  * 2. If not connected, calls @ref rx_handle_handshake.
- * 3. Handles control channel packets (e.g., disconnect).
+ * 3. Handles control channel packets (regular control payloads and explicit
+ *    disconnect opcode).
  * 4. Resets the connection watchdog timer.
  * 5. Validates the packet's TX ID sequence (`tx_id`).
  * 6. Sets flags for NAK or acceptance.
@@ -527,7 +591,8 @@ static int rx_handle_packet(
 	}
 
 	/* OK, the packet's integrity looks good,
-	 * so start handling the packet. */
+	 * so start handling the packet.
+	 */
 	if (conn->conn_state != LUDLC_STATE_CONNECTED) {
 		ret = rx_handle_handshake(conn, packet, pkt_sz);
 		if ((ret & HANDLE_RX_CONTINUE_F) == 0) {
@@ -541,17 +606,19 @@ static int rx_handle_packet(
 	}
 
 	id = packet->hdr.id.tx_id & LUDLC_ID_MASK;
-
-	/* Handle "tx_id" of the packet */
 	if (!ping && packet->hdr.chan == CONFIG_LUDLC_CONTROL_CHANNEL) {
-		/* Received a control packet while connected */
-		if (id != LUDLC_STATE_WAIT_CONN_2) {
-			/* Any control packet other than last handshake step */
-			on_disconnect_lock(conn, confirmed_q, confirmed_num);
-			ret |= HANDLE_RX_DISCONNECT_F;
+		if (pkt_sz == sizeof(ludlc_packet_hdr_t)) {
+			if (id != LUDLC_STATE_WAIT_CONN_2) {
+				/* Any empty control packet other than
+				 * last handshake step
+				 */
+				on_disconnect_lock(conn, confirmed_q,
+						   confirmed_num);
+				ret |= HANDLE_RX_DISCONNECT_F;
+			}
+			/* Respond to disconnect/handshake */
+			return ret | HANDLE_RX_REQUEST_TX_F;
 		}
-		/* Respond to disconnect/handshake */
-		return ret | HANDLE_RX_REQUEST_TX_F;
 	}
 
 	/* Any valid packet (even ping) resets the connection watchdog */
@@ -653,7 +720,7 @@ int ludlc_receive(struct ludlc_connection *conn,
 			ludlc_timestamp_t tstamp)
 {
 	int ret;
-	LUDLC_DECLARE_CONFIRMED_QUEUE();
+	LUDLC_DECLARE_CONFIRMED_QUEUE(confirmed_q);
 	ludlc_id_t confirmed_num = 0;
 
 	LUDLC_LOG_TRACE("packet (%x, %x) @%llu",
@@ -904,7 +971,7 @@ static bool ludlc_disconnect_core(struct ludlc_connection *conn,
  */
 void ludlc_handle_disconnect(struct ludlc_connection *conn)
 {
-	LUDLC_DECLARE_CONFIRMED_QUEUE();
+	LUDLC_DECLARE_CONFIRMED_QUEUE(confirmed_q);
 	ludlc_id_t confirmed_num = 0;
 	bool notify = ludlc_disconnect_core(conn, confirmed_q, &confirmed_num);
 
@@ -920,7 +987,7 @@ void ludlc_handle_disconnect(struct ludlc_connection *conn)
  */
 void ludlc_connection_cleanup(struct ludlc_connection *conn)
 {
-	LUDLC_DECLARE_CONFIRMED_QUEUE();
+	LUDLC_DECLARE_CONFIRMED_QUEUE(confirmed_q);
 	ludlc_id_t confirmed_num = 0;
 
 	if (!conn ||
@@ -929,8 +996,10 @@ void ludlc_connection_cleanup(struct ludlc_connection *conn)
 	}
 
 	(void)ludlc_disconnect_core(conn, confirmed_q, &confirmed_num);
+
 	ludlc_platform_destroy_timer(&conn->wd_timer);
 	ludlc_platform_destroy_timer(&conn->ping_timer);
+
 	ludlc_platform_conn_destroy(conn);
 }
 

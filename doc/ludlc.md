@@ -287,11 +287,13 @@ acknowledgment information in its Acknowledgment Field.
 **Watchdog (Timeout)**
 If no valid packet (including PINGs) is received for a watchdog period
 (typically 3 times the "ping time"), the connection is considered lost,
-and the state machine resets to Disconnected.
+and the network stack resets to Disconnected.
 
 **Disconnect**
-A (non-ping) control packet received while in the *Connected* state is
-treated as a disconnect notification, causing the connection to reset.
+A (non-ping) empty control-channel packet with any IDs, received while
+the network stack is in the Connected state, is treated as a disconnect
+notification, causing the connection to reset. Such a packet may be sent
+by the peer node, for example, after its reboot.
 
 #### Reliable Data Transfer
 

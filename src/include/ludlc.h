@@ -164,4 +164,32 @@ int ludlc_enqueue_data(struct ludlc_connection *conn,
 		ludlc_channel_t dst_chan,
 		const void *buf, ludlc_payload_size_t size, uint8_t ttl);
 
+/**
+ * @brief Sends a graceful disconnect control request to the peer.
+ *
+ * This helper sends an empty header as disconnect notification
+ * on @ref CONFIG_LUDLC_CONTROL_CHANNEL.
+ * The peer will process it through the explicit control disconnect path.
+ *
+ * @param conn The connection to send the disconnect request on.
+ * @return 0 on success.
+ * @return -EAGAIN if the transmit queue (window) is full.
+ */
+int ludlc_send_disconnect(struct ludlc_connection *conn);
+
+/**
+ * @brief Starts or restarts LuDLC handshake to establish a link.
+ *
+ * This function can be used after connection creation and after a transport
+ * drop to trigger (re)connection. If the protocol state is mid-session, the
+ * core is reset to a clean disconnected state first, pending TX packets are
+ * failed via regular confirm callbacks, and handshake is started again.
+ *
+ * @param conn The connection to (re)connect.
+ * @return 0 on success.
+ * @return -EINVAL if @p conn is NULL or not initialized.
+ * @return -ESHUTDOWN if the connection is terminating.
+ */
+int ludlc_connect(struct ludlc_connection *conn);
+
 #endif /* __LUDLC_H__ */

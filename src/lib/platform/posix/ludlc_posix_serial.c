@@ -415,17 +415,29 @@ ssize_t ludlc_serial_read(struct ludlc_serial_connection *sconn,
 		return -EAGAIN;
 	}
 
+	/* Any wakeup without UART payload is treated as transport error/unblock. */
+	ret = -EPIPE;
 	/* Pipe data available -> external unblock */
 	if (pfd[0].revents & POLLIN) {
 		char tmp;
-		read(pfd[0].fd, &tmp, 1); /* clear the pipe */
+		/* Drain pipe to coalesce wakeups and avoid stale events. */
+		while (read(pfd[0].fd, &tmp, 1) > 0)
+			;
 	}
 
 	/* Check for UART data */
-	if (pfd[1].revents & POLLIN)
-		return read(pfd[1].fd, buf, buf_size);
+	if (pfd[1].revents & POLLIN) {
+		ret = read(pfd[1].fd, buf, buf_size);
 
-	return -EPIPE; /* Unblocked by pipe, signal to exit */
+		/*
+		 * poll() can race with the producer: normalize transient
+		 * read errors to -errno so callers can handle -EAGAIN.
+		 */
+		if (ret < 0)
+			ret = -errno;
+	}
+
+	return ret;
 }
 
 /**
@@ -500,7 +512,6 @@ static void *ludlc_rx_serial_thread(void *arg)
 							pkt->hdr.chan,
 							dec_state.size);
 					}
-
 					ludlc_receive(conn, pkt,
 							dec_state.size,
 							ts);
@@ -561,6 +572,14 @@ static int send_tx_fifo(struct ludlc_serial_connection *sconn)
 	return written;
 }
 
+static void complete_disconnect(struct ludlc_connection *conn)
+{
+	ludlc_handle_disconnect(conn);
+	ludlc_platform_clear_bit(
+		LUDLC_CONN_DISC_AFTER_TX_F,
+		&conn->flags);
+}
+
 /**
  * @brief Main thread function for the serial transmitter (TX).
  *
@@ -578,7 +597,8 @@ static void *ludlc_tx_serial_thread(void *arg)
 	struct ludlc_serial_connection *sconn = arg;
 	struct ludlc_connection *conn = &sconn->conn;
 	struct ludlc_senc_state enc_state;
-	bool call_pool = true;
+	bool disconnect_after_tx = false;
+	bool can_sleep = true;
 	struct pollfd pfd[2];
 	short int uart_events = POLLERR | POLLHUP;
 
@@ -601,28 +621,29 @@ static void *ludlc_tx_serial_thread(void *arg)
 		 * 3) The FIFO is not full
 		 * 4) We are told to terminate
 		 */
-		if (call_pool &&
-			!ludlc_platform_test_and_clear_bit(LUDLC_CONN_FORCE_TX_F,
-					&conn->pconn.tx_events)) {
+		if (can_sleep &&
+		    !ludlc_platform_test_and_clear_bit(LUDLC_CONN_FORCE_TX_F,
+						      &conn->pconn.tx_events)) {
 
 			pfd[1].events = uart_events;
 
 			ret = poll(pfd, 2, -1);
+
 			if (ret < 0) {
 				if (errno == EINTR) {
 					/* Interrupted by signal, retry poll */
 					continue;
 				}
+
 				LUDLC_LOG_ERROR("TX thread poll failed: %s",
 						strerror(errno));
-				break; /* Fatal error */
+				break;
 			}
 
-			/* Check for internal wakeup event */
 			if (pfd[0].revents & POLLIN) {
-				/* Clear the pipe by reading the byte(s) */
 				unsigned int tmp;
 
+				/* Drain the pipe buffer */
 				while (read(pfd[0].fd, &tmp, sizeof(tmp)) > 0)
 					;
 			}
@@ -631,17 +652,19 @@ static void *ludlc_tx_serial_thread(void *arg)
 				break;
 			}
 
-			/* Check for UART writability */
 			if (pfd[1].revents & POLLOUT) {
-				ret =  send_tx_fifo(sconn);
+				ret = send_tx_fifo(sconn);
 				if (ret < 0) {
 					ludlc_serial_encoder_init(&enc_state);
 					LUDLC_LOG_ERROR(
-					  "Drop packet due to failed start_tx");
+						"Drop packet due to failed start_tx");
 					LUDLC_INC_STATS(&sconn->conn, dropped);
-				} else if (ret == 0) {
+
+					complete_disconnect(conn);
+					disconnect_after_tx = false;
+				} else if (!kfifo_is_empty(&sconn->tx_fifo)) {
 					uart_events |= POLLOUT;
-				} else if (ret > 0) {
+				} else {
 					uart_events &= ~POLLOUT;
 				}
 			}
@@ -651,8 +674,20 @@ static void *ludlc_tx_serial_thread(void *arg)
 				continue;
 			}
 
+			if (disconnect_after_tx) {
+				if (!ludlc_serial_encoder_idle(&enc_state) ||
+				    !kfifo_is_empty(&sconn->tx_fifo)) {
+					uart_events |= POLLOUT;
+					continue;
+				}
+
+				complete_disconnect(conn);
+				disconnect_after_tx = false;
+			}
+
 			if (!ludlc_platform_test_and_clear_bit(
-				LUDLC_CONN_FORCE_TX_F, &conn->pconn.tx_events)) {
+				    LUDLC_CONN_FORCE_TX_F,
+				    &conn->pconn.tx_events)) {
 				continue;
 			}
 		}
@@ -674,6 +709,12 @@ static void *ludlc_tx_serial_thread(void *arg)
 				continue;
 			}
 
+			disconnect_after_tx =
+					ludlc_is_disconnect_after_tx_packet(
+						conn, enc_state.hdr,
+						enc_state.hdr_size,
+						enc_state.payload_size);
+
 			/* Postpone the ping timer for one PING_TIME later */
 			ludlc_platform_start_timer(&sconn->conn.ping_timer,
 					CONFIG_LUDLC_PING_TIME,
@@ -687,7 +728,7 @@ static void *ludlc_tx_serial_thread(void *arg)
 			/* Send EOF marker only if queue is empty */
 			ludlc_serial_encoder_send_eof(&enc_state,
 					is_tx_empty != 0);
-			call_pool = false;
+			can_sleep = false;
 		}
 
 		/* Generate one octet from the encoder and queue it */
@@ -699,7 +740,7 @@ static void *ludlc_tx_serial_thread(void *arg)
 			if (ludlc_serial_encoder_idle(&enc_state)) {
 				/* The full packet has been encoded */
 				LUDLC_INC_STATS(&sconn->conn, tx_packet);
-				call_pool = true;
+				can_sleep = true;
 			}
 		}
 
@@ -708,10 +749,12 @@ static void *ludlc_tx_serial_thread(void *arg)
 			ludlc_serial_encoder_init(&enc_state);
 			LUDLC_LOG_ERROR("Drop packet due to failed start_tx");
 			LUDLC_INC_STATS(&sconn->conn, dropped);
-			call_pool = true;
-		} else if(ret == 0) {
+			can_sleep = true;
+		} else if (!kfifo_is_empty(&sconn->tx_fifo)) {
 			uart_events |= POLLOUT;
-			call_pool = true;
+			can_sleep = true;
+		} else {
+			uart_events &= ~POLLOUT;
 		}
 	}
 
@@ -827,14 +870,17 @@ int ludlc_serial_connection_create(const ludlc_platform_args_t *args,
 		if (!ret) {
 			sconn->flags |= TX_THREAD_OK;
 			*conn = &sconn->conn;
-			/* Request an initial TX (to start handshake) */
-			ludlc_platform_request_tx(&sconn->conn);
-			return 0;
+			/* Start LuDLC handshake through core connect API. */
+			ret = ludlc_connect(&sconn->conn);
+			if (!ret) {
+				return 0;
+			}
+		} else {
+			ret = -ret;
 		}
+	} else {
+		ret = -ret;
 	}
-
-	/* pthread_create sets errno on its own, convert to negative */
-	ret = -ret;
 
 err:
 	/* Cleanup on failure */
