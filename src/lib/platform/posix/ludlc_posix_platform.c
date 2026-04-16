@@ -267,6 +267,20 @@ void ludlc_platform_request_tx(struct ludlc_connection *conn)
 	}
 }
 
+void ludlc_platform_conn_timeout(struct ludlc_connection *conn)
+{
+	char msg = 'T';
+	if (write(conn->pconn.rx_pipe[1], &msg, 1) == -1) {
+		/* Handle error, e.g., pipe closed or full.
+		 * It's not a critical error if the pipe is full (EAGAIN),
+		 * as the FORCE_TX flag is already set. Only log other errors. */
+		if (errno != EAGAIN) {
+			LUDLC_LOG_ERROR("Failed to write to TX wakeup pipe: %s",
+				strerror(errno));
+		}
+	}
+}
+
 void ludlc_platform_conn_destroy(struct ludlc_connection *conn)
 {
 	if (conn->pconn.tx_pipe[0] >= 0) {
@@ -278,15 +292,44 @@ void ludlc_platform_conn_destroy(struct ludlc_connection *conn)
 		close(conn->pconn.tx_pipe[1]);
 		conn->pconn.tx_pipe[1] = -1;
 	}
+
+	if (conn->pconn.rx_pipe[0] >= 0) {
+		close(conn->pconn.rx_pipe[0]);
+		conn->pconn.rx_pipe[0] = -1;
+	}
+
+	if (conn->pconn.rx_pipe[1] >= 0) {
+		close(conn->pconn.rx_pipe[1]);
+		conn->pconn.rx_pipe[1] = -1;
+	}
+
 }
 
 int ludlc_platform_conn_init(struct ludlc_connection *conn)
 {
+	conn->pconn.rx_pipe[0] = -1;
+	conn->pconn.rx_pipe[1] = -1;
+
+	/* Create rx pipe */
+	if (pipe(conn->pconn.rx_pipe) < 0) {
+		return -errno;
+	}
+
+	/* Set read end of pipe to non-blocking */
+	fcntl(conn->pconn.rx_pipe[0], F_SETFL, O_NONBLOCK);
+
 	conn->pconn.tx_pipe[0] = -1;
 	conn->pconn.tx_pipe[1] = -1;
 
 	if (pipe(conn->pconn.tx_pipe) < 0) {
-		return -errno;
+		int ret = -errno;
+
+		close(conn->pconn.rx_pipe[0]);
+		conn->pconn.rx_pipe[0] = -1;
+
+		close(conn->pconn.rx_pipe[1]);
+		conn->pconn.rx_pipe[1] = -1;
+		return ret;
 	}
 
 	fcntl(conn->pconn.tx_pipe[0], F_SETFL, O_NONBLOCK);

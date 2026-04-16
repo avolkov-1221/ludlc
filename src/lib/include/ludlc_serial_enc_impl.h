@@ -60,6 +60,8 @@ struct ludlc_sdec_state {
 
 	/** @brief Buffer to store the de-escaped incoming packet. */
 	uint8_t			*payload;
+
+	ludlc_payload_size_t	payload_cap;
 };
 
 /**
@@ -129,11 +131,12 @@ static inline void ludlc_serial_decoder_init(struct ludlc_sdec_state *dec_state)
  */
 static inline void ludlc_serial_decoder_prep(struct ludlc_connection *conn,
 		struct ludlc_sdec_state *dec_state,
-		void *new_payload)
+		void *new_payload, ludlc_payload_size_t cap)
 {
 	dec_state->size = 0;
 	dec_state->csum = conn->csum_init_value;
 	dec_state->payload = new_payload;
+	dec_state->payload_cap = cap;
 }
 
 /**
@@ -193,7 +196,8 @@ static inline bool ludlc_serial_decode(struct ludlc_connection *conn,
 
 		ludlc_serial_decoder_prep(conn,
 					  dec_state,
-					  dec_state->payload)
+					  dec_state->payload,
+					  dec_state->payload_cap);
 		break;
 	case dec_esc:
 		/* This octet is an escaped data one */
@@ -201,7 +205,7 @@ static inline bool ludlc_serial_decode(struct ludlc_connection *conn,
 		c ^= LUDLC_MASK;
 		/* fallthrough */
 	case dec_payload:
-		if (dec_state->size < sizeof(dec_state->payload)) {
+		if (dec_state->size < dec_state->payload_cap) {
 			if(c == LUDLC_ESC) {
 				/* Start of an escape sequence */
 				dec_state->state = dec_esc;

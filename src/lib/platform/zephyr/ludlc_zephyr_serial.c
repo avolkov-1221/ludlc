@@ -44,6 +44,7 @@
 #define RX_READY_EVT	BIT(0)
 #define RX_DISABLE_EVT	BIT(1)
 #define RX_EXIT_EVT	BIT(2)
+#define RX_TOUT_EVT	BIT(3)
 
 #define TX_SPACE_AVAIL_EVT	BIT(LUDLC_PLATFORM_LAST_TX_EVENT)
 
@@ -192,8 +193,10 @@ static void uart_irq_cb(const struct device *dev, void *user_data)
 			return;
 		}
 
-		ludlc_serial_decoder_prep(&sconn->dec_state,
-				sconn->curr_rx_buf->payload);
+		ludlc_serial_decoder_prep(&sconn->conn,
+				&sconn->dec_state,
+				sconn->curr_rx_buf->payload,
+				sizeof(sconn->curr_rx_buf->payload));
 	}
 }
 
@@ -219,10 +222,18 @@ static void rx_serial_thread(void *p1, void *p2, void *p3)
 		struct rx_packet_item *rx_buf;
 
 		uint32_t evt = k_event_wait_safe(&sconn->rx_event,
-			RX_READY_EVT | RX_EXIT_EVT, false, K_FOREVER);
+				RX_READY_EVT | RX_EXIT_EVT | RX_TOUT_EVT,
+				false, K_FOREVER);
 
 		if (evt & RX_EXIT_EVT) {
 			break;
+		}
+
+		if (evt & RX_TOUT_EVT) {
+			if (sconn->conn.cb->on_disconnect) {
+				sconn->conn.cb->on_disconnect(
+					&sconn->conn, sconn->conn.user_ctx);
+			}
 		}
 
 		if ((evt & RX_READY_EVT) == 0) {
@@ -503,8 +514,10 @@ int ludlc_serial_connection_create(const ludlc_platform_args_t *arg,
 		goto err;
 	}
 
-	ludlc_serial_decoder_prep(&sconn->dec_state,
-			sconn->curr_rx_buf->payload);
+	ludlc_serial_decoder_prep(&sconn->conn,
+			&sconn->dec_state,
+			sconn->curr_rx_buf->payload,
+			sizeof(sconn->curr_rx_buf->payload));
 
 	ring_buf_init(&sconn->tx_rb, sizeof(sconn->tx_rb_buffer),
 			sconn->tx_rb_buffer);

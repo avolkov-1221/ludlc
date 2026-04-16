@@ -123,11 +123,19 @@ typedef uint64_t 			ludlc_timestamp_t;
 typedef atomic_uint ludlc_platform_atomic_t;
 
 struct ludlc_platform_connection {
-#define LUDLC_CONN_FORCE_TX_F		(1U << 0)
-#define LUDLC_PLATFORM_LAST_TX_EVENT	1
+#define LUDLC_CONN_FORCE_TX_F		0
+#define LUDLC_CONN_TX_EXIT_EVT		1
+#define LUDLC_PLATFORM_LAST_TX_EVENT	2
 	ludlc_platform_atomic_t tx_events;
 
 	int tx_pipe[2];
+
+/**
+ * @brief Pipe FDs used to unblock the RX thread.
+ * `event_fd[0]` is the read end (polled by RX).
+ * `event_fd[1]` is the write end (written to by destroy/wd).
+ */
+	 int rx_pipe[2];
 };
 
 /* Values for CRC-16/KERMIT (little-endian version of XMODEM one) */

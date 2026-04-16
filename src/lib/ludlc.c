@@ -239,16 +239,17 @@ static void on_disconnect_lock(struct ludlc_connection *conn,
 	conn->conn_state = LUDLC_STATE_DISCONNECTED;
 	conn->flags = 0;
 
-	/* Calculate number of packets waiting for ACK */
-	cnt = (conn->last_queued - conn->last_ack) & LUDLC_WINDOW_MASK;
+	/* Packets (last_ack+1)..last_queued inclusive — use ID space, not window mask */
+	cnt = (conn->last_queued - conn->last_ack) & LUDLC_ID_MASK;
 
 	/* Iterate and fail all pending packets */
-	for (i = conn->last_ack; cnt; cnt--) {
-		i = (i + 1) & LUDLC_WINDOW_MASK;
-		conn->packets_q[i].status.result = EPIPE;
+	i = conn->last_ack;
+	for (; cnt; cnt--) {
+		i = (i + 1) & LUDLC_ID_MASK;
+		conn->packets_q[i & LUDLC_WINDOW_MASK].status.result = EPIPE;
 		ludlc_on_confirm_lock(
 			conn,
-			&conn->packets_q[i], cq, confirmed_num);
+			&conn->packets_q[i & LUDLC_WINDOW_MASK], cq, confirmed_num);
 	}
 
 	/* Reset queue pointers */
@@ -605,11 +606,16 @@ static int rx_handle_packet(
 					confirmed_q, confirmed_num);
 		}
 
-		/* Check if the NAK flag is set in the ACK ID, and handle it */
+		/*
+		 * NAK handling must see unacked count *after* advancing last_ack
+		 * for the cumulative ACK above — not the stale num_wait from
+		 * before the loop.
+		 */
 		if (packet->hdr.id.ack_id & LUDLC_NAK_FLAG) {
+			num_wait = (conn->last_sent - conn->last_ack) &
+					LUDLC_ID_MASK;
 			ret |= rx_handle_nak(conn, packet, num_wait,
-					confirmed_q,
-					confirmed_num);
+					     confirmed_q, confirmed_num);
 		}
 	} else {
 		// TODO:
@@ -652,7 +658,7 @@ int ludlc_receive(struct ludlc_connection *conn,
 #endif
 	ludlc_id_t confirmed_num = 0;
 
-	LUDLC_LOG_DEBUG("packet (%x, %x) @%llu",
+	LUDLC_LOG_TRACE("packet (%x, %x) @%llu",
 			packet->hdr.id.tx_id,
 			packet->hdr.id.ack_id,
 			tstamp);
@@ -678,10 +684,8 @@ int ludlc_receive(struct ludlc_connection *conn,
 	/* Call deferred on_confirm callbacks (for MT) */
 	ludlc_confirm_unlocked(conn, confirmed_q, confirmed_num);
 
-	if (ret & HANDLE_RX_DISCONNECT_F) {
-		if (conn->cb->on_disconnect) {
-			conn->cb->on_disconnect(conn, conn->user_ctx);
-		}
+	if ((ret & HANDLE_RX_DISCONNECT_F) && conn->cb->on_disconnect) {
+		conn->cb->on_disconnect(conn, conn->user_ctx);
 	}
 
 	/* Call "on_recv" callback if packet is ok */
@@ -747,7 +751,8 @@ int ludlc_get_packet_to_send(struct ludlc_connection *conn,
 		/* No ACK during handshake */
 		conn->ctrl_packet.id.ack_id = 0;
 
-		*hdr = &conn->ctrl_packet.id;
+		/* Full control header (id + channel) */
+		*hdr = &conn->ctrl_packet;
 		*hdr_sz = sizeof(conn->ctrl_packet);
 
 		*payload = NULL;
@@ -765,16 +770,14 @@ int ludlc_get_packet_to_send(struct ludlc_connection *conn,
 			ack |= LUDLC_NAK_FLAG;
 		}
 
-		/* Get next TX ID */
+		/* Next data packet sequence */
 		id = (conn->last_sent + 1) & LUDLC_ID_MASK;
 
 		if (conn->last_sent == conn->last_queued) {
-			/* if there are no pending packets, */
-			/* then send a ping frame */
+			/* Nothing to send, so send PING instead. */
 			conn->ctrl_packet.id.tx_id = id | LUDLC_PING_FLAG;
 			conn->ctrl_packet.id.ack_id = ack;
 			*hdr = &conn->ctrl_packet.id;
-			/* Only ID fields of header */
 			*hdr_sz = sizeof(conn->ctrl_packet.id);
 
 			*payload = NULL;
@@ -823,7 +826,7 @@ int ludlc_get_packet_to_send(struct ludlc_connection *conn,
 void ludlc_ping_timer(ludlc_platform_timer_arg_t arg)
 {
 	struct ludlc_connection *conn = ludlc_timer_arg_to_conn(arg);
-	LUDLC_LOG_DEBUG("Ping time");
+	LUDLC_LOG_TRACE("Ping time");
 	ludlc_platform_request_tx(conn);
 }
 
@@ -840,7 +843,8 @@ void ludlc_ping_timer(ludlc_platform_timer_arg_t arg)
 static void ludlc_wd_timer(ludlc_platform_timer_arg_t arg)
 {
 	struct ludlc_connection *conn = ludlc_timer_arg_to_conn(arg);
-	ludlc_platform_set_bit(LUDLC_CONN_TIMEOUT_F, &conn->flags);
+	LUDLC_LOG_TRACE("Conn timeout");
+	ludlc_platform_conn_timeout(conn);
 }
 
 /**

@@ -57,8 +57,9 @@ static inline void ludlc_platform_clear_bit(long nr,
 	atomic_clear_bit(addr, nr);
 }
 
-static inline bool
-ludlc_platform_test_and_clear_bit(long nr, ludlc_platform_atomic_t *addr)
+static inline bool ludlc_platform_test_and_clear_bit(
+					long nr,
+					ludlc_platform_atomic_t *addr)
 {
 	return atomic_test_and_clear_bit(addr, nr);
 }
@@ -135,6 +136,12 @@ static inline int ludlc_platform_stop_timer(ludlc_platform_timer_t *timer)
 static inline void ludlc_platform_destroy_timer(ludlc_platform_timer_t *timer)
 {
 	ARG_UNUSED(timer);
+	/* Do nothing */
+}
+
+static inline void ludlc_platform_conn_destroy(struct ludlc_connection *conn)
+{
+	ARG_UNUSED(conn);
 	/* Do nothing */
 }
 

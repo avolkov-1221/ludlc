@@ -136,12 +136,9 @@ struct ludlc_connection {
 /** @def LUDLC_CONN_SEND_NAK_F
  * @brief Atomic flag bit indicating a NAK (Negative Ack) should be sent. */
 #define LUDLC_CONN_SEND_NAK_F	0
-/** @def LUDLC_CONN_TIMEOUT_F
- * @brief Atomic flag bit indicating the watchdog timer has expired. */
-#define LUDLC_CONN_TIMEOUT_F	1
 /** @def LUDLC_CONN_INITED_F
  * @brief Atomic flag bit indicating the connection is inited. */
-#define LUDLC_CONN_INITED_F	2
+#define LUDLC_CONN_INITED_F	1
 	/**< Atomic bitfield for connection flags. */
 	ludlc_platform_atomic_t	flags;
 

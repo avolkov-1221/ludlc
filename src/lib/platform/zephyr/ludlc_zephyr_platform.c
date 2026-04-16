@@ -74,8 +74,9 @@ void ludlc_platform_request_tx(struct ludlc_connection *conn)
 	k_event_post(&conn->pconn.tx_events, LUDLC_CONN_FORCE_TX_F);
 }
 
-void ludlc_platform_conn_destroy(struct ludlc_connection *conn)
+void ludlc_platform_conn_timeout(struct ludlc_connection *conn)
 {
+
 }
 
 int ludlc_platform_conn_init(struct ludlc_connection *conn)
