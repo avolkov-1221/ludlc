@@ -42,7 +42,7 @@ set(COMMON
 
 if(CONFIG_LUDLC_SERIAL_CONN)
 	set(SERIAL_SRC
-		${CMAKE_CURRENT_SOURCE_DIR}/ludlc_serial.c
+		${CMAKE_CURRENT_SOURCE_DIR}/ludlc_posix_serial.c
 	)
 endif(CONFIG_LUDLC_SERIAL_CONN)
 
