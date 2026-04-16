@@ -76,6 +76,7 @@ struct ludlc_connection *ludlc_timer_arg_to_conn(ludlc_platform_timer_arg_t arg)
  */
 void ludlc_platform_request_tx(struct ludlc_connection *conn);
 
+void ludlc_platform_conn_destroy(struct ludlc_connection *conn);
 int ludlc_platform_conn_init(struct ludlc_connection *conn);
 
 #endif /* __LUDLC_PLATFORM_API_H__ */

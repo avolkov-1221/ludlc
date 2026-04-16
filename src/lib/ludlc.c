@@ -868,6 +868,7 @@ void ludlc_connection_cleanup(struct ludlc_connection *conn)
 		ludlc_platform_destroy_timer(&conn->wd_timer);
 		ludlc_platform_destroy_timer(&conn->ping_timer);
 
+		ludlc_platform_conn_destroy(conn);
 	}
 
 	memset(conn, 0, sizeof(*conn));
