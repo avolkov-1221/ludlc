@@ -230,10 +230,7 @@ static void rx_serial_thread(void *p1, void *p2, void *p3)
 		}
 
 		if (evt & RX_TOUT_EVT) {
-			if (sconn->conn.cb->on_disconnect) {
-				sconn->conn.cb->on_disconnect(
-					&sconn->conn, sconn->conn.user_ctx);
-			}
+			ludlc_handle_disconnect(&sconn->conn);
 		}
 
 		if ((evt & RX_READY_EVT) == 0) {

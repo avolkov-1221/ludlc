@@ -19,6 +19,7 @@
 #include <stddef.h>
 #include <stdint.h>
 #include <stdlib.h>
+#include <string.h>
 
 #include <ludlc.h>
 #include <ludlc_platform.h>
@@ -97,25 +98,29 @@ static inline bool ludlc_tx_queue_full(struct ludlc_connection *conn)
 	return false;
 }
 
-/**
- * @brief Internal handler for connection establishment.
- *
- * Increments connection statistics and invokes the user's `on_connect`
- * callback, if provided.
- *
- * @note This function must be called with the connection lock held.
- *
- * @param conn Pointer to the connection structure.
- */
-static inline void on_connect_lock(struct ludlc_connection *conn)
+static inline void ludlc_call_on_confirm(struct ludlc_connection *conn,
+		const struct packet_queue_item *pkt)
 {
-	LUDLC_INC_STATS(conn, on_conn);
+	if (conn->cb && conn->cb->on_confirm) {
+		conn->cb->on_confirm(conn,
+				pkt->status.result,
+				pkt->status.chan,
+				pkt->payload,
+				pkt->size,
+				conn->user_ctx);
+	}
+}
 
-	if (conn->cb->on_connect)
-		conn->cb->on_connect(conn, conn->user_ctx);
+static inline void ludlc_call_on_disconnect(struct ludlc_connection *conn)
+{
+	if (conn->cb && conn->cb->on_disconnect) {
+		conn->cb->on_disconnect(conn, conn->user_ctx);
+	}
 }
 
 #ifdef CONFIG_LUDLC_MT
+#define LUDLC_DECLARE_CONFIRMED_QUEUE() \
+	struct packet_queue_item confirmed_q[CONFIG_LUDLC_WINDOW]
 /**
  * @brief (MT) Adds a confirmed packet to a temporary queue for later processing.
  *
@@ -135,6 +140,7 @@ static inline void ludlc_on_confirm_lock(struct ludlc_connection *conn,
 				struct packet_queue_item *cq,
 				ludlc_id_t *confirmed_num)
 {
+	(void)conn;
 	cq[*confirmed_num] = *pkt;
 	(*confirmed_num)++;
 }
@@ -154,19 +160,15 @@ static inline void ludlc_on_confirm_lock(struct ludlc_connection *conn,
 static void ludlc_confirm_unlocked(struct ludlc_connection *conn,
 		struct packet_queue_item *cq, ludlc_id_t confirmed_num)
 {
-	if (conn->cb->on_confirm) {
-		ludlc_id_t i;
-		for (i = 0; i < confirmed_num; i++) {
-			conn->cb->on_confirm(conn,
-					cq[i].status.result,
-					cq[i].status.chan,
-					cq[i].payload,
-					cq[i].size,
-					conn->user_ctx);
-		}
+	ludlc_id_t i;
+
+	for (i = 0; i < confirmed_num; i++) {
+		ludlc_call_on_confirm(conn, &cq[i]);
 	}
 }
 #else
+#define LUDLC_DECLARE_CONFIRMED_QUEUE() \
+	struct packet_queue_item *confirmed_q = NULL
 /**
  * @brief (non-MT) Immediately invokes the user confirmation callback.
  *
@@ -185,13 +187,9 @@ static void ludlc_on_confirm_lock(struct ludlc_connection *conn,
 				struct packet_queue_item *cq,
 				ludlc_id_t *confirmed_num)
 {
-	if(conn->cb->on_confirm)
-		conn->cb->on_confirm(conn,
-			pkt->status.result,
-			pkt->status.chan,
-			pkt->payload,
-			pkt->size,
-			conn->user_ctx);
+	(void)cq;
+	(void)confirmed_num;
+	ludlc_call_on_confirm(conn, pkt);
 }
 
 /**
@@ -207,6 +205,9 @@ static void ludlc_on_confirm_lock(struct ludlc_connection *conn,
 static inline void ludlc_confirm_unlocked(struct ludlc_connection *conn,
 		struct packet_queue_item *cq, ludlc_id_t confirmed_num)
 {
+	(void)conn;
+	(void)cq;
+	(void)confirmed_num;
 }
 
 #endif
@@ -230,6 +231,7 @@ static void on_disconnect_lock(struct ludlc_connection *conn,
 		ludlc_id_t *confirmed_num)
 {
 	ludlc_id_t i, cnt;
+	ludlc_platform_atomic_t keep_flags;
 
 	LUDLC_LOG_DEBUG("on_disconnect_lock");
 
@@ -237,7 +239,9 @@ static void on_disconnect_lock(struct ludlc_connection *conn,
 	ludlc_platform_stop_timer(&conn->ping_timer);
 
 	conn->conn_state = LUDLC_STATE_DISCONNECTED;
-	conn->flags = 0;
+	/* Keep lifecycle bit; clear runtime protocol flags. */
+	keep_flags = conn->flags & (1U << LUDLC_CONN_INITED_F);
+	conn->flags = keep_flags;
 
 	/* Packets (last_ack+1)..last_queued inclusive — use ID space, not window mask */
 	cnt = (conn->last_queued - conn->last_ack) & LUDLC_ID_MASK;
@@ -649,13 +653,7 @@ int ludlc_receive(struct ludlc_connection *conn,
 			ludlc_timestamp_t tstamp)
 {
 	int ret;
-#ifdef CONFIG_LUDLC_MT
-	/* On-stack queue for MT builds to defer callbacks */
-	struct packet_queue_item confirmed_q[CONFIG_LUDLC_WINDOW];
-#else
-	/* Not used in non-MT */
-	struct packet_queue_item *confirmed_q = NULL;
-#endif
+	LUDLC_DECLARE_CONFIRMED_QUEUE();
 	ludlc_id_t confirmed_num = 0;
 
 	LUDLC_LOG_TRACE("packet (%x, %x) @%llu",
@@ -672,7 +670,7 @@ int ludlc_receive(struct ludlc_connection *conn,
 
 	if (ret & HANDLE_RX_CONNECTED_F) {
 		LUDLC_INC_STATS(conn, on_conn);
-		if (conn->cb->on_connect) {
+		if (conn->cb && conn->cb->on_connect) {
 			conn->cb->on_connect(conn, conn->user_ctx);
 		}
 	}
@@ -684,12 +682,13 @@ int ludlc_receive(struct ludlc_connection *conn,
 	/* Call deferred on_confirm callbacks (for MT) */
 	ludlc_confirm_unlocked(conn, confirmed_q, confirmed_num);
 
-	if ((ret & HANDLE_RX_DISCONNECT_F) && conn->cb->on_disconnect) {
-		conn->cb->on_disconnect(conn, conn->user_ctx);
+	if (ret & HANDLE_RX_DISCONNECT_F) {
+		ludlc_call_on_disconnect(conn);
 	}
 
 	/* Call "on_recv" callback if packet is ok */
-	if ((ret & HANDLE_RX_ACCEPT_F) && conn->cb->on_recv) {
+	if ((ret & HANDLE_RX_ACCEPT_F) &&
+	    conn->cb && conn->cb->on_recv) {
 		conn->cb->on_recv(conn,
 				packet->hdr.chan,
 				packet->payload,
@@ -834,9 +833,7 @@ void ludlc_ping_timer(ludlc_platform_timer_arg_t arg)
  * @brief Watchdog (WD) timer callback.
  *
  * This function is invoked when the connection watchdog timer expires,
- * indicating a loss of contact with the remote peer. It sets the
- * timeout flag, which will be handled by the protocol's main loop
- * or polling function.
+ * indicating a loss of contact with the remote peer.
  *
  * @param conn Pointer to the connection structure (passed from timer context).
  */
@@ -848,36 +845,93 @@ static void ludlc_wd_timer(ludlc_platform_timer_arg_t arg)
 }
 
 /**
- * @brief Cleans up and zeroes a connection structure.
+ * @brief Executes the common core disconnect transition and confirm flush.
+ *
+ * This helper performs the lock-protected disconnect state transition through
+ * @ref on_disconnect_lock and then dispatches deferred confirmation callbacks
+ * via @ref ludlc_confirm_unlocked.
+ *
+ * If the connection is already disconnected (or terminating), it is a no-op.
+ *
+ * @param conn Pointer to the connection structure.
+ * @param confirmed_q Temporary confirmation queue (used in MT builds, ignored
+ * in non-MT builds).
+ * @param confirmed_num Pointer to the number of queued confirmations.
+ *
+ * @retval true Disconnect transition was executed and caller may notify
+ * `on_disconnect`.
+ * @retval false No transition was needed (invalid input or already disconnected).
+ *
+ * @note User-facing callbacks are dispatched outside `conn->lock`.
+ */
+static bool ludlc_disconnect_core(struct ludlc_connection *conn,
+		struct packet_queue_item *confirmed_q,
+		ludlc_id_t *confirmed_num)
+{
+	bool notify = false;
+
+	if (!conn || !confirmed_num) {
+		return false;
+	}
+
+	LUDLC_LOCK(&conn->lock);
+	if (conn->conn_state != LUDLC_STATE_DISCONNECTED &&
+	    conn->conn_state != LUDLC_STATE_TERMINATE) {
+		on_disconnect_lock(conn, confirmed_q, confirmed_num);
+		notify = true;
+	}
+	LUDLC_UNLOCK(&conn->lock);
+
+	ludlc_confirm_unlocked(conn, confirmed_q, *confirmed_num);
+	return notify;
+}
+
+/**
+ * @brief Handles a transport-originated disconnect in core context.
+ *
+ * This function performs the full disconnect sequence in a state-safe way:
+ * - transitions the FSM to disconnected state,
+ * - fails pending queued TX packets through the regular confirm path,
+ * - invokes the user `on_disconnect` callback once, outside the connection lock.
+ *
+ * Repeated calls are idempotent: if the connection is already disconnected
+ * (or terminating), no additional callback notification is emitted.
+ *
+ * @param conn Pointer to the connection structure.
+ *
+ * @note The user callback is intentionally called outside `conn->lock` to
+ * avoid deadlocks and re-entrancy issues.
+ */
+void ludlc_handle_disconnect(struct ludlc_connection *conn)
+{
+	LUDLC_DECLARE_CONFIRMED_QUEUE();
+	ludlc_id_t confirmed_num = 0;
+	bool notify = ludlc_disconnect_core(conn, confirmed_q, &confirmed_num);
+
+	if (notify && conn) {
+		ludlc_call_on_disconnect(conn);
+	}
+}
+
+/**
+ * @brief Cleans up a connection structure.
  *
  * @param conn Pointer to the connection structure to be zeroed.
  */
 void ludlc_connection_cleanup(struct ludlc_connection *conn)
 {
-#ifdef CONFIG_LUDLC_MT
-	/* On-stack queue for MT builds to defer callbacks */
-	struct packet_queue_item confirmed_q[CONFIG_LUDLC_WINDOW];
-#else
-	/* Not used in non-MT */
-	struct packet_queue_item *confirmed_q = NULL;
-#endif
+	LUDLC_DECLARE_CONFIRMED_QUEUE();
 	ludlc_id_t confirmed_num = 0;
 
-	if (ludlc_platform_test_bit(LUDLC_CONN_INITED_F, &conn->flags)) {
-		LUDLC_LOCK(&conn->lock);
-		on_disconnect_lock(conn, confirmed_q, &confirmed_num);
-		LUDLC_UNLOCK(&conn->lock);
-
-		/* Call deferred on_confirm callbacks (for MT) */
-		ludlc_confirm_unlocked(conn, confirmed_q, confirmed_num);
-
-		ludlc_platform_destroy_timer(&conn->wd_timer);
-		ludlc_platform_destroy_timer(&conn->ping_timer);
-
-		ludlc_platform_conn_destroy(conn);
+	if (!conn ||
+		!ludlc_platform_test_bit(LUDLC_CONN_INITED_F, &conn->flags)) {
+		return;
 	}
 
-	memset(conn, 0, sizeof(*conn));
+	(void)ludlc_disconnect_core(conn, confirmed_q, &confirmed_num);
+	ludlc_platform_destroy_timer(&conn->wd_timer);
+	ludlc_platform_destroy_timer(&conn->ping_timer);
+	ludlc_platform_conn_destroy(conn);
 }
 
 /**

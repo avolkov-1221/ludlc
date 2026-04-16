@@ -12,6 +12,8 @@
  */
 
 #include <unistd.h>
+#include <stdatomic.h>
+#include <stdbool.h>
 #include <stdint.h>
 #include <errno.h>
 #include <string.h>

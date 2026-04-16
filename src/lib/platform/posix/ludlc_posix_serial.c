@@ -20,15 +20,20 @@
  * any later version.
  */
 
+#include <stdbool.h>
 #include <stdint.h>
 #include <stddef.h>
 #include <limits.h>
+#include <stdio.h>
 #include <stdatomic.h>
+#include <stdlib.h>
+#include <string.h>
 #include <termios.h>
 #include <fcntl.h>
 #include <errno.h>
 #include <poll.h>
 #include <pthread.h>
+#include <unistd.h>
 
 #include "ludlc_posix.h"
 #include <ludlc.h>
@@ -461,9 +466,8 @@ static void *ludlc_rx_serial_thread(void *arg)
 			ret = ludlc_serial_read(sconn, buf, sizeof(buf), -1);
 			if (ret < 0) {
 				if (ret != -EAGAIN) {
-					/* Handle transport error */
-					conn->cb->on_disconnect(conn,
-								conn->user_ctx);
+					/* Handle transport error/timeout in core. */
+					ludlc_handle_disconnect(conn);
 					ludlc_serial_decoder_prep(conn,
 							 &dec_state,
 							 packet,
@@ -502,7 +506,7 @@ static void *ludlc_rx_serial_thread(void *arg)
 							ts);
 				} else {
 					LUDLC_LOG_ERROR(
-						"Can't to get timestamp, "
+						"Can't get the timestamp, "
 						"drop the packet");
 				}
 

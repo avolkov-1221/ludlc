@@ -187,4 +187,17 @@ int ludlc_get_packet_to_send(struct ludlc_connection *conn,
 		const void **hdr, ludlc_payload_size_t *hdr_sz,
 		const void **payload, ludlc_payload_size_t *pay_sz);
 
+/**
+ * @brief Handles transport-side disconnect/timeout events in core.
+ *
+ * This API performs a state-safe disconnect transition, fails queued packets,
+ * and notifies user callbacks once (outside lock).
+ *
+ * @param conn The connection to disconnect.
+ *
+ * @note This helper is idempotent and safe to call on repeated transport
+ * error/timeout notifications.
+ */
+void ludlc_handle_disconnect(struct ludlc_connection *conn);
+
 #endif /* __LUDLC_PRIVATE_H__ */
