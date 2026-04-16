@@ -139,6 +139,22 @@ static inline void ludlc_serial_decoder_prep(struct ludlc_connection *conn,
 	dec_state->payload_cap = cap;
 }
 
+static inline void ludlc_serial_decoder_store_byte(
+		struct ludlc_connection *conn,
+		struct ludlc_sdec_state *dec_state,
+		uint8_t c)
+{
+	if (dec_state->size < dec_state->payload_cap) {
+		dec_state->payload[dec_state->size++] = c;
+		dec_state->csum = conn->proto->csum_byte(dec_state->csum, c);
+	} else {
+		/* Packet is too large (jabber) */
+		dec_state->size = 0;
+		dec_state->state = 0; /* dec_idle */
+		LUDLC_INC_STATS(conn, jabber);
+	}
+}
+
 /**
  * @brief Processes one incoming octet through the serial decoder FSM.
  *
@@ -181,7 +197,8 @@ static inline bool ludlc_serial_decode(struct ludlc_connection *conn,
 		dec_state->state = dec_payload;
 		if (dec_state->size >= LUDLC_MIN_PACKET_SZ) {
 			/* the CRC([data][crc]) must be a known constant,
-			 * or it's not a crc but something else */
+			 * or it's not a crc but something else
+			 */
 			if (dec_state->csum == conn->csum_verify_value) {
 				LUDLC_INC_STATS(conn, rx_packet);
 				dec_state->size -= sizeof(ludlc_csum_t);
@@ -203,24 +220,17 @@ static inline bool ludlc_serial_decode(struct ludlc_connection *conn,
 		/* This octet is an escaped data one */
 		dec_state->state = dec_payload;
 		c ^= LUDLC_MASK;
-		/* fallthrough */
+		/* Escaped octet is always literal payload data. */
+		ludlc_serial_decoder_store_byte(conn, dec_state, c);
+		break;
 	case dec_payload:
-		if (dec_state->size < dec_state->payload_cap) {
-			if(c == LUDLC_ESC) {
-				/* Start of an escape sequence */
-				dec_state->state = dec_esc;
-				break;
-			}
-			/* Store normal data octet */
-			dec_state->payload[dec_state->size++] = c;
-			dec_state->csum =
-				conn->proto->csum_byte(dec_state->csum, c);
-		} else {
-			/* Packet is too large (jabber) */
-			dec_state->size = 0;
-			dec_state->state = dec_idle;
-			LUDLC_INC_STATS(conn, jabber);
+		if (c == LUDLC_ESC) {
+			/* Start of an escape sequence */
+			dec_state->state = dec_esc;
+			break;
 		}
+		/* Store normal data octet. */
+		ludlc_serial_decoder_store_byte(conn, dec_state, c);
 		break;
 	}
 
@@ -257,8 +267,9 @@ static inline uint8_t ludlc_serial_encode(struct ludlc_connection *conn,
 	switch (enc_state->state) {
 	case enc_idle:
 		/* Ready to start a new packet */
-		if (!enc_state->hdr_size || !enc_state->hdr)
+		if (!enc_state->hdr_size || !enc_state->hdr) {
 			return LUDLC_SOF; /* Send idle SOFs if no data */
+		}
 
 		enc_state->csum = conn->csum_init_value;
 		enc_state->state = enc_payload;
@@ -301,10 +312,11 @@ static inline uint8_t ludlc_serial_encode(struct ludlc_connection *conn,
 		c = *enc_state->ptr++;
 		if (--enc_state->sz == 0) {
 			/* Checksum finished */
-			if (enc_state->flags & ENC_SEND_EOF_F)
+			if (enc_state->flags & ENC_SEND_EOF_F) {
 				enc_state->state = enc_eof;
-			else
+			} else {
 				enc_state->state = enc_idle;
+			}
 		}
 		break;
 
@@ -329,7 +341,6 @@ static inline uint8_t ludlc_serial_encode(struct ludlc_connection *conn,
 		/* Send the escape octet first */
 		c = LUDLC_ESC;
 	}
-
 	return c;
 }
 
