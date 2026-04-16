@@ -1,0 +1,13 @@
+sample:
+  name: LuDLC echo sample
+tests:
+  sample.ludlc.echo.native_sim:
+    build_only: true
+    platform_allow:
+      - native_sim
+    integration_platforms:
+      - native_sim
+    tags:
+      - ludlc
+      - serial
+      - uart

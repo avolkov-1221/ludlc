@@ -12,6 +12,7 @@ include(CheckLibraryExists)
 include(CheckIncludeFiles)
 
 set(project_name ludlc)
+set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 
 #--------------------------------------------------------------------
 # A simple function to parse a "key = value" version file.
@@ -57,8 +58,13 @@ endfunction()
 # End of parser function
 #--------------------------------------------------------------------
 
-if(NOT DEFINED TARGET_PLATFORM AND NOT CONFIG_LUDLC)
-	set(TARGET_PLATFORM "posix" CACHE INTERNAL "target platform")
+if(NOT DEFINED TARGET_PLATFORM)
+	if(DEFINED ZEPHYR_BASE)
+		set(TARGET_PLATFORM "zephyr" CACHE INTERNAL "target platform")
+	else()
+		set(TARGET_PLATFORM "posix" CACHE INTERNAL "target platform")
+	endif()
+
 	message(STATUS
 		"Setting target platform to '${TARGET_PLATFORM}' "
 		"as none was specified.")
@@ -67,38 +73,47 @@ endif()
 string(TOLOWER "${TARGET_PLATFORM}" TARGET_PLATFORM)
 message(STATUS "The selected platform is '${TARGET_PLATFORM}'")
 
-set(VERSION_FILE "${CMAKE_CURRENT_SOURCE_DIR}/VERSION")
-# Call the parser. This will create variables like
-#    VERSION_MAJOR, VERSION_MINOR, etc. in this scope.
-parse_version_file(${VERSION_FILE})
+if(NOT TARGET_PLATFORM STREQUAL "zephyr")
+	set(VERSION_FILE "${CMAKE_CURRENT_SOURCE_DIR}/VERSION")
+	# Call the parser. This will create variables like
+	#    VERSION_MAJOR, VERSION_MINOR, etc. in this scope.
+	parse_version_file(${VERSION_FILE})
 
-# Check that the required variables were loaded
-if(NOT DEFINED VERSION_MAJOR OR NOT DEFINED VERSION_MINOR OR
-	NOT DEFINED PATCHLEVEL)
-	message(FATAL_ERROR "VERSION_MAJOR, VERSION_MINOR, or "
-		"PATCHLEVEL not found in ${VERSION_FILE}")
+	# Check that the required variables were loaded
+	if(NOT DEFINED VERSION_MAJOR OR NOT DEFINED VERSION_MINOR OR
+		NOT DEFINED PATCHLEVEL)
+		message(FATAL_ERROR "VERSION_MAJOR, VERSION_MINOR, or "
+			"PATCHLEVEL not found in ${VERSION_FILE}")
+	endif()
+
+	set(PROJECT_VERSION "${VERSION_MAJOR}.${VERSION_MINOR}.${PATCHLEVEL}")
+
+	# Optionally add the extra version info if it's defined and not empty
+	if(DEFINED EXTRAVERSION AND NOT EXTRAVERSION STREQUAL "")
+		set(PROJECT_VERSION "${PROJECT_VERSION}${EXTRAVERSION}")
+	endif()
+
+	project(${project_name} VERSION ${PROJECT_VERSION} LANGUAGES C)
 endif()
-
-set(PROJECT_VERSION "${VERSION_MAJOR}.${VERSION_MINOR}.${PATCHLEVEL}")
-
-# Optionally add the extra version info if it's defined and not empty
-if(DEFINED EXTRAVERSION AND NOT EXTRAVERSION STREQUAL "")
-	set(PROJECT_VERSION "${PROJECT_VERSION}${EXTRAVERSION}")
-endif()
-
-project(${project_name} VERSION ${PROJECT_VERSION} LANGUAGES C)
 
 if(TARGET_PLATFORM STREQUAL "posix")
 
 	set(TARGET_PLATFORM_POSIX 1)
 	option(CONFIG_ENABLE_BINARIES "Build LuDLC test and demo programs." ON)
 
+elseif(TARGET_PLATFORM STREQUAL "zephyr")
+	find_package(Zephyr REQUIRED HINTS $ENV{ZEPHYR_BASE})
+	project(${project_name})
+
+	set(WITH_ZEPHYR 1)
+	set(TARGET_PLATFORM_ZEPHYR 1)
 else()
 	message(FATAL_ERROR "Unknown platform ${TARGET_PLATFORM}, bail out!")
 endif()
 
-# Default to Debug build type if not specified
-if(NOT CMAKE_BUILD_TYPE AND NOT CMAKE_CONFIGURATION_TYPES)
+# Default to Debug build type if not specified (non-Zephyr only).
+if(NOT TARGET_PLATFORM_ZEPHYR AND
+	NOT CMAKE_BUILD_TYPE AND NOT CMAKE_CONFIGURATION_TYPES)
 	message(STATUS "No build type specified. "
 		"Setting CMAKE_BUILD_TYPE=Debug by default.")
 	set(CMAKE_BUILD_TYPE Debug CACHE STRING
@@ -120,22 +135,17 @@ endif()
 # Set the project top directory.
 set(LUDLC_TOP_DIR ${CMAKE_CURRENT_SOURCE_DIR})
 
-option(CONFIG_ENABLE_BINARIES "Build LuDLC test and demo programs." ON)
 option(DISABLE_PACKAGE_CONFIG_AND_INSTALL
 	"Disable package configuration, target export and installation"
 	${LUDLC_AS_SUBPROJECT})
 
-# If this is the root project add longer list of available CMAKE_BUILD_TYPE values
-if(NOT LUDLC_AS_SUBPROJECT)
+# If this is the root project add longer list of available
+# CMAKE_BUILD_TYPE values (non-Zephyr only).
+if(NOT TARGET_PLATFORM_ZEPHYR AND NOT LUDLC_AS_SUBPROJECT)
 	set(CMAKE_BUILD_TYPE ${CMAKE_BUILD_TYPE}
 	CACHE STRING "Choose the type of build: Debug Release"
 	FORCE)
 endif()
-
-# Arch selection (example default)
-set(TARGET_PLATFORM "posix" CACHE STRING
-	"Select target architecture (directory name under src/arch)")
-set(TARGET_PLATFORM_POSIX 1)
 
 find_program(CCACHE_FOUND ccache)
 if(CCACHE_FOUND)
@@ -145,5 +155,5 @@ endif(CCACHE_FOUND)
 
 add_subdirectory(src)
 if(NOT DEFINED DISABLE_PACKAGE_CONFIG_AND_INSTALL)
-add_subdirectory(doc)
+	add_subdirectory(doc)
 endif()

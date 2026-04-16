@@ -6,11 +6,4 @@
 # or the GNU General Public License, version 2 or (at your option)
 # any later version.
 
-name: ludlc
-
-build:
-  cmake: .
-  kconfig: zephyr/Kconfig
-
-samples:
-  - src/samples/zephyr/ludlc_echo
+add_subdirectory(ludlc_echo)

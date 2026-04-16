@@ -1,0 +1,23 @@
+// SPDX-License-Identifier: (Apache-2.0 OR GPL-2.0-or-later)
+/*
+ * ludlc_platform_args.h
+ *
+ * LuDLC platform hardware related definitions and declararions
+ *
+ * Copyright (C) 2025-2026 Andrey VOLKOV <andrey@volkov.fr> & LuDLC Contributors
+ *
+ * This file is licensed under either the Apache License, Version 2.0,
+ * or the GNU General Public License, version 2 or (at your option)
+ * any later version.
+ */
+
+#ifndef __LUDLC_PLATFORM_ARGS_H__
+#define __LUDLC_PLATFORM_ARGS_H__
+
+#include <zephyr/device.h>
+
+typedef struct ludlc_platform_args {
+	const struct device *dev;
+} ludlc_platform_args_t;
+
+#endif /* __LUDLC_PLATFORM_ARGS_H__ */

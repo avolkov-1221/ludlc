@@ -1,0 +1,14 @@
+# SPDX-License-Identifier: (Apache-2.0 OR GPL-2.0-or-later)
+
+source "Kconfig.zephyr"
+
+menu "LuDLC echo sample options"
+
+config LUDLC_ECHO_PERIODIC_TX
+	bool "Enable periodic ECHO packet transmission"
+	default y
+	help
+	  When enabled, the sample sends one ECHO packet per second in addition
+	  to counterpart-style ECHO replies.
+
+endmenu

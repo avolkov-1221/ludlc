@@ -1,5 +1,6 @@
+<!-- SPDX-License-Identifier: Apache-2.0 OR GPL-2.0-or-later -->
 # LuDLC Protocol
-Copyright © 2025 Andrey VOLKOV and LuDLC Contributors
+Copyright © 2025-2026 Andrey VOLKOV and LuDLC Contributors
 
 ---
 
@@ -54,6 +55,20 @@ Example applications demonstrating the protocol can be found in the `src/samples
 directory. After building, you can run them directly:
 ```bash
    ./src/samples/ludlc_demo
+```
+
+## Zephyr module usage
+
+This repository can be consumed as a Zephyr external module via
+`zephyr/module.yml`.
+
+Example build for the LuDLC echo sample:
+
+```bash
+ZEPHYR_BASE=/path/to/zephyrproject/zephyr \
+west build -b native_sim src/samples/zephyr/ludlc_echo -- \
+  -DTARGET_PLATFORM=zephyr \
+  -DZEPHYR_EXTRA_MODULES=/path/to/ludlc
 ```
 
 ## Contact
