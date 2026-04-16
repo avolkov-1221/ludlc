@@ -17,6 +17,9 @@
 #ifndef __LUDLC_SERIAL_ENC_IMPL_H__
 #define __LUDLC_SERIAL_ENC_IMPL_H__
 
+#include <stdbool.h>
+#include <stdint.h>
+
 /**
  * @def LUDLC_SOF
  * @brief Start Of packet sequence, aka frame boundary.
@@ -124,11 +127,12 @@ static inline void ludlc_serial_decoder_init(struct ludlc_sdec_state *dec_state)
  * @param dec_state   Pointer to the decoder state structure.
  * @param new_payload Pointer to the new buffer's payload.
  */
-static inline void ludlc_serial_decoder_prep(struct ludlc_sdec_state *dec_state,
+static inline void ludlc_serial_decoder_prep(struct ludlc_connection *conn,
+		struct ludlc_sdec_state *dec_state,
 		void *new_payload)
 {
 	dec_state->size = 0;
-	dec_state->csum = LUDLC_CSUM_INIT_VALUE;
+	dec_state->csum = conn->csum_init_value;
 	dec_state->payload = new_payload;
 }
 
@@ -175,7 +179,7 @@ static inline bool ludlc_serial_decode(struct ludlc_connection *conn,
 		if (dec_state->size >= LUDLC_MIN_PACKET_SZ) {
 			/* the CRC([data][crc]) must be a known constant,
 			 * or it's not a crc but something else */
-			if (dec_state->csum == LUDLC_CSUM_VERIFY_VALUE) {
+			if (dec_state->csum == conn->csum_verify_value) {
 				LUDLC_INC_STATS(conn, rx_packet);
 				dec_state->size -= sizeof(ludlc_csum_t);
 				return true;
@@ -187,8 +191,9 @@ static inline bool ludlc_serial_decode(struct ludlc_connection *conn,
 			LUDLC_INC_STATS(conn, dropped);
 		}
 
-		ludlc_serial_decoder_prep(dec_state,
-				dec_state->payload);
+		ludlc_serial_decoder_prep(conn,
+					  dec_state,
+					  dec_state->payload)
 		break;
 	case dec_esc:
 		/* This octet is an escaped data one */
@@ -251,7 +256,7 @@ static inline uint8_t ludlc_serial_encode(struct ludlc_connection *conn,
 		if (!enc_state->hdr_size || !enc_state->hdr)
 			return LUDLC_SOF; /* Send idle SOFs if no data */
 
-		enc_state->csum = LUDLC_CSUM_INIT_VALUE;
+		enc_state->csum = conn->csum_init_value;
 		enc_state->state = enc_payload;
 		enc_state->flags |= ENC_SEND_HDR_F;
 
@@ -279,7 +284,9 @@ static inline uint8_t ludlc_serial_encode(struct ludlc_connection *conn,
 		if (!enc_state->sz) {
 			/* Payload finished (or was zero), move to checksum */
 			enc_state->state = enc_csum;
-			enc_state->csum = LUDLC_CSUM_HTON(enc_state->csum);
+			enc_state->csum = conn->csum_to_wire ?
+				conn->csum_to_wire(enc_state->csum) :
+				LUDLC_CSUM_HTON(enc_state->csum);
 			enc_state->ptr = (const void*)&enc_state->csum;
 			enc_state->sz = sizeof(enc_state->csum);
 		}

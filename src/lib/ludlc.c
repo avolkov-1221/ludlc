@@ -15,6 +15,8 @@
  */
 
 #include <errno.h>
+#include <stdbool.h>
+#include <stddef.h>
 #include <stdint.h>
 #include <stdlib.h>
 
@@ -912,6 +914,15 @@ int ludlc_connection_init(struct ludlc_connection *conn,
 	conn->proto = proto_cb;
 	conn->cb = cb;
 	conn->user_ctx = user_ctx;
+#if CONFIG_LUDLC_CONN_CSUM_CONFIG
+	conn->csum_init_value = proto_cb->csum_init_value;
+	conn->csum_verify_value = proto_cb->csum_verify_value;
+	conn->csum_to_wire = proto_cb->csum_to_wire;
+#else
+	conn->csum_init_value = LUDLC_CSUM_INIT_VALUE;
+	conn->csum_verify_value = LUDLC_CSUM_VERIFY_VALUE;
+	conn->csum_to_wire = NULL;
+#endif
 
 	conn->ctrl_packet.chan = CONFIG_LUDLC_CONTROL_CHANNEL;
 	conn->conn_state = LUDLC_STATE_DISCONNECTED;

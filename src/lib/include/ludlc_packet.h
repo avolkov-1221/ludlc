@@ -18,6 +18,8 @@
 #ifndef __LUDLC_PACKET_H__
 #define __LUDLC_PACKET_H__
 
+#include <ludlc_proto.h>
+
 /**
  * @struct ludlc_ping_packet
  * @brief Header structure for a PING packet.

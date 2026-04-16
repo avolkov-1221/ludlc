@@ -17,6 +17,8 @@
 #ifndef __LUDLC_TYPES_H__
 #define __LUDLC_TYPES_H__
 
+#include <stdint.h>
+
 /**
  * @struct ludlc_connection
  * @brief Opaque structure representing a single LuDLC connection.
@@ -27,18 +29,15 @@
  */
 struct ludlc_connection;
 
-#ifdef CONFIG_LUDLC_CSUM_TYPE
-typedef CONFIG_LUDLC_CSUM_TYPE	ludlc_csum_t;
-#else
-typedef uint16_t	ludlc_csum_t;
+#ifndef CONFIG_LUDLC_CSUM_TYPE
+#define CONFIG_LUDLC_CSUM_TYPE uint16_t
 #endif
+typedef CONFIG_LUDLC_CSUM_TYPE ludlc_csum_t;
 
 /* --- Timestamps --- */
-#ifdef CONFIG_LUDLC_TIMESTAMP_TYPE
-typedef CONFIG_LUDLC_TIMESTAMP_TYPE	ludlc_timestamp_t;
-#else
-typedef uint64_t ludlc_timestamp_t;
+#ifndef CONFIG_LUDLC_TIMESTAMP_TYPE
+#define CONFIG_LUDLC_TIMESTAMP_TYPE uint64_t
 #endif
+typedef CONFIG_LUDLC_TIMESTAMP_TYPE ludlc_timestamp_t;
 
 #endif /* __LUDLC_TYPES_H__ */
-

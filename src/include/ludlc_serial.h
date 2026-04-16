@@ -18,6 +18,8 @@
 #ifndef __LUDLC_SERIAL_H__
 #define __LUDLC_SERIAL_H__
 
+#include <ludlc.h>
+
 /**
  * @brief Creates and initializes a new LuDLC serial connection.
  *
@@ -33,7 +35,9 @@
  */
 int ludlc_serial_connection_create(const ludlc_platform_args_t *args,
 		struct ludlc_connection **conn,
-		struct ludlc_conn_cb *cb);
+		const struct ludlc_proto_cb *proto,
+		const struct ludlc_conn_cb *cb
+		);
 
 /**
  * @brief Destroys and cleans up a LuDLC serial connection.

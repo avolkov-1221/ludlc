@@ -135,35 +135,48 @@ struct ludlc_platform_connection {
 #define LUDLC_CSUM_INIT_VALUE		0
 /** @brief Expected final value for a valid CRC-16/KERMIT checksum. */
 #define LUDLC_CSUM_VERIFY_VALUE		0
-/** @brief LuDLC checksum type, defined as uint16_t for CRC-16. */
-typedef uint16_t			ludlc_csum_t;
-
 /**
- * @brief Maps host-order CRC to on-wire little-endian (KERMIT field order).
+ * @brief Maps host-order CRC to on-wire little-endian.
  *
- * Avoids non-portable endian.h / htole16 (glibc). Uses @c __BYTE_ORDER__
+ * Avoids non-portable endian.h (glibc). Uses @c __BYTE_ORDER__
  * when available, otherwise a union probe, then the same 16-bit swap as GCC
  * big-endian.
  */
 static inline ludlc_csum_t ludlc_platform_csum_to_le(ludlc_csum_t csum)
 {
-#if defined(__BYTE_ORDER__) && defined(__ORDER_LITTLE_ENDIAN__) && \
-	__BYTE_ORDER__ == __ORDER_LITTLE_ENDIAN__
-	return csum;
-#elif defined(__BYTE_ORDER__) && defined(__ORDER_BIG_ENDIAN__) && \
-	__BYTE_ORDER__ == __ORDER_BIG_ENDIAN__
-	return (ludlc_csum_t)(((uint32_t)csum << 8) | ((uint32_t)csum >> 8));
-#else
-	union {
-		uint16_t u16;
-		uint8_t u8[2];
-	} probe;
-
-	probe.u16 = 1U;
-	if (probe.u8[0] == 1U) {
-		return csum;
-	}
-	return (ludlc_csum_t)(((uint32_t)csum << 8) | ((uint32_t)csum >> 8));
+#if defined(__BYTE_ORDER__) && (__BYTE_ORDER__ == __ORDER_LITTLE_ENDIAN__)
+	 return csum;
+#elif defined(__BYTE_ORDER__) && (__BYTE_ORDER__ == __ORDER_BIG_ENDIAN__)
+	 switch (sizeof(ludlc_csum_t)) {
+	 case 1:
+		 return csum;
+	 case 2:
+		 return (ludlc_csum_t)__builtin_bswap16((uint16_t)csum);
+	 case 4:
+		 return (ludlc_csum_t)__builtin_bswap32((uint32_t)csum);
+	 case 8:
+		 return (ludlc_csum_t)__builtin_bswap64((uint64_t)csum);
+	 default:
+		 /* Unsupported CONFIG_LUDLC_CSUM_TYPE width */
+		 return csum;
+	 }
+ #else
+	 /* Fallback for unknown toolchains: tiny runtime probe */
+	 const uint16_t one = 1U;
+	 if (*((const uint8_t *)&one) == 1U)
+		 return csum;
+	 switch (sizeof(ludlc_csum_t)) {
+	 case 1:
+		 return csum;
+	 case 2:
+		 return (ludlc_csum_t)__builtin_bswap16((uint16_t)csum);
+	 case 4:
+		 return (ludlc_csum_t)__builtin_bswap32((uint32_t)csum);
+	 case 8:
+		 return (ludlc_csum_t)__builtin_bswap64((uint64_t)csum);
+	 default:
+		 return csum;
+	 }
 #endif
 }
 

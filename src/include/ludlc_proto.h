@@ -166,6 +166,18 @@ typedef CONFIG_LUDLC_CHANNEL_TYPE	ludlc_channel_t;
 #endif
 
 /**
+ * @def CONFIG_LUDLC_CONN_CSUM_CONFIG
+ * @brief Enables per-connection checksum init/verify/host->wire settings
+ * in @ref ludlc_proto_cb.
+ *
+ * Disabled by default to keep @ref ludlc_proto_cb minimal and preserve legacy
+ * macro-only checksum behavior.
+ */
+#ifndef CONFIG_LUDLC_CONN_CSUM_CONFIG
+#define CONFIG_LUDLC_CONN_CSUM_CONFIG 0
+#endif
+
+/**
  * @struct ludlc_proto_cb
  * @brief Services the LuDLC engine needs from below: running CRC and a monotonic clock.
  *
@@ -188,6 +200,26 @@ struct ludlc_proto_cb {
 	 * @return The updated checksum value.
 	 */
 	ludlc_csum_t (*csum_byte)(ludlc_csum_t csum, uint8_t data);
+#if CONFIG_LUDLC_CONN_CSUM_CONFIG
+	/**
+	 * @brief Initial checksum seed for this connection.
+	 *
+	 * Overrides @ref LUDLC_CSUM_INIT_VALUE for this connection.
+	 */
+	ludlc_csum_t csum_init_value;
+	/**
+	 * @brief Expected residual checksum after validating [payload][csum].
+	 *
+	 * Overrides @ref LUDLC_CSUM_VERIFY_VALUE for this connection.
+	 */
+	ludlc_csum_t csum_verify_value;
+	/**
+	 * @brief Optional host->wire checksum conversion for this connection.
+	 *
+	 * If NULL, @ref LUDLC_CSUM_HTON is used.
+	 */
+	ludlc_csum_t (*csum_to_wire)(ludlc_csum_t csum);
+#endif
 	/**
 	 * @brief Monotonic time in microseconds (e.g. @c CLOCK_MONOTONIC on POSIX).
 	 *

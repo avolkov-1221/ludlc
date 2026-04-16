@@ -18,6 +18,10 @@
 #ifndef __LUDLC_PRIVATE_H__
 #define __LUDLC_PRIVATE_H__
 
+#include <stdbool.h>
+#include <stddef.h>
+#include <stdint.h>
+
 #include <ludlc_platform_api.h>
 #include <ludlc_packet.h>
 #include <ludlc_logger.h>
@@ -143,6 +147,12 @@ struct ludlc_connection {
 
 	/**< Connection statistics. */
 	LUDLC_DECLARE_STATS(stats);
+	/**< Connection-local checksum initial value (seed). */
+	ludlc_csum_t csum_init_value;
+	/**< Connection-local checksum residual expected on RX verify. */
+	ludlc_csum_t csum_verify_value;
+	/**< Optional connection-local host->wire checksum conversion hook. */
+	ludlc_csum_t (*csum_to_wire)(ludlc_csum_t csum);
 
 	/**< Pre-allocated header for control packets (PING, Handshake). */
 	ludlc_packet_hdr_t ctrl_packet;

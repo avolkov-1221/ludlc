@@ -20,7 +20,6 @@
 
 #include <zephyr/kernel.h>
 #include <zephyr/device.h>
-#include <zephyr/sys/crc.h>
 #include <zephyr/net_buf.h>
 #include <zephyr/drivers/uart.h>
 
@@ -198,45 +197,6 @@ static void uart_irq_cb(const struct device *dev, void *user_data)
 	}
 }
 
-/* --- LuDLC Protocol Callbacks --- */
-/**
- * @brief Calculates the CRC-16/KERMIT checksum for a single byte.
- *
- * This function is part of the LuDLC protocol callback structure.
- * @param crc The current CRC value.
- * @param data The byte to include in the checksum calculation.
- * @return The updated CRC value. */
-/* --- Checksum --- */
-static ludlc_csum_t ludlc_csum_byte(ludlc_csum_t crc, uint8_t data)
-{
-	/* Use Zephyr's built-in CRC-16/KERMIT function */
-	return crc16_ccitt(crc, &data, 1);
-}
-
-/**
- * @brief Retrieves the current system timestamp in microseconds.
- *
- * This function is part of the LuDLC protocol callback structure.
- * @return The current timestamp in microseconds. */
-/* --- Timestamp --- */
-static ludlc_timestamp_t ludlc_get_timestamp(void)
-{
-	if (!IS_ENABLED(CONFIG_TIMER_HAS_64BIT_CYCLE_COUNTER)) {
-		return (ludlc_timestamp_t)k_cyc_to_us_floor64(k_cycle_get_32());
-	} else {
-		return (ludlc_timestamp_t)k_cyc_to_us_floor64(k_cycle_get_64());
-	}
-}
-
-/** @brief LuDLC protocol callback structure.
- *
- * This structure defines the platform-specific functions required by the
- * LuDLC core protocol, such as checksum calculation and timestamp retrieval. */
-static struct ludlc_proto_cb proto = {
-	.csum_byte = ludlc_csum_byte,
-	.get_timestamp = ludlc_get_timestamp,
-};
-
 /**
  * @brief RX serial thread entry point.
  *
@@ -270,11 +230,14 @@ static void rx_serial_thread(void *p1, void *p2, void *p3)
 		}
 
 		while( (rx_buf = k_fifo_get(&sconn->rx_fifo, K_NO_WAIT)) ) {
+			ludlc_timestamp_t ts;
 
-			ludlc_receive(&sconn->conn,
-				(ludlc_packet_t*)rx_buf->payload,
-				rx_buf->size,
-				sconn->conn.proto->get_timestamp());
+			if(!sconn->conn.proto->get_timestamp(&ts)) {
+				ludlc_receive(&sconn->conn,
+					(ludlc_packet_t*)rx_buf->payload,
+					rx_buf->size,
+					ts);
+			}
 
 			k_mem_slab_free(&sconn->rx_slab, rx_buf);
 
@@ -504,7 +467,8 @@ void ludlc_serial_connection_destroy(struct ludlc_connection *conn)
  * @return 0 on success, or a negative errno value on failure. */
 int ludlc_serial_connection_create(const ludlc_platform_args_t *arg,
 		   struct ludlc_connection **conn,
-		   struct ludlc_conn_cb *cb)
+		   const struct ludlc_proto_cb *proto,
+		   const struct ludlc_conn_cb *cb)
 {
 	struct ludlc_serial_connection *sconn = NULL;
 	int ret = 0;
@@ -565,7 +529,7 @@ int ludlc_serial_connection_create(const ludlc_platform_args_t *arg,
 	}
 
 	/* Initialize the core connection, passing sconn->conn as the user_arg */
-	ret = ludlc_connection_init(&sconn->conn, &proto, cb, &sconn->conn);
+	ret = ludlc_connection_init(&sconn->conn, proto, cb, &sconn->conn);
 	if (ret) {
 		goto err;
 	}
