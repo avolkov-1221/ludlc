@@ -19,11 +19,12 @@ target_include_directories(ludlc_includes INTERFACE
 	"${CMAKE_CURRENT_BINARY_DIR}"
 )
 
-# enable Posix real-time (timer_xxx functions) and GNU extensions (htonl etc)
+# ISO C11 + POSIX.1-2008 (no _GNU_SOURCE — library stays libc-agnostic).
+# Requires: clock_gettime(CLOCK_MONOTONIC), timer_create/timer_settime (link librt
+# where the platform keeps those symbols), pthreads, C11 atomics.
 set(PLATFORM_DEFS
-	"-D_GNU_SOURCE=1"
 	"-D_POSIX_C_SOURCE=200809L"
-	CACHE INTERNAL "posix RT defs")
+	CACHE INTERNAL "POSIX feature macros for LuDLC library")
 
 # Require C11 standard
 set(CMAKE_C_STANDARD 11 CACHE STRING  "Require C standard globally" FORCE)

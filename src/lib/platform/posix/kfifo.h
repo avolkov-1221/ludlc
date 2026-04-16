@@ -2,7 +2,8 @@
 /*
  * kfifo.h
  *
- * Basic Linux kernel kfifo re-implementation for the userspace
+ * Single-producer/single-consumer byte ring buffer (kfifo-style) for
+ * POSIX userspace without Linux- or BSD-only headers.
  *
  * Copyright (C) 2025-2026 Andrey VOLKOV <andrey@volkov.fr> & LuDLC Contributors
  *
@@ -19,7 +20,14 @@
 #include <stdint.h>
 #include <stdatomic.h>
 #include <string.h>
-#include <sys/param.h>
+
+/** Round @a n up to a multiple of @a m (unsigned arithmetic, @a m > 0). */
+#define LUDLC_ROUND_UP(n, m) \
+	((((n) + (m)-1U) / (m)) * (m))
+
+#ifndef LUDLC_MIN
+#define LUDLC_MIN(a, b) ((a) < (b) ? (a) : (b))
+#endif
 
 // The main kfifo structure
 struct kfifo {
@@ -154,10 +162,10 @@ unsigned int kfifo_out(struct kfifo *fifo, void *dst, unsigned int sz)
 		atomic_load_explicit(&fifo->out, memory_order_relaxed);
 
 	unsigned int data_len = in - out;
-	sz = MIN(sz, data_len);
+	sz = LUDLC_MIN(sz, data_len);
 
 	// 2. Calculate how much data to copy before the buffer wraps around.
-	l = MIN(sz, fifo->size - (out & (fifo->size - 1)));
+	l = LUDLC_MIN(sz, fifo->size - (out & (fifo->size - 1)));
 
 	// 3. Perform the copy, potentially in two parts if it wraps.
 	memcpy(dst, fifo->data + (out & (fifo->size - 1)), l);
@@ -213,9 +221,9 @@ unsigned int kfifo_out_linear_ptr(struct kfifo *fifo, uint8_t **ptr, unsigned in
 
 	if (ptr) {
 		unsigned int tail = (out & (fifo->size - 1));
-		n = MIN(n, in - out);
+		n = LUDLC_MIN(n, in - out);
 		*ptr = fifo->data + tail;
-		return MIN(n, fifo->size - tail);
+		return LUDLC_MIN(n, fifo->size - tail);
 	}
 
 	return 0;

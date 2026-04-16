@@ -304,7 +304,7 @@ static inline void ludlc_platform_clear_bit(long nr,
 static inline bool ludlc_platform_test_and_clear_bit(long nr,
 		ludlc_platform_atomic_t *addr)
 {
-	uint prev_val = atomic_fetch_and(addr, ~(1U << nr));
+	unsigned int prev_val = atomic_fetch_and(addr, ~(1U << nr));
 	return !!(prev_val & (1U << nr));
 }
 
@@ -317,7 +317,7 @@ static inline bool ludlc_platform_test_and_clear_bit(long nr,
 static inline bool ludlc_platform_test_and_set_bit(long nr,
 		ludlc_platform_atomic_t *addr)
 {
-	uint prev_val = atomic_fetch_or(addr, 1U << nr);
+	unsigned int prev_val = atomic_fetch_or(addr, 1U << nr);
 	return !!(prev_val & (1U << nr));
 }
 

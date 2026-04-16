@@ -17,8 +17,9 @@
 #include <string.h>
 #include <fcntl.h>
 #include <stdlib.h>
-/* For thrd_yield (C11 standard yield) */
-#include <threads.h>
+#include <sched.h>
+#include <signal.h>
+#include <time.h>
 
 #include <ludlc.h>
 #include <ludlc_private.h>
@@ -215,7 +216,7 @@ int ludlc_platform_stop_timer(ludlc_platform_timer_t *timer)
 	 * running on another thread when this function returns.
 	 */
 	while (timer->handler_running) {
-		thrd_yield(); /* Yield to other threads */
+		(void)sched_yield();
 	}
 
 	return 0;

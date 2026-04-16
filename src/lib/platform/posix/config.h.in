@@ -65,4 +65,16 @@
 # undef CONFIG_LUDLC_MT
 #endif
 
+/**
+ * @def CONFIG_LUDLC_STATIC_CONN
+ * @brief Defined (as 1) to use a static pool for serial connections (POSIX).
+ */
+#cmakedefine01	CONFIG_LUDLC_STATIC_CONN
+#if !CONFIG_LUDLC_STATIC_CONN
+# undef CONFIG_LUDLC_STATIC_CONN
+#endif
+
+/** @brief Number of slots in the static serial connection pool (POSIX). */
+#define CONFIG_LUDLC_STATIC_CONN_NUM	@CONFIG_LUDLC_STATIC_CONN_NUM@
+
 #endif /* __LUDLC_AUTOCONF_H__ */

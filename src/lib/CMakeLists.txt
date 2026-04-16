@@ -26,7 +26,22 @@ if(NOT TARGET_PLATFORM_ZEPHYR)
 		"Build LuDLC with SPI connections support." OFF)
 	option(CONFIG_LUDLC_CAN_CONN
 		"Build LuDLC with CAN connections support." OFF)
+	option(CONFIG_LUDLC_STATIC_CONN
+		"POSIX: allocate serial connections from a fixed pool (no heap)." OFF)
+	set(CONFIG_LUDLC_STATIC_CONN_NUM 1 CACHE STRING
+		"POSIX: number of static serial connection slots")
 	set(target_libraries ${ludlc_target})
+endif()
+
+if(TARGET_PLATFORM_POSIX AND CONFIG_LUDLC_STATIC_CONN)
+	if(NOT CONFIG_LUDLC_SERIAL_CONN)
+		message(FATAL_ERROR
+			"CONFIG_LUDLC_STATIC_CONN requires CONFIG_LUDLC_SERIAL_CONN")
+	endif()
+	if(CONFIG_LUDLC_STATIC_CONN_NUM LESS 1)
+		message(FATAL_ERROR
+			"CONFIG_LUDLC_STATIC_CONN_NUM must be at least 1")
+	endif()
 endif()
 
 add_subdirectory(platform)
@@ -73,6 +88,19 @@ if(TARGET_PLATFORM_POSIX)
 				${CMAKE_PROJECT_VERSION} SOVERSION 1)
 		target_link_libraries(${ludlc_lib} PUBLIC ${libs})
 	endif(CONFIG_SHARED_LUDLC_LIBRARY)
+
+	# timer_create / clock_gettime may live in librt on some POSIX systems
+	find_library(LUDLC_POSIX_RT_LIB NAMES rt)
+	if(LUDLC_POSIX_RT_LIB)
+		if(CONFIG_STATIC_LUDLC_LIBRARY)
+			target_link_libraries(${ludlc_static_target}
+				PRIVATE ${LUDLC_POSIX_RT_LIB})
+		endif()
+		if(CONFIG_SHARED_LUDLC_LIBRARY)
+			target_link_libraries(${ludlc_lib}
+				PRIVATE ${LUDLC_POSIX_RT_LIB})
+		endif()
+	endif()
 
 elseif(TARGET_PLATFORM_ZEPHYR)
 	zephyr_library()

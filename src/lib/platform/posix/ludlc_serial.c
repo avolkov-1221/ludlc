@@ -21,6 +21,9 @@
  */
 
 #include <stdint.h>
+#include <stddef.h>
+#include <limits.h>
+#include <stdatomic.h>
 #include <termios.h>
 #include <fcntl.h>
 #include <errno.h>
@@ -37,6 +40,9 @@
 #define TX_THREAD_OK	(1<<0)
 /** @brief Flag: RX thread started successfully. */
 #define RX_THREAD_OK	(1<<1)
+
+#define TX_BUF_SIZE \
+	LUDLC_ROUND_UP(2U * (unsigned)LUDLC_MAX_PACKET_SIZE, sizeof(void *))
 
 /**
  * @struct ludlc_serial_connection
@@ -68,7 +74,7 @@ struct ludlc_serial_connection {
 	struct ludlc_connection conn;
 
 	/** @brief Platform-level transmit buffer. */
-	uint8_t tx_buf[64];
+	uint8_t tx_buf[TX_BUF_SIZE];
 };
 
 #ifdef CONFIG_LUDLC_STATIC_CONN
