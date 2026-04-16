@@ -56,6 +56,7 @@ struct ludlc_stats {
 	uint32_t on_conn;    /**< Connection established counter. */
 	uint32_t on_disconn; /**< Connection lost/disconnected counter. */
 	uint32_t dropped;    /**< Count of dropped packets. */
+	uint32_t overrun;    /**< Count of rx overruns. */
 };
 
 #define CONFIG_LUDLC_STATS
