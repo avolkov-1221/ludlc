@@ -16,6 +16,7 @@
 
 #include <stdbool.h>
 #include <stddef.h>
+#include <stdint.h>
 #include <stdatomic.h>
 #include <string.h>
 #include <sys/param.h>
@@ -169,6 +170,55 @@ unsigned int kfifo_out(struct kfifo *fifo, void *dst, unsigned int sz)
 	atomic_store_explicit(&fifo->out, out + sz, memory_order_release);
 
 	return sz;
+}
+
+/**
+ * kfifo_skip_count - skip output data
+ * @fifo: address of the fifo to be used
+ * @count: count of data to skip
+ */
+static inline
+void kfifo_skip_count(struct kfifo *fifo, unsigned int count)
+{
+	unsigned int out =
+		atomic_load_explicit(&fifo->out, memory_order_relaxed);
+
+	atomic_store_explicit(&fifo->out, out + count, memory_order_release);
+}
+
+/**
+ * kfifo_out_linear_ptr - gets a pointer to the available data
+ * @fifo: address of the fifo to be used
+ * @ptr: pointer to data to store the pointer to tail
+ * @n: max. number of elements to point at
+ *
+ * Similarly to kfifo_out_linear(), this function obtains the pointer to the
+ * available data in the fifo buffer and returns the numbers of elements
+ * available. It returns the available count till the end of available data or
+ * till the end of the buffer. So that it can be used for linear data
+ * processing (like memcpy() of @ptr with count returned).
+ *
+ * Note that with only one concurrent reader and one concurrent
+ * writer, you don't need extra locking to use these function.
+ */
+static inline
+unsigned int kfifo_out_linear_ptr(struct kfifo *fifo, uint8_t **ptr, unsigned int n)
+{
+	// 1. Use an acquire load to get the 'in' index. This is the crucial
+	//    memory barrier that ensures we see the data the producer wrote.
+	unsigned int in =
+		atomic_load_explicit(&fifo->in, memory_order_acquire);
+	unsigned int out =
+		atomic_load_explicit(&fifo->out, memory_order_relaxed);
+
+	if (ptr) {
+		unsigned int tail = (out & (fifo->size - 1));
+		n = MIN(n, in - out);
+		*ptr = fifo->data + tail;
+		return MIN(n, fifo->size - tail);
+	}
+
+	return 0;
 }
 
 #endif /* __KFIFO_H__ */
