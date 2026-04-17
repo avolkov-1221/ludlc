@@ -71,6 +71,15 @@ west build -b native_sim src/samples/zephyr/ludlc_echo -- \
   -DZEPHYR_EXTRA_MODULES=/path/to/ludlc
 ```
 
+## Acknowledgments
+
+The author acknowledges [MUNIC SA](https://munic.io) for sponsoring the
+development of LuDLC. Their support has enabled continued design,
+implementation, and validation of the protocol.
+
+Additional recognition goes to the open-source community for feedback and
+testing throughout its evolution.
+
 ## Contact
 
 See [OWNERS](OWNERS) or submit issues/pull requests via GitHub.

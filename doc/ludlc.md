@@ -10,6 +10,15 @@ in embedded systems and provides key functionalities such as
 in-order data delivery, flow control, and channel multiplexing to ensure
 efficient communication.
 
+## Acknowledgments
+
+The author acknowledges [MUNIC SA](https://munic.io) for sponsoring the
+development of LuDLC. Their support has enabled continued design,
+implementation, and validation of the protocol.
+
+Additional recognition goes to the open-source community for feedback
+and testing throughout its evolution.
+
 ## Terminology
 
 **ACK (Acknowledgment)**
