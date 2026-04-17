@@ -25,16 +25,10 @@
 #include <ludlc.h>
 #include <ludlc_serial.h>
 
-#undef CONFIG_LUDLC_ECHO_PERIODIC_TX
-
 LOG_MODULE_REGISTER(ludlc_echo, LOG_LEVEL_DBG);
 
 #define ECHO_CHANNEL		1
 #define ECHO_MAX_PAYLOAD	64U
-
-#ifndef CONFIG_LUDLC_ECHO_PERIODIC_TX
-#define CONFIG_LUDLC_ECHO_PERIODIC_TX 0
-#endif
 
 static uint8_t echo_tx_buf[ECHO_MAX_PAYLOAD];
 static atomic_t tx_flags;

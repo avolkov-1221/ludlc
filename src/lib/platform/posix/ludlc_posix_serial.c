@@ -76,17 +76,17 @@ struct ludlc_serial_connection {
 	uint8_t tx_buf[TX_BUF_SIZE];
 };
 
-#ifdef CONFIG_LUDLC_STATIC_CONN
-#define BITS_PER_WORD	\
+#ifdef LUDLC_STATIC_CONN
+#define BITS_PER_WORD                                                          \
 	((const unsigned int)(CHAR_BIT * sizeof(ludlc_platform_atomic_t)))
 
-#define LUDLC_NUM_CONN_WORDS	\
-	((CONFIG_LUDLC_STATIC_CONN_NUM + BITS_PER_WORD - 1) / BITS_PER_WORD)
+#define LUDLC_NUM_CONN_WORDS                                                   \
+	((LUDLC_STATIC_CONN_NUM + BITS_PER_WORD - 1) / BITS_PER_WORD)
 
 static pthread_mutex_t g_allock_lock = PTHREAD_MUTEX_INITIALIZER;
 
 static unsigned long g_conn_busy_flags[LUDLC_NUM_CONN_WORDS];
-static struct ludlc_serial_connection g_conn[CONFIG_LUDLC_STATIC_CONN_NUM];
+static struct ludlc_serial_connection g_conn[LUDLC_STATIC_CONN_NUM];
 
 /**
  * @brief Allocates a serial connection from the static pool.
@@ -96,7 +96,7 @@ static inline struct ludlc_serial_connection *alloc_serial_connection(void)
 {
 	pthread_mutex_lock(&g_allock_lock);
 
-	for (size_t i = 0; i < CONFIG_LUDLC_STATIC_CONN_NUM; i++) {
+	for (size_t i = 0; i < LUDLC_STATIC_CONN_NUM; i++) {
 		unsigned int idx = i / BITS_PER_WORD;
 		unsigned int bit = i % BITS_PER_WORD;
 
@@ -144,7 +144,7 @@ static inline void free_serial_connection(struct ludlc_serial_connection *conn)
 {
 	ludlc_platform_free(conn);
 }
-#endif /* CONFIG_LUDLC_STATIC_CONN */
+#endif /* LUDLC_STATIC_CONN */
 
 /**
  * @brief Converts a numeric baud rate to a POSIX `speed_t` constant.

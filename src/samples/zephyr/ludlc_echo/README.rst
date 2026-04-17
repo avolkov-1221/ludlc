@@ -30,19 +30,27 @@ From the repository root:
 
 .. code-block:: bash
 
-   west build -b native_sim src/samples/zephyr/ludlc_echo -- -DTARGET_PLATFORM=zephyr
-
+   west build -b native_sim src/samples/zephyr/ludlc_echo -- \
+     -DTARGET_PLATFORM=zephyr \
+     -DZEPHYR_EXTRA_MODULES=/path/to/ludlc
 
 Expected Behavior
 *****************
 
-When connected to a LuDLC peer (for example ``ludlc_demo`` on the host),
-the sample logs connection events, received packet metadata, and TX confirms.
+When connected to a LuDLC peer (for example, ``ludlc_demo`` on the host),
+the sample logs connection events, received packet metadata, and TX confirmations.
 
 For ECHO channel packets, it mirrors payloads back using the same
-counterpart/TTL behavior used in ``ludlc_demo``.
+counterpart/TTL behavior as ``ludlc_demo``.
+
+The test can also act as an echo server, periodically sending ECHO packets:
+
+- When enabled, the sample sends one ECHO packet per second in addition
+  to reply traffic.
+- When disabled, the sample behaves as a reply-only counterpart, sending
+  packets only in response to received ECHO payloads.
 
 Periodic TX can be toggled with:
 
-- ``CONFIG_LUDLC_ECHO_PERIODIC_TX=y`` (default in sample ``prj.conf``)
-- ``CONFIG_LUDLC_ECHO_PERIODIC_TX=n``
+CONFIG_LUDLC_ECHO_PERIODIC_TX=y (default in the sample prj.conf)
+CONFIG_LUDLC_ECHO_PERIODIC_TX=n

@@ -10,13 +10,109 @@ config LUDLC
 	bool "LuDLC stack"
 	default n
 	help
-	  Enable the LuDLC .
+	  Enable the LuDLC.
 
 if LUDLC
 
 config LUDLC_MT
 	bool
 	default y
+
+config LUDLC_WINDOW
+	int "Transmit window size"
+	range 1 256
+	default 4
+	help
+	  Sliding-window size for in-flight packets. Must be a power of two.
+
+config LUDLC_ID_BITS
+	int "Packet ID width (bits)"
+	range 8 32
+	default 8
+	help
+	  Bit-width of packet IDs. Supported values: 8, 16, 32.
+
+config LUDLC_PING_TIME
+	int "Ping period in microseconds"
+	range 1 2147483647
+	default 1000000
+	help
+	  Keepalive ping period used by the protocol timers.
+
+config LUDLC_PAYLOAD_BITS
+	int "Payload-size type width (bits)"
+	range 8 32
+	default 8
+	help
+	  Bit-width of payload length fields. Supported values: 8, 16, 32.
+
+config LUDLC_MAX_PAYLOAD_SIZE
+	int "Maximum payload size (bytes)"
+	range 1 255 if LUDLC_PAYLOAD_BITS = 8
+	range 1 65535 if LUDLC_PAYLOAD_BITS = 16
+	range 1 2147483647 if LUDLC_PAYLOAD_BITS = 32
+	default 32
+	help
+	  Maximum packet payload size.
+	  The effective upper limit follows LUDLC_PAYLOAD_BITS:
+	  255 for 8-bit payload length, 65535 for 16-bit, and
+	  2147483647 for 32-bit.
+
+config LUDLC_CHANNEL_BITS
+	int "Channel ID width (bits)"
+	range 8 32
+	default 8
+	help
+	  Bit-width of channel identifiers. Supported values: 8, 16, 32.
+
+config LUDLC_CONTROL_CHANNEL
+	int "Reserved control channel"
+	default 0
+	help
+	  Reserved channel used for handshake/control packets.
+
+config LUDLC_DEFAULT_TTL
+	int "Default transmit retry budget (TTL)"
+	range 1 126
+	default 4
+	help
+	  Default retry count for queued packets.
+
+config LUDLC_CONN_CSUM_CONFIG
+	bool "Enable per-connection checksum configuration"
+	default n
+	help
+	  This option enables per-connection checksum customization in
+	  ludlc_proto_cb. When selected, each connection can override the
+	  checksum seed, expected verification value, and host-to-wire
+	  conversion callback instead of using one global checksum setup.
+	  Enable it when different links require different checksum behavior,
+	  and keep it disabled when all links share the same checksum policy.
+
+config LUDLC_CSUM_BITS
+	int "Checksum type width (bits)"
+	range 8 64
+	default 16
+	help
+	  Bit-width of checksum type. Supported values: 8, 16, 32, 64.
+
+config LUDLC_TIMESTAMP_BITS
+	int "Timestamp type width (bits)"
+	range 8 64
+	default 64
+	help
+	  Bit-width of timestamp type. Supported values: 8, 16, 32, 64.
+
+config LUDLC_STATS
+	bool "Enable LuDLC runtime statistics"
+	default y
+	help
+	  This option stores runtime protocol counters in each connection
+	  state, including transmit activity, receive activity, and error
+	  events. The counters are useful for diagnostics, validation, and
+	  field troubleshooting because they expose protocol behavior over
+	  time. Disable this option only when minimizing memory footprint is
+	  more important than runtime observability.
 
 config LUDLC_SERIAL_CONN
 	bool "LuDLC Serial connection support"
@@ -36,6 +132,20 @@ config LUDLC_STATIC_SERIAL_CONN_NUM
 	int "Number of predefine connections"
 	default 1
 	depends on LUDLC_STATIC_SERIAL_CONN
+
+config LUDLC_NUM_RX_BUFFERS
+	int "Number of RX packet buffers"
+	range 1 64
+	default 3
+	depends on LUDLC_SERIAL_CONN
+	help
+	  Number of RX packet buffers used by Zephyr serial transport.
+
+menu "Sample options"
+
+rsource "../src/samples/zephyr/ludlc_echo/Kconfig.sample"
+
+endmenu
 
 endif # LUDLC
 

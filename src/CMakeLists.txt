@@ -9,19 +9,19 @@
 set(LUDLC_INCLUDE ${CMAKE_CURRENT_SOURCE_DIR}/include)
 
 if(TARGET_PLATFORM_POSIX)
-	# Define a global LUDLC interface target
-	add_library(ludlc_includes INTERFACE)
+  # Define a global LUDLC interface target
+  add_library(ludlc_includes INTERFACE)
 
-	# Add the include directory
-	target_include_directories(ludlc_includes INTERFACE
-		${LUDLC_INCLUDE}
-	)
+  # Add the include directory
+  target_include_directories(ludlc_includes INTERFACE
+    ${LUDLC_INCLUDE}
+  )
 elseif(TARGET_PLATFORM_ZEPHYR)
-	zephyr_include_directories(${LUDLC_INCLUDE})
+  zephyr_include_directories(${LUDLC_INCLUDE})
 endif()
 
 add_subdirectory(lib)
 
-if(CONFIG_ENABLE_BINARIES OR TARGET_PLATFORM_ZEPHYR)
-	add_subdirectory(samples)
+if(LUDLC_ENABLE_BINARIES OR TARGET_PLATFORM_ZEPHYR)
+  add_subdirectory(samples)
 endif()

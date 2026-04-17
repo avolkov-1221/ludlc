@@ -29,15 +29,35 @@
  */
 struct ludlc_connection;
 
-#ifndef CONFIG_LUDLC_CSUM_TYPE
-#define CONFIG_LUDLC_CSUM_TYPE uint16_t
+#ifndef CONFIG_LUDLC_CSUM_BITS
+#define CONFIG_LUDLC_CSUM_BITS 16
 #endif
-typedef CONFIG_LUDLC_CSUM_TYPE ludlc_csum_t;
+#if CONFIG_LUDLC_CSUM_BITS == 8
+typedef uint8_t ludlc_csum_t;
+#elif CONFIG_LUDLC_CSUM_BITS == 16
+typedef uint16_t ludlc_csum_t;
+#elif CONFIG_LUDLC_CSUM_BITS == 32
+typedef uint32_t ludlc_csum_t;
+#elif CONFIG_LUDLC_CSUM_BITS == 64
+typedef uint64_t ludlc_csum_t;
+#else
+#error Unsupported CONFIG_LUDLC_CSUM_BITS value (supported: 8, 16, 32, 64)
+#endif
 
 /* --- Timestamps --- */
-#ifndef CONFIG_LUDLC_TIMESTAMP_TYPE
-#define CONFIG_LUDLC_TIMESTAMP_TYPE uint64_t
+#ifndef CONFIG_LUDLC_TIMESTAMP_BITS
+#define CONFIG_LUDLC_TIMESTAMP_BITS 64
 #endif
-typedef CONFIG_LUDLC_TIMESTAMP_TYPE ludlc_timestamp_t;
+#if CONFIG_LUDLC_TIMESTAMP_BITS == 8
+typedef uint8_t ludlc_timestamp_t;
+#elif CONFIG_LUDLC_TIMESTAMP_BITS == 16
+typedef uint16_t ludlc_timestamp_t;
+#elif CONFIG_LUDLC_TIMESTAMP_BITS == 32
+typedef uint32_t ludlc_timestamp_t;
+#elif CONFIG_LUDLC_TIMESTAMP_BITS == 64
+typedef uint64_t ludlc_timestamp_t;
+#else
+#error Unsupported CONFIG_LUDLC_TIMESTAMP_BITS value (supported: 8, 16, 32, 64)
+#endif
 
 #endif /* __LUDLC_TYPES_H__ */

@@ -40,10 +40,10 @@
 #define RX_THREAD_PRIO 7
 #define TX_THREAD_PRIO 7
 
-#ifdef CONFIG_NUM_RX_BUFFERS
-#define NUM_RX_BUFFERS	CONFIG_NUM_RX_BUFFERS
+#ifdef CONFIG_LUDLC_NUM_RX_BUFFERS
+#define NUM_RX_BUFFERS CONFIG_LUDLC_NUM_RX_BUFFERS
 #else
-#define NUM_RX_BUFFERS	3
+#define NUM_RX_BUFFERS 3
 #endif
 
 #define RX_READY_EVT	BIT(1)
@@ -138,7 +138,7 @@ static inline void free_serial_connection(struct ludlc_serial_connection *conn)
 {
 	ludlc_platform_free(conn);
 }
-#endif /* CONFIG_LUDLC_STATIC_CONN */
+#endif /* CONFIG_LUDLC_STATIC_SERIAL_CONN */
 
 /* --- UART Callbacks --- */
 

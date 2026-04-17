@@ -165,7 +165,7 @@ static inline ludlc_csum_t ludlc_platform_csum_to_le(ludlc_csum_t csum)
 	 case 8:
 		 return (ludlc_csum_t)__builtin_bswap64((uint64_t)csum);
 	 default:
-		 /* Unsupported CONFIG_LUDLC_CSUM_TYPE width */
+		 /* Unsupported CONFIG_LUDLC_CSUM_BITS width */
 		 return csum;
 	 }
  #else

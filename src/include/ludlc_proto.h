@@ -45,13 +45,13 @@
 #define LUDLC_WINDOW_MASK	((CONFIG_LUDLC_WINDOW) - 1U)
 
 /**
- * @def CONFIG_LUDLC_ID_TYPE
- * @brief Defines the underlying C type for packet IDs (sequence numbers).
+ * @def CONFIG_LUDLC_ID_BITS
+ * @brief Defines the bit-width for packet IDs (sequence numbers).
  *
- * Defaults to `uint8_t`. This type must be unsigned.
+ * Defaults to 8 bits.
  */
-#ifndef CONFIG_LUDLC_ID_TYPE
-#define CONFIG_LUDLC_ID_TYPE	uint8_t
+#ifndef CONFIG_LUDLC_ID_BITS
+#define CONFIG_LUDLC_ID_BITS 8
 #endif
 /**
  * @typedef ludlc_id_t
@@ -60,7 +60,15 @@
  * The size of this type determines the maximum sequence number before
  * wrap-around. The highest bit is reserved for PING/NAK flags.
  */
-typedef CONFIG_LUDLC_ID_TYPE	ludlc_id_t;
+#if CONFIG_LUDLC_ID_BITS == 8
+typedef uint8_t ludlc_id_t;
+#elif CONFIG_LUDLC_ID_BITS == 16
+typedef uint16_t ludlc_id_t;
+#elif CONFIG_LUDLC_ID_BITS == 32
+typedef uint32_t ludlc_id_t;
+#else
+#error Unsupported CONFIG_LUDLC_ID_BITS value (supported: 8, 16, 32)
+#endif
 
 /**
  * @brief Compile-time check to ensure `ludlc_id_t` is an unsigned type.
@@ -90,20 +98,36 @@ enum __build_assert_enum_ludlc_id_t__ {
 #endif
 
 /**
- * @def CONFIG_LUDLC_PAYLOAD_TYPE
- * @brief Defines the C type used to store payload sizes.
+ * @def CONFIG_LUDLC_PAYLOAD_BITS
+ * @brief Defines the bit-width used to store payload sizes.
  *
- * The type size should be enough to handle the maximum packet size.
- * Defaults to `uint8_t`.
+ * Defaults to 8 bits.
  */
-#ifndef CONFIG_LUDLC_PAYLOAD_TYPE
-#define CONFIG_LUDLC_PAYLOAD_TYPE	uint8_t
+#ifndef CONFIG_LUDLC_PAYLOAD_BITS
+#define CONFIG_LUDLC_PAYLOAD_BITS 8
 #endif
 /**
  * @typedef ludlc_payload_size_t
  * @brief Type definition for storing the size of a packet's payload.
  */
-typedef CONFIG_LUDLC_PAYLOAD_TYPE	ludlc_payload_size_t;
+#if CONFIG_LUDLC_PAYLOAD_BITS == 8
+typedef uint8_t ludlc_payload_size_t;
+#if CONFIG_LUDLC_MAX_PAYLOAD_SIZE > UINT8_MAX
+#error CONFIG_LUDLC_MAX_PAYLOAD_SIZE exceeds 8-bit payload capacity
+#endif
+#elif CONFIG_LUDLC_PAYLOAD_BITS == 16
+typedef uint16_t ludlc_payload_size_t;
+#if CONFIG_LUDLC_MAX_PAYLOAD_SIZE > UINT16_MAX
+#error CONFIG_LUDLC_MAX_PAYLOAD_SIZE exceeds 16-bit payload capacity
+#endif
+#elif CONFIG_LUDLC_PAYLOAD_BITS == 32
+typedef uint32_t ludlc_payload_size_t;
+#if CONFIG_LUDLC_MAX_PAYLOAD_SIZE > UINT32_MAX
+#error CONFIG_LUDLC_MAX_PAYLOAD_SIZE exceeds 32-bit payload capacity
+#endif
+#else
+#error Unsupported CONFIG_LUDLC_PAYLOAD_BITS value (supported: 8, 16, 32)
+#endif
 
 /**
  * @def CONFIG_LUDLC_MAX_PAYLOAD_SIZE
@@ -121,23 +145,31 @@ typedef CONFIG_LUDLC_PAYLOAD_TYPE	ludlc_payload_size_t;
  * This includes the maximum payload size plus the size of the
  * `ludlc_packet_t` structure (which includes the header).
  */
-#define LUDLC_MAX_PACKET_SIZE	\
+#define LUDLC_MAX_PACKET_SIZE                                                  \
 	(CONFIG_LUDLC_MAX_PAYLOAD_SIZE + sizeof(ludlc_packet_t))
 
 /**
- * @def CONFIG_LUDLC_CHANNEL_TYPE
- * @brief Defines the C type used for channel identifiers.
+ * @def CONFIG_LUDLC_CHANNEL_BITS
+ * @brief Defines the bit-width used for channel identifiers.
  *
- * Defaults to `uint8_t`.
+ * Defaults to 8 bits.
  */
-#ifndef CONFIG_LUDLC_CHANNEL_TYPE
-#define CONFIG_LUDLC_CHANNEL_TYPE	uint8_t
+#ifndef CONFIG_LUDLC_CHANNEL_BITS
+#define CONFIG_LUDLC_CHANNEL_BITS 8
 #endif
 /**
  * @typedef ludlc_channel_t
  * @brief Type definition for packet channel identifiers.
  */
-typedef CONFIG_LUDLC_CHANNEL_TYPE	ludlc_channel_t;
+#if CONFIG_LUDLC_CHANNEL_BITS == 8
+typedef uint8_t ludlc_channel_t;
+#elif CONFIG_LUDLC_CHANNEL_BITS == 16
+typedef uint16_t ludlc_channel_t;
+#elif CONFIG_LUDLC_CHANNEL_BITS == 32
+typedef uint32_t ludlc_channel_t;
+#else
+#error Unsupported CONFIG_LUDLC_CHANNEL_BITS value (supported: 8, 16, 32)
+#endif
 
 /**
  * @def CONFIG_LUDLC_CONTROL_CHANNEL
@@ -148,15 +180,6 @@ typedef CONFIG_LUDLC_CHANNEL_TYPE	ludlc_channel_t;
 #ifndef CONFIG_LUDLC_CONTROL_CHANNEL
 #define CONFIG_LUDLC_CONTROL_CHANNEL	0
 #endif
-
-/**
- * @def LUDLC_CTRL_OP_NOP
- * @brief Control-channel opcode: no operation / user-defined extension point.
- *
- * This value is reserved as a neutral control payload marker. It has no
- * built-in semantics in the core and can be used by upper control protocols.
- */
-#define LUDLC_CTRL_OP_NOP		0x00U
 
 #define LUDLC_MAX_TTL		127
 
@@ -171,7 +194,7 @@ typedef CONFIG_LUDLC_CHANNEL_TYPE	ludlc_channel_t;
 #if CONFIG_LUDLC_DEFAULT_TTL >= LUDLC_MAX_TTL || CONFIG_LUDLC_DEFAULT_TTL < 1
 #error The CONFIG_LUDLC_DEFAULT_TTL value is out of range [1; 126], please fix it!
 #endif
-#define LUDLC_DEFAULT_TTL	CONFIG_LUDLC_MAX_TTL
+#define LUDLC_DEFAULT_TTL CONFIG_LUDLC_DEFAULT_TTL
 #else
 #define LUDLC_DEFAULT_TTL	4
 #endif

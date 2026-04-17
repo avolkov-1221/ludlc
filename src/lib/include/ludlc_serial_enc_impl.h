@@ -139,10 +139,9 @@ static inline void ludlc_serial_decoder_prep(struct ludlc_connection *conn,
 	dec_state->payload_cap = cap;
 }
 
-static inline void ludlc_serial_decoder_store_byte(
-		struct ludlc_connection *conn,
-		struct ludlc_sdec_state *dec_state,
-		uint8_t c)
+static inline void
+ludlc_serial_decoder_store_byte(struct ludlc_connection *conn,
+				struct ludlc_sdec_state *dec_state, uint8_t c)
 {
 	if (dec_state->size < dec_state->payload_cap) {
 		dec_state->payload[dec_state->size++] = c;

@@ -59,8 +59,10 @@ struct ludlc_stats {
 	uint32_t overrun;    /**< Count of rx overruns. */
 };
 
-#define CONFIG_LUDLC_STATS
-#ifdef CONFIG_LUDLC_STATS
+#ifndef CONFIG_LUDLC_STATS
+#define CONFIG_LUDLC_STATS 1
+#endif
+#if CONFIG_LUDLC_STATS
 /**
  * @def LUDLC_DECLARE_STATS(var)
  * @brief Declares the statistics structure within a connection object.

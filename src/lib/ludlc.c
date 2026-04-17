@@ -645,7 +645,7 @@ static int rx_handle_packet(
 		 * (this is a duplicate). Drop it, but still process
 		 * its ACK field.
 		 */
-	} else if(!ping) {
+	} else if (!ping) {
 		/* The normal packet arrived with correct id's sequence,
 		 * so update "last_received" counter, request to send ack and
 		 * accept the packet
