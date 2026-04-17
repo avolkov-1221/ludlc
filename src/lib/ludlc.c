@@ -282,8 +282,8 @@ static void on_disconnect_lock(struct ludlc_connection *conn,
  * @param dst_chan The destination channel for the packet.
  * @param buf Pointer to the payload data buffer.
  * @param size The size of the payload data in bytes.
- * @param ttl If value is equal zero, then packet will only be tried once (TTL=1).
- * If greater, it uses the default retry mechanism (LUDLC_MAX_TTL).
+ * @param ttl Transmission retry budget. A value of 0 is normalized to 1
+ * (single send attempt). Values above @ref LUDLC_MAX_TTL are clamped.
  * @return 0 on success.
  * @return -EAGAIN if the transmit queue is full.
  */
@@ -689,7 +689,8 @@ static int rx_handle_packet(
 					     confirmed_q, confirmed_num);
 		}
 	} else {
-		// TODO:
+		/* TODO: force immediate reconnect ? */
+
 		/* Wow, this is strange case, peer ACK'd packets we haven't sent.
 		 * This implies a severe state desynchronization.
 		 */
@@ -887,7 +888,7 @@ int ludlc_get_packet_to_send(struct ludlc_connection *conn,
  * requests a TX cycle, which will send a PING packet if the queue is
  * empty.
  *
- * @param conn Pointer to the connection structure (passed from timer context).
+ * @param arg Platform timer callback argument.
  */
 void ludlc_ping_timer(ludlc_platform_timer_arg_t arg)
 {
@@ -902,7 +903,7 @@ void ludlc_ping_timer(ludlc_platform_timer_arg_t arg)
  * This function is invoked when the connection watchdog timer expires,
  * indicating a loss of contact with the remote peer.
  *
- * @param conn Pointer to the connection structure (passed from timer context).
+ * @param arg Platform timer callback argument.
  */
 static void ludlc_wd_timer(ludlc_platform_timer_arg_t arg)
 {

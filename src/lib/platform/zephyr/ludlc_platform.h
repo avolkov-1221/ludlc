@@ -105,10 +105,8 @@ typedef ludlc_platform_timer_t *ludlc_platform_timer_arg_t;
  * @typedef ludlc_timer_cb_t
  * @brief Callback function type for platform timers.
  *
- * @param conn Pointer to the LuDLC connection associated with the timer.
- * This allows the callback to access the connection's state.
+ * @param arg Platform timer argument provided by the timer backend.
  */
-
 typedef void (*ludlc_timer_cb_t)(ludlc_platform_timer_arg_t arg);
 
 static inline struct ludlc_connection *ludlc_timer_arg_to_conn(

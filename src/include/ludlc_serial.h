@@ -30,6 +30,7 @@
  * baud rate).
  * @param[out] conn A pointer to a `struct ludlc_connection*` that will be
  * updated to point to the newly created connection.
+ * @param proto Pointer to protocol services (checksum and timestamp hooks).
  * @param cb Pointer to the user-facing event callbacks.
  * @return 0 on success, or a negative error code on failure.
  */

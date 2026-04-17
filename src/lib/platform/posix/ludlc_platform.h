@@ -29,6 +29,16 @@
 
 #include <ludlc_types.h>
 #include <ludlc_autoconf.h>
+
+/** Round @a n up to a multiple of @a m (unsigned arithmetic, @a m > 0). */
+#define LUDLC_ROUND_UP(n, m) \
+	((((n) + (m)-1U) / (m)) * (m))
+
+#ifndef LUDLC_MIN
+#define LUDLC_MIN(a, b) ((a) < (b) ? (a) : (b))
+#endif
+
+/* The KFIFO is needed for the LUDLC_ROUND_UP and LUDLC_MIN implementations */
 #include "kfifo.h"
 
 /**
@@ -138,7 +148,9 @@ struct ludlc_platform_connection {
 	 int rx_pipe[2];
 };
 
-/* Values for CRC-16/KERMIT (little-endian version of XMODEM one) */
+/* Values for CRC-16/KERMIT (little-endian version of XMODEM).
+ * Default algorithm for LuDLC.
+ */
 /** @brief Initial value for the CRC-16/KERMIT checksum. */
 #define LUDLC_CSUM_INIT_VALUE		0
 /** @brief Expected final value for a valid CRC-16/KERMIT checksum. */
@@ -210,7 +222,7 @@ static inline ludlc_csum_t ludlc_platform_csum_to_le(ludlc_csum_t csum)
 #define LUDLC_RING_BUF_INIT(fifo, buf, sz) kfifo_init(fifo, buf, sz)
 
 /**
- * @brief (Inline) Allocates memory using standard `cmalloc`.
+ * @brief (Inline) Allocates memory using standard `calloc`.
  * @param sz Size to allocate.
  * @return Pointer to allocated and zeroed memory, or NULL on failure.
  */
@@ -235,14 +247,12 @@ typedef struct ludlc_connection *ludlc_platform_timer_arg_t;
  * @typedef ludlc_timer_cb_t
  * @brief Callback function type for platform timers.
  *
- * @param conn Pointer to the LuDLC connection associated with the timer.
- * This allows the callback to access the connection's state.
+ * @param arg Platform timer argument provided by the timer backend.
  */
-
 typedef void (*ludlc_timer_cb_t)(ludlc_platform_timer_arg_t arg);
 
 /**
- @brief The LuDLC POSIX platform timer structure.
+ * @brief The LuDLC POSIX platform timer structure.
  *
  * This structure wraps a POSIX timer (`timer_t`) and manages its
  * state, including the user callback and synchronization flags.

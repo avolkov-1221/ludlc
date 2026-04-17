@@ -564,6 +564,7 @@ void ludlc_serial_connection_destroy(struct ludlc_connection *conn)
  * initializes Zephyr kernel objects, creates RX/TX threads, and sets up the UART.
  * @param arg Platform-specific arguments, including the UART device.
  * @param conn Output pointer to the newly created core `ludlc_connection`.
+ * @param proto Pointer to protocol hooks (checksum and timestamp).
  * @param cb Callback structure for the LuDLC connection.
  * @return 0 on success, or a negative errno value on failure.
  */

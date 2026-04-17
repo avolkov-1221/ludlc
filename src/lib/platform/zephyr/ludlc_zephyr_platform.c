@@ -43,7 +43,11 @@ int ludlc_platform_init_timer(struct ludlc_connection *conn,
  * @brief Retrieves the current system timestamp in microseconds.
  *
  * This function is part of the LuDLC protocol callback structure.
- * @return The current timestamp in microseconds. */
+ *
+ * @param[out] ts Receives current monotonic timestamp in microseconds.
+ * @retval 0 on success.
+ * @retval -EINVAL if @p ts is NULL.
+ */
 /* --- Timestamp --- */
 int ludlc_default_get_timestamp(ludlc_timestamp_t *ts)
 {

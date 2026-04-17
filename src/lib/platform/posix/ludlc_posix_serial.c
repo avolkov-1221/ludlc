@@ -365,7 +365,7 @@ static void set_blocking(int fd, int should_block)
 	}
 
 	tty.c_cc[VMIN] = should_block ? 1 : 0;
-	tty.c_cc[VTIME] = 5; // 0.5 seconds read timeout
+	tty.c_cc[VTIME] = 5; /* 0.5 seconds read timeout */
 
 	tcsetattr(fd, TCSANOW, &tty);
 }
@@ -379,7 +379,7 @@ static void set_blocking(int fd, int should_block)
  * is used by `ludlc_serial_connection_destroy` to unblock this
  * function during shutdown.
  *
- * @param arg The user argument (pointer to the core connection).
+ * @param sconn Pointer to the POSIX serial connection state.
  * @param buf Buffer to store read data.
  * @param buf_size Size of the read buffer.
  * @param timeout_ms Timeout for the poll.
@@ -544,7 +544,7 @@ out:
  * have been added to the `tx_fifo`. It attempts to write all
  * pending bytes from the FIFO to the platform's `tx_write` callback.
  *
- * @param conn Pointer to the connection structure.
+ * @param sconn Pointer to the POSIX serial connection state.
  * @return 0 on success (all bytes written or FIFO empty).
  * @return A negative error code if `tx_write` fails.
  */
@@ -819,6 +819,7 @@ void ludlc_serial_connection_destroy(struct ludlc_connection *conn)
  * @param args Platform arguments (port name, baud rate).
  * @param[out] conn On success, this pointer is updated to point to the
  * new core `ludlc_connection`.
+ * @param proto Pointer to protocol hooks (checksum and timestamp).
  * @param cb User-facing event callbacks.
  * @return 0 on success.
  * @return -ENOMEM on allocation failure.

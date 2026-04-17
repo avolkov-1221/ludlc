@@ -115,7 +115,7 @@ struct ludlc_senc_state {
 /**
  * @brief Initializes (or resets) the serial decoder state machine.
  *
- * @param p_state Pointer to the decoder state structure.
+ * @param dec_state Pointer to the decoder state structure.
  */
 static inline void ludlc_serial_decoder_init(struct ludlc_sdec_state *dec_state)
 {
@@ -126,8 +126,10 @@ static inline void ludlc_serial_decoder_init(struct ludlc_sdec_state *dec_state)
 /**
  * @brief Reinitializes the serial decoder state machine after packet reception.
  *
- * @param dec_state   Pointer to the decoder state structure.
- * @param new_payload Pointer to the new buffer's payload.
+ * @param conn Connection used for checksum seed configuration.
+ * @param dec_state Pointer to the decoder state structure.
+ * @param new_payload Pointer to the new packet payload buffer.
+ * @param cap Capacity of @p new_payload in bytes.
  */
 static inline void ludlc_serial_decoder_prep(struct ludlc_connection *conn,
 		struct ludlc_sdec_state *dec_state,
@@ -386,10 +388,13 @@ static inline void ludlc_serial_encoder_init(struct ludlc_senc_state *p_state)
 }
 
 /**
- * @brief Checks if the serial encoder FSM is in the idle state.
+ * @brief Checks whether encoder currently has a non-empty packet configured.
  *
- * @param p_state Pointer to the encoder state structure.
- * @return true if the encoder is idle (ready for a new packet), false otherwise.
+ * Evaluates to true when the sum of configured header and payload sizes in
+ * @p enc_state is non-zero.
+ *
+ * @param enc_state Pointer to the encoder state structure.
+ * @return true if configured packet size is non-zero, false otherwise.
  */
 static inline bool ludlc_serial_encoder_packet_sz(
 		struct ludlc_senc_state *enc_state)
