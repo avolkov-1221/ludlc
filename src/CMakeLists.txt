@@ -22,6 +22,8 @@ endif()
 
 add_subdirectory(lib)
 
-if(LUDLC_ENABLE_BINARIES OR TARGET_PLATFORM_ZEPHYR)
+# Samples are standalone applications.
+# Skip them when LuDLC is used as a dependency
+if(NOT LUDLC_AS_SUBPROJECT AND (LUDLC_ENABLE_BINARIES OR TARGET_PLATFORM_ZEPHYR))
   add_subdirectory(samples)
 endif()
