@@ -4,14 +4,8 @@
  *
  * @brief LuDLC core logic implementation.
  *
- * This file contains the core state machine, packet handling (receive and
- * transmit), and connection management logic for the LuDLC protocol.
- *
+ * @copyright
  * Copyright (C) 2025-2026 Andrey VOLKOV <andrey@volkov.fr> & LuDLC Contributors
- *
- * This file is licensed under either the Apache License, Version 2.0,
- * or the GNU General Public License, version 2 or (at your option)
- * any later version.
  */
 
 #include <errno.h>
@@ -167,8 +161,9 @@ static void ludlc_confirm_unlocked(struct ludlc_connection *conn,
 	}
 }
 #else
+/* Confirmations are made on the spot in this build, so nothing is held. */
 #define LUDLC_DECLARE_CONFIRMED_QUEUE(q_name) \
-	struct packet_queue_item q_name = NULL
+	struct packet_queue_item *q_name = NULL
 /**
  * @brief (non-MT) Immediately invokes the user confirmation callback.
  *
@@ -211,7 +206,6 @@ static inline void ludlc_confirm_unlocked(struct ludlc_connection *conn,
 }
 
 #endif
-
 
 /**
  * @brief Internal handler for disconnect case.
@@ -447,9 +441,8 @@ static int rx_handle_handshake(
 				ret |= HANDLE_RX_CONNECTED_F;
 			}
 		} else if ((id + 1) != conn->conn_state) {
-			/* Check for an ID that is too far off
-			 * (not equal to conn_state - 1). Probably due to
-			 * lost of some handshake packets.
+			/* An ID too far off (not conn_state - 1), most likely
+			 * because handshake packets were lost.
 			 */
 			LUDLC_LOG_DEBUG(
 				"ID is too far off: (%x, %x) from state = %d",
@@ -583,16 +576,13 @@ static int rx_handle_packet(
 	int ret;
 
 	if (!ping && pkt_sz < sizeof(ludlc_packet_hdr_t)) {
-		/* Something strange was happened on other side:
-		 * the packet is too short, but with good crc,
-		 * drop it for a while */
+		/* Too short to hold a header, yet the checksum is good, so
+		 * the peer is misbehaving. Drop it.
+		 */
 		LUDLC_INC_STATS(conn, dropped);
 		return 0;
 	}
 
-	/* OK, the packet's integrity looks good,
-	 * so start handling the packet.
-	 */
 	if (conn->conn_state != LUDLC_STATE_CONNECTED) {
 		ret = rx_handle_handshake(conn, packet, pkt_sz);
 		if ((ret & HANDLE_RX_CONTINUE_F) == 0) {
@@ -630,26 +620,18 @@ static int rx_handle_packet(
 	next_rcvd_id = (conn->last_received + 1) & LUDLC_ID_MASK;
 	if (next_rcvd_id != id) {
 		if (conn->last_received != id) {
-			/* The packet with unpredicted ID arrived (out of order)
-			 * So, set the flag to resend unndelivered
-			 * request(s) (NAK)
+			/* Out of order, so ask the peer to resend what was
+			 * missed (NAK).
 			 */
 			ludlc_platform_set_bit(LUDLC_CONN_SEND_NAK_F,
 					&conn->flags);
 			ret |= HANDLE_RX_REQUEST_TX_F;
 		}
-		/* However, if conn->last_received == id, it's mean
-		 * that this packet has been sent and received already by
-		 * ourselves, but the sender didn't received ack yet
-		 * (very rare case), so do nothing for it.
-		 * (this is a duplicate). Drop it, but still process
-		 * its ACK field.
+		/* Otherwise last_received == id, a duplicate of the packet
+		 * just received: the peer resent it because our ACK was lost.
+		 * Drop the payload, but still process its ACK field.
 		 */
 	} else if (!ping) {
-		/* The normal packet arrived with correct id's sequence,
-		 * so update "last_received" counter, request to send ack and
-		 * accept the packet
-		 */
 		conn->last_received = next_rcvd_id;
 		ret |= HANDLE_RX_REQUEST_TX_F | HANDLE_RX_ACCEPT_F;
 	}
@@ -658,11 +640,8 @@ static int rx_handle_packet(
 	/* Get the number of packets are waiting for acknowledge */
 	num_wait = (conn->last_sent - conn->last_ack) & LUDLC_ID_MASK;
 
-	/* Get the number of confirmed packets.
-	 *
-	 * For the UNSIGNED integers like ludlc_id_t already is, it's useless
-	 * to clear the highest bit in separate operation, the result of
-	 * subtraction will be corrected by masking.
+	/* Number of packets this ACK confirms. ludlc_id_t is unsigned, so the
+	 * subtraction wraps and the mask alone gives the right count.
 	 */
 	num_acked = (packet->hdr.id.ack_id - conn->last_ack) & LUDLC_ID_MASK;
 
@@ -677,10 +656,8 @@ static int rx_handle_packet(
 					confirmed_q, confirmed_num);
 		}
 
-		/*
-		 * NAK handling must see unacked count *after* advancing last_ack
-		 * for the cumulative ACK above — not the stale num_wait from
-		 * before the loop.
+		/* NAK handling needs the unacked count after the cumulative
+		 * ACK above, not the stale num_wait from before the loop.
 		 */
 		if (packet->hdr.id.ack_id & LUDLC_NAK_FLAG) {
 			num_wait = (conn->last_sent - conn->last_ack) &
@@ -689,12 +666,11 @@ static int rx_handle_packet(
 					     confirmed_q, confirmed_num);
 		}
 	} else {
-		/* TODO: force immediate reconnect ? */
-
-		/* Wow, this is strange case, peer ACK'd packets we haven't sent.
-		 * This implies a severe state desynchronization.
+		/* The peer ACKed packets we never sent, so the two sides are
+		 * badly out of sync.
+		 *
+		 * TODO: force an immediate reconnect?
 		 */
-		/* reconnect immediately ? */
 		LUDLC_LOG_DEBUG("ACK ID is too far: (%x) from last_ack = %x",
 				packet->hdr.id.ack_id, conn->last_ack);
 	}
@@ -1069,7 +1045,6 @@ int ludlc_connection_init(struct ludlc_connection *conn,
 					&conn->flags);
 			return 0;
 		}
-
 		ludlc_platform_destroy_timer(&conn->ping_timer);
 	}
 
