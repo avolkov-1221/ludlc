@@ -233,12 +233,11 @@ static void on_disconnect_lock(struct ludlc_connection *conn,
 
 	conn->conn_state = LUDLC_STATE_DISCONNECTED;
 
-	/* Keep lifecycle bit; clear runtime protocol flags. */
-
-	conn->flags =
-		ludlc_platform_test_bit(LUDLC_CONN_INITED_F, &conn->flags)
-			? 1U << LUDLC_CONN_INITED_F
-			: 0;
+	/* Keep the lifecycle bit and clear the runtime protocol flags, which
+	 * means setting the active-low ones rather than clearing them.
+	 */
+	ludlc_platform_set_mask(LUDLC_CONN_IDLE_MASK, &conn->flags);
+	ludlc_platform_clear_mask(LUDLC_CONN_SWEEP_CLEAR_MASK, &conn->flags);
 
 	/* Packets (last_ack+1)..last_queued inclusive,
 	 * use ID space, not window mask
@@ -629,7 +628,7 @@ static int rx_handle_packet(
 			/* Out of order, so ask the peer to resend what was
 			 * missed (NAK).
 			 */
-			ludlc_platform_set_bit(LUDLC_CONN_SEND_NAK_F,
+			ludlc_platform_clear_bit(LUDLC_CONN_NO_NAK_F,
 					&conn->flags);
 			ret |= HANDLE_RX_REQUEST_TX_F;
 		}
@@ -813,9 +812,9 @@ int ludlc_get_packet_to_send(struct ludlc_connection *conn,
 		/* Prepare ACK ID */
 		ack = conn->last_received;
 
-		/* Check if a NAK needs to be sent */
-		if (ludlc_platform_test_and_clear_bit(LUDLC_CONN_SEND_NAK_F,
-				&conn->flags)) {
+		/* Check if a NAK needs to be sent, and take it if so */
+		if (!ludlc_platform_test_and_set_bit(LUDLC_CONN_NO_NAK_F,
+						&conn->flags)) {
 			ack |= LUDLC_NAK_FLAG;
 		}
 
@@ -1032,6 +1031,8 @@ int ludlc_connection_init(struct ludlc_connection *conn,
 	conn->user_ctx = user_ctx;
 	conn->ctrl_packet.chan = CONFIG_LUDLC_CONTROL_CHANNEL;
 	conn->conn_state = LUDLC_STATE_DISCONNECTED;
+
+	conn->flags = LUDLC_CONN_IDLE_MASK;
 
 	ret = ludlc_platform_conn_init(conn);
 	if (ret)

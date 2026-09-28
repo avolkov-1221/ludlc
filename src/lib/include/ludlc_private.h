@@ -127,17 +127,27 @@ struct ludlc_connection {
 	/** Watchdog timer for connection timeout. */
 	ludlc_platform_timer_t	wd_timer;
 
-/** @def LUDLC_CONN_SEND_NAK_F
- * @brief Atomic flag bit indicating a NAK (Negative Ack) should be sent. */
-#define LUDLC_CONN_SEND_NAK_F	0
+/** @def LUDLC_CONN_NO_NAK_F
+ * @brief Clear when the peer is to be told a packet went missing.
+ *
+ * Active low, so that taking it is one @ref ludlc_platform_test_and_set_bit.
+ * Not every target has an instruction that tests and clears in one go, and a
+ * test plus a clear is two operations. Starts set; see
+ * @ref LUDLC_CONN_IDLE_MASK. */
+#define LUDLC_CONN_NO_NAK_F		0
 /** @def LUDLC_CONN_INITED_F
  * @brief Atomic flag bit indicating the connection is inited. */
-#define LUDLC_CONN_INITED_F	1
+#define LUDLC_CONN_INITED_F		1
 /** @def LUDLC_CONN_DISC_AFTER_TX_F
  * @brief Request local disconnect once queued disconnect control packet drains. */
 #define LUDLC_CONN_DISC_AFTER_TX_F	2
-	/** Atomic bitfield for connection flags. */
-	ludlc_platform_atomic_t	flags;
+
+	/** @brief The flags above, read and written under @c lock.
+	 *
+	 * The active-low ones are taken with a single
+	 * @ref ludlc_platform_test_and_set_bit; the rest are plain set and
+	 * clear, the lock being what keeps the word consistent. */
+	ludlc_platform_atomic_t		flags;
 
 	/**
 	 * @brief The link's clock, its own copy.
@@ -236,5 +246,23 @@ int ludlc_get_packet_to_send(struct ludlc_connection *conn,
  * error/timeout notifications.
  */
 void ludlc_handle_disconnect(struct ludlc_connection *conn);
+
+/** @brief The active-low flags, as they stand with nothing outstanding.
+ *
+ * Zeroed memory reads as all of them pending, so init and the disconnect
+ * sweep set them. */
+#define LUDLC_CONN_IDLE_MASK						\
+	((ludlc_platform_atomic_t)(1U << LUDLC_CONN_NO_NAK_F))
+
+/** @brief Flags the disconnect sweep keeps when it clears the runtime ones. */
+#define LUDLC_CONN_SWEEP_KEEP_MASK	(1U << LUDLC_CONN_INITED_F)
+
+/** @brief Flags the disconnect sweep clears: whatever it does not keep.
+ *
+ * Written as what is left over so that a flag added later is cleared without
+ * anyone remembering to name it here. */
+#define LUDLC_CONN_SWEEP_CLEAR_MASK					\
+	((ludlc_platform_atomic_t)~(LUDLC_CONN_SWEEP_KEEP_MASK |	\
+				    LUDLC_CONN_IDLE_MASK))
 
 #endif /* __LUDLC_PRIVATE_H__ */
