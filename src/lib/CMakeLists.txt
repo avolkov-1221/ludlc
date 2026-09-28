@@ -57,8 +57,8 @@ endif()
 add_subdirectory(platform)
 add_definitions(${PLATFORM_DEFS})
 
-# The core file list is kept in a file of its own, so that a port outside
-# this tree does not break when the core gains or loses a file.
+# The core file list is shared with the make-based ports, so that a port
+# outside this tree does not break when the core gains or loses a file.
 include(${CMAKE_CURRENT_SOURCE_DIR}/ludlc-core.cmake)
 
 set(LUDLC_SRC

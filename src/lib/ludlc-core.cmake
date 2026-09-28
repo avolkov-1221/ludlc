@@ -8,11 +8,11 @@
 # Copyright (C) 2025-2026 Andrey VOLKOV <andrey@volkov.fr> & LuDLC Contributors
 #
 # @details
-# The list is kept here, so that a port outside the tree keeps building when
-# the core gains or loses a file.
+# Every CMake build in the tree takes the list from here, so a port outside
+# the tree keeps building when the core gains or loses a file.
 #
 # LUDLC_CORE_SRC holds absolute paths, and lists nothing from platform/: a
-# port declares its own files.
+# port declares its own files. See ludlc-core.mk for the make equivalent.
 
 # The protocol, and whichever framings the port needs. A codec file has no
 # #ifdef on its own config, so a framing is left out of the image by dropping

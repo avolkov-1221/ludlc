@@ -50,3 +50,7 @@ modules.order
 Module.symvers
 Mkfile.old
 dkms.conf
+
+# Build and export output: modules, the scratch kernel worktree the LKML
+# export works in, and the series it leaves behind
+/out/

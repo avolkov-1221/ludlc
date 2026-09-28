@@ -1,0 +1,87 @@
+# SPDX-License-Identifier: GPL-2.0-only
+#
+# @file Kconfig
+#
+# @brief Kconfig options of the LuDLC Linux drivers, for an in-tree build.
+#
+# @copyright
+# Copyright (C) 2025-2026 Andrey VOLKOV <andrey@volkov.fr> & LuDLC Contributors
+#
+# @details
+# The core module, the default checksum, and the serdev and SPI transports. An
+# out-of-tree build makes the same choices in the Makefile beside this file.
+
+config LUDLC_CORE
+	tristate "LuDLC core glue"
+	help
+	  Platform glue required to run LuDLC core logic inside the Linux
+	  kernel. This module provides timer/event integration and a lightweight
+	  software bus used by LuDLC transports.
+
+	  It also holds the checksums a link can run. Both ends of a link must
+	  agree on the checksum, which makes it a property of the link rather
+	  than of whatever carries it, so every transport picks one from here.
+
+if LUDLC_CORE
+
+choice
+	prompt "Default frame checksum"
+	default LUDLC_CRC_DFLT_CCITT_PR0
+	help
+	  The checksum a link uses when nothing else names one: neither the
+	  crc= module parameter, a ludlc,csum firmware property nor a configfs
+	  write.
+
+	  Both ends of a link must agree on it, so this belongs to the network
+	  rather than to the driver. Change it only to match the peers.
+
+	  A link may run anything from 8 to 64 bits, so only the default needs
+	  a CRC library here; a link can be pointed at any other checksum,
+	  including one another module registers.
+
+config LUDLC_CRC_DFLT_CCITT_PR0
+	bool "CRC-16/KERMIT (crc16-ccitt-pr0)"
+	select CRC_CCITT
+	help
+	  Reflected 0x1021 seeded with zero, computed by the kernel
+	  crc_ccitt_byte() and leaving residual zero at the far end. Two
+	  octets per frame. This is what the other LuDLC platforms send, so
+	  keep it unless the network has settled on something else.
+
+config LUDLC_CRC_DFLT_X25_PR1
+	bool "HDLC FCS-16 (crc16-x25-pr1)"
+	select CRC_CCITT
+	help
+	  The same reflected 0x1021, but seeded with all ones and
+	  complemented on output, as X.25 and PPP send it. The far end is
+	  left with residual 0xf0b8 rather than zero. Two octets per frame,
+	  and no wider a check than the choice above.
+
+config LUDLC_CRC_DFLT_CRC16_PR0
+	bool "CRC-16/ARC (crc16-pr0)"
+	select CRC16
+	help
+	  Reflected 0x8005 seeded with zero, computed by the kernel
+	  crc16_byte() and leaving residual zero. Two octets per frame. The
+	  other 16-bit CRC the kernel provides, for a network that has
+	  settled on this polynomial.
+
+config LUDLC_CRC_DFLT_CRC32_PR0
+	bool "CRC-32, zero seed (crc32-ccitt-pr0)"
+	select CRC32
+	help
+	  Reflected 0x04c11db7 seeded with zero, computed by the kernel
+	  crc32_le() and leaving residual zero. For a link that wants more
+	  than 16 bits of protection, at four octets per frame instead of
+	  two.
+
+config LUDLC_CRC_DFLT_NONE
+	bool "No checksum (none)"
+	help
+	  Frames carry no checksum: none is computed, sent or checked. For a
+	  network whose transports validate frames themselves, or whose links
+	  each choose a checksum of their own. Needs no CRC library.
+
+endchoice
+
+endif
