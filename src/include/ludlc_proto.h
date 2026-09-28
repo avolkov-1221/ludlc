@@ -89,10 +89,13 @@ typedef uint32_t ludlc_id_t;
  */
 #if defined(BUILD_ASSERT)
 BUILD_ASSERT(((ludlc_id_t)0 < (ludlc_id_t)-1));
-#elif defined(BUILD_BUG_ON)
-BUILD_BUG_ON(!((ludlc_id_t)0 < (ludlc_id_t)-1));
 #else
-/* C11-style build-time check without static_assert (borrowed from Zephyr). */
+/*
+ * C11-style build-time check without static_assert (borrowed from Zephyr).
+ * BUILD_BUG_ON is not used here: both the Linux kernel's and the
+ * coprocessor's expand to an expression valid only inside a function, and
+ * this check has to live at file scope.
+ */
 enum __build_assert_enum_ludlc_id_t__ {
 	__build_assert_enum_ludlc_id_t__ = 1 / !!((ludlc_id_t)0 < (ludlc_id_t)-1)
 };

@@ -8,12 +8,17 @@
  * Copyright (C) 2025-2026 Andrey VOLKOV <andrey@volkov.fr> & LuDLC Contributors
  */
 
+#ifdef __KERNEL__
+#include <linux/errno.h>
+#include <linux/string.h>
+#else
 #include <errno.h>
 #include <stdbool.h>
 #include <stddef.h>
 #include <stdint.h>
 #include <stdlib.h>
 #include <string.h>
+#endif
 
 #include <ludlc.h>
 #include <ludlc_platform.h>
@@ -536,6 +541,9 @@ int ludlc_enqueue_data(struct ludlc_connection *conn,
 
 	return ret;
 }
+#ifdef __KERNEL__
+EXPORT_SYMBOL_GPL(ludlc_enqueue_data);
+#endif
 
 /**
  * @brief Sends an unnumbered (U) packet, ahead of everything else.
@@ -602,6 +610,9 @@ int ludlc_send_urgent_data(struct ludlc_connection *conn,
 
 	return ret;
 }
+#ifdef __KERNEL__
+EXPORT_SYMBOL_GPL(ludlc_send_urgent_data);
+#endif
 
 int ludlc_send_disconnect(struct ludlc_connection *conn)
 {
@@ -659,6 +670,9 @@ int ludlc_send_disconnect(struct ludlc_connection *conn)
 
 	return ret;
 }
+#ifdef __KERNEL__
+EXPORT_SYMBOL_GPL(ludlc_send_disconnect);
+#endif
 
 int ludlc_connect(struct ludlc_connection *conn)
 {
@@ -689,6 +703,9 @@ int ludlc_connect(struct ludlc_connection *conn)
 
 	return ret;
 }
+#ifdef __KERNEL__
+EXPORT_SYMBOL_GPL(ludlc_connect);
+#endif
 
 /**
  * @brief Handles an incoming packet when the LuDLC FSM is in an
@@ -739,7 +756,7 @@ static int rx_handle_handshake(
 		/* Check if the received ID is within acceptable range
 		 * (conn_state or conn_state + 1).
 		 */
-		if ((id - conn->conn_state) < 2U) {
+		if ((unsigned int)(id - conn->conn_state) < 2U) {
 			/* Check the optional caps data */
 			if (id == LUDLC_STATE_WAIT_CONN_1 &&
 					pkt_sz > sizeof(ludlc_packet_hdr_t)) {
@@ -1025,6 +1042,9 @@ int ludlc_receive(struct ludlc_connection *conn,
 
 	return 0;
 }
+#ifdef __KERNEL__
+EXPORT_SYMBOL_GPL(ludlc_receive);
+#endif
 
 /**
  * @brief Drops the leading packet if its retry budget has run out.
@@ -1292,6 +1312,9 @@ int ludlc_get_packet_to_send(struct ludlc_connection *conn,
 
 	return ret;
 }
+#ifdef __KERNEL__
+EXPORT_SYMBOL_GPL(ludlc_get_packet_to_send);
+#endif
 
 /**
  * @brief Ping timer callback.
@@ -1383,6 +1406,9 @@ void ludlc_handle_disconnect(struct ludlc_connection *conn)
 	if (ludlc_disconnect_core(conn))
 		ludlc_call_on_disconnect(conn);
 }
+#ifdef __KERNEL__
+EXPORT_SYMBOL_GPL(ludlc_handle_disconnect);
+#endif
 
 /**
  * @brief Restarts the watchdog for another period.
@@ -1400,6 +1426,9 @@ void ludlc_watchdog_rearm(struct ludlc_connection *conn)
 		ludlc_platform_start_timer(&conn->wd_timer,
 					   ludlc_conn_wd_time(conn), 0);
 }
+#ifdef __KERNEL__
+EXPORT_SYMBOL_GPL(ludlc_watchdog_rearm);
+#endif
 
 /**
  * @brief Cleans up a connection structure.
@@ -1422,6 +1451,9 @@ void ludlc_connection_cleanup(struct ludlc_connection *conn)
 
 	ludlc_conn_queue_free(conn);
 }
+#ifdef __KERNEL__
+EXPORT_SYMBOL_GPL(ludlc_connection_cleanup);
+#endif
 
 /**
  * @brief Initializes a LuDLC connection structure.
@@ -1542,8 +1574,14 @@ fail_platform_init:
 
 	return ret;
 }
+#ifdef __KERNEL__
+EXPORT_SYMBOL_GPL(ludlc_connection_init);
+#endif
 
 const struct ludlc_conn_cfg ludlc_conn_cfg_default = LUDLC_CONN_CFG_DEFAULT;
+#ifdef __KERNEL__
+EXPORT_SYMBOL_GPL(ludlc_conn_cfg_default);
+#endif
 
 ludlc_payload_size_t ludlc_conn_max_payload(const struct ludlc_connection *conn)
 {
@@ -1553,3 +1591,6 @@ ludlc_payload_size_t ludlc_conn_max_payload(const struct ludlc_connection *conn)
 
 	return ludlc_conn_payload_lim(conn);
 }
+#ifdef __KERNEL__
+EXPORT_SYMBOL_GPL(ludlc_conn_max_payload);
+#endif

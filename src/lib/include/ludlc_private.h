@@ -11,9 +11,13 @@
 #ifndef __LUDLC_PRIVATE_H__
 #define __LUDLC_PRIVATE_H__
 
+#ifdef __KERNEL__
+#include <linux/types.h>
+#else
 #include <stdbool.h>
 #include <stddef.h>
 #include <stdint.h>
+#endif
 
 #include <ludlc_platform_api.h>
 #include <ludlc_packet.h>
