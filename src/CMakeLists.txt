@@ -1,15 +1,24 @@
 # SPDX-License-Identifier: (Apache-2.0 OR GPL-2.0-or-later)
 #
+# @file CMakeLists.txt
+#
+# @brief Builds the LuDLC sources: the public headers, the library and the
+# samples.
+#
+# @copyright
 # Copyright (C) 2025-2026 Andrey VOLKOV <andrey@volkov.fr> & LuDLC Contributors
 #
-# This file is licensed under either the Apache License, Version 2.0,
-# or the GNU General Public License, version 2 or (at your option)
-# any later version.
+# @details
+# The public headers in include/ become an interface target for the library and
+# its users, or Zephyr include directories in a Zephyr build. The library comes
+# from lib/. The samples are added unless LuDLC is built as part of another
+# project or, outside Zephyr, LUDLC_ENABLE_BINARIES is off.
 
 set(LUDLC_INCLUDE ${CMAKE_CURRENT_SOURCE_DIR}/include)
 
-if(TARGET_PLATFORM_POSIX)
-  # Define a global LUDLC interface target
+if(LUDLC_BUILD_LIBRARY)
+  # Define a global LUDLC interface target. A port adds its own directory to
+  # it, which is how ludlc_platform.h and friends are found.
   add_library(ludlc_includes INTERFACE)
 
   # Add the include directory

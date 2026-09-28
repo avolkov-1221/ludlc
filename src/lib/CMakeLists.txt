@@ -1,10 +1,17 @@
 # SPDX-License-Identifier: (Apache-2.0 OR GPL-2.0-or-later)
 #
+# @file CMakeLists.txt
+#
+# @brief Builds the LuDLC library: the core and the port of the selected
+# platform.
+#
+# @copyright
 # Copyright (C) 2025-2026 Andrey VOLKOV <andrey@volkov.fr> & LuDLC Contributors
 #
-# This file is licensed under either the Apache License, Version 2.0,
-# or the GNU General Public License, version 2 or (at your option)
-# any later version.
+# @details
+# The core's sources come from ludlc-core.cmake and the port's from platform/.
+# Every platform but Zephyr makes a static library, a shared one or both;
+# Zephyr puts them in the module's Zephyr library when CONFIG_LUDLC is set.
 
 set(CMAKE_C_STANDARD_REQUIRED ON)
 
@@ -48,15 +55,19 @@ endif()
 add_subdirectory(platform)
 add_definitions(${PLATFORM_DEFS})
 
+# The core file list is kept in a file of its own, so that a port outside
+# this tree does not break when the core gains or loses a file.
+include(${CMAKE_CURRENT_SOURCE_DIR}/ludlc-core.cmake)
+
 set(LUDLC_SRC
-  ludlc.c
+  ${LUDLC_CORE_SRC}
   ${PLATFORM_SRC}
 )
 
 set(ludlc_target ludlc)
 set(ludlc_target ${ludlc_target} PARENT_SCOPE)
 
-if(TARGET_PLATFORM_POSIX)
+if(LUDLC_BUILD_LIBRARY)
   set(target_libraries ${ludlc_target})
 
   if(LUDLC_STATIC_LIBRARY)
@@ -91,15 +102,17 @@ if(TARGET_PLATFORM_POSIX)
   endif(LUDLC_SHARED_LIBRARY)
 
   # timer_create / clock_gettime may live in librt on some POSIX systems
-  find_library(LUDLC_POSIX_RT_LIB NAMES rt)
-  if(LUDLC_POSIX_RT_LIB)
-    if(LUDLC_STATIC_LIBRARY)
-      target_link_libraries(${ludlc_static_target}
-        PRIVATE ${LUDLC_POSIX_RT_LIB})
-    endif()
-    if(LUDLC_SHARED_LIBRARY)
-      target_link_libraries(${ludlc_lib}
-        PRIVATE ${LUDLC_POSIX_RT_LIB})
+  if(TARGET_PLATFORM_POSIX)
+    find_library(LUDLC_POSIX_RT_LIB NAMES rt)
+    if(LUDLC_POSIX_RT_LIB)
+      if(LUDLC_STATIC_LIBRARY)
+        target_link_libraries(${ludlc_static_target}
+          PRIVATE ${LUDLC_POSIX_RT_LIB})
+      endif()
+      if(LUDLC_SHARED_LIBRARY)
+        target_link_libraries(${ludlc_lib}
+          PRIVATE ${LUDLC_POSIX_RT_LIB})
+      endif()
     endif()
   endif()
 

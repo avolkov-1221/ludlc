@@ -1,10 +1,18 @@
 # SPDX-License-Identifier: (Apache-2.0 OR GPL-2.0-or-later)
 #
+# @file CMakeLists.txt
+#
+# @brief Top-level CMake build of LuDLC.
+#
+# @copyright
 # Copyright (C) 2025-2026 Andrey VOLKOV <andrey@volkov.fr> & LuDLC Contributors
 #
-# This file is licensed under either the Apache License, Version 2.0,
-# or the GNU General Public License, version 2 or (at your option)
-# any later version.
+# @details
+# It selects the platform the library is built for: TARGET_PLATFORM if given,
+# else the one LUDLC_PLATFORM_DIR names, else Zephyr where ZEPHYR_BASE is set,
+# else POSIX. Every platform but Zephyr builds an ordinary library, versioned
+# from the VERSION file; Zephyr builds a Zephyr library instead. The sources are
+# added from src/. See doc/PORTING.md for a port kept outside this tree.
 
 cmake_minimum_required(VERSION 3.20.0)
 
@@ -58,6 +66,13 @@ endfunction()
 # End of parser function
 #--------------------------------------------------------------------
 
+# A port may live outside this tree. LUDLC_PLATFORM_DIR gives its path and,
+# when TARGET_PLATFORM is not set, its name. See doc/PORTING.md for the
+# contents such a directory must have.
+if(DEFINED LUDLC_PLATFORM_DIR AND NOT DEFINED TARGET_PLATFORM)
+  get_filename_component(TARGET_PLATFORM "${LUDLC_PLATFORM_DIR}" NAME)
+endif()
+
 if(NOT DEFINED TARGET_PLATFORM)
   if(DEFINED ZEPHYR_BASE)
     set(TARGET_PLATFORM "zephyr" CACHE INTERNAL "target platform")
@@ -71,7 +86,27 @@ if(NOT DEFINED TARGET_PLATFORM)
 endif()
 
 string(TOLOWER "${TARGET_PLATFORM}" TARGET_PLATFORM)
-message(STATUS "The selected platform is '${TARGET_PLATFORM}'")
+
+# The port's directory: the one given above, or the in-tree directory with
+# that name.
+if(DEFINED LUDLC_PLATFORM_DIR)
+  get_filename_component(LUDLC_PLATFORM_DIR "${LUDLC_PLATFORM_DIR}"
+    ABSOLUTE BASE_DIR ${CMAKE_CURRENT_SOURCE_DIR})
+  set(LUDLC_PLATFORM_EXTERNAL 1)
+else()
+  set(LUDLC_PLATFORM_DIR
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/lib/platform/${TARGET_PLATFORM})
+endif()
+
+if(NOT EXISTS ${LUDLC_PLATFORM_DIR}/CMakeLists.txt)
+  message(FATAL_ERROR
+    "No port for '${TARGET_PLATFORM}': ${LUDLC_PLATFORM_DIR} holds no "
+    "CMakeLists.txt. Pass -DLUDLC_PLATFORM_DIR=<dir> for a port kept "
+    "outside this tree.")
+endif()
+
+message(STATUS "The selected platform is '${TARGET_PLATFORM}' "
+  "(${LUDLC_PLATFORM_DIR})")
 
 if(NOT TARGET_PLATFORM STREQUAL "zephyr")
   set(VERSION_FILE "${CMAKE_CURRENT_SOURCE_DIR}/VERSION")
@@ -112,9 +147,26 @@ elseif(TARGET_PLATFORM STREQUAL "zephyr")
   if(SB_CONFIG_WARN_DEPRECATED)
     message(STATUS "Sysbuild deprecated warnings are enabled")
   endif()
+elseif(LUDLC_PLATFORM_EXTERNAL)
+  # A port outside this tree. Its target is unknown here, so it is built as a
+  # plain library and declares its own sources, include paths and link
+  # dependencies in its CMakeLists.txt.
+  message(STATUS "Building against an out-of-tree port")
 else()
   message(FATAL_ERROR "Unknown platform ${TARGET_PLATFORM}, bail out!")
 endif()
+
+# Every port except Zephyr is built as an ordinary static or shared library.
+# Zephyr uses zephyr_library() instead.
+if(NOT TARGET_PLATFORM_ZEPHYR)
+  set(LUDLC_BUILD_LIBRARY 1)
+endif()
+
+# Set for the selected port, so that a port's CMakeLists.txt can test for
+# itself as the in-tree ones do.
+string(TOUPPER "${TARGET_PLATFORM}" ludlc_platform_upper)
+set(TARGET_PLATFORM_${ludlc_platform_upper} 1)
+unset(ludlc_platform_upper)
 
 # Default to Debug build type if not specified (non-Zephyr only).
 if(NOT TARGET_PLATFORM_ZEPHYR AND
