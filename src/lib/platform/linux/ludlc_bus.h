@@ -242,4 +242,31 @@ void ludlc_driver_unregister(struct ludlc_driver *ldrv);
 	module_driver(__ludlc_driver, ludlc_driver_register, \
 		      ludlc_driver_unregister)
 
+#if IS_REACHABLE(CONFIG_CONFIGFS_FS)
+#include <linux/configfs.h>
+
+/**
+ * @struct ludlc_cfg_devices
+ * @brief Reusable configfs group holding LuDLC bus device nodes.
+ *
+ * A transport embeds one of these - typically a "ludlc" subdirectory of its
+ * own port group - so that every device created in it appears on the
+ * transport's own bus. @c conn is the link the group passes to
+ * ludlc_device_alloc(): set once the transport binds and cleared when it goes
+ * away, so nodes created in the meantime cannot be brought up.
+ */
+struct ludlc_cfg_devices {
+	struct config_group group;
+	struct ludlc_connection *conn;
+};
+
+void ludlc_cfg_devices_group_init(struct ludlc_cfg_devices *devs,
+				  const char *name);
+
+void ludlc_cfg_devices_group_attach(struct ludlc_cfg_devices *devs,
+				    struct ludlc_connection *conn);
+
+void ludlc_cfg_devices_group_detach(struct ludlc_cfg_devices *devs);
+#endif
+
 #endif /* __LUDLC_BUS_H__ */

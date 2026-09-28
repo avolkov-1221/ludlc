@@ -60,6 +60,10 @@ ludlc_core-y := $(addprefix ../../,$(LUDLC_CORE_NAMES:.c=.o))	\
 		ludlc_bus.o					\
 		ludlc_csum.o
 
+# configfs front-end: only on kernels that provide configfs. The bus device
+# nodes (ludlc_cfg.o) belong to the link rather than to whatever carries it.
+ludlc_core-$(CONFIG_CONFIGFS_FS) += ludlc_cfg.o
+
 obj-$(CONFIG_LUDLC_CORE) += ludlc_core.o
 
 # No transport needs a CRC library of its own: each checksum on offer follows
