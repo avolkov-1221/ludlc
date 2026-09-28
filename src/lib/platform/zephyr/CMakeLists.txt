@@ -1,10 +1,11 @@
 # SPDX-License-Identifier: (Apache-2.0 OR GPL-2.0-or-later)
 #
-# Copyright (C) 2025-2026 Andrey VOLKOV <andrey@volkov.fr> & LuDLC Contributors
+# @file CMakeLists.txt
 #
-# This file is licensed under either the Apache License, Version 2.0,
-# or the GNU General Public License, version 2 or (at your option)
-# any later version.
+# @brief Adds the Zephyr port to the library build.
+#
+# @copyright
+# Copyright (C) 2025-2026 Andrey VOLKOV <andrey@volkov.fr> & LuDLC Contributors
 
 # Zephyr platform
 
@@ -22,10 +23,18 @@ if(CONFIG_LUDLC_SERIAL_CONN)
 	)
 endif(CONFIG_LUDLC_SERIAL_CONN)
 
+if(CONFIG_LUDLC_SPI_CONN)
+	set(SPI_SRC
+		${CMAKE_CURRENT_SOURCE_DIR}/ludlc_spi_slave.h
+		${CMAKE_CURRENT_SOURCE_DIR}/ludlc_zephyr_spi_slave.c
+	)
+endif(CONFIG_LUDLC_SPI_CONN)
+
 # Propagate variables up to the parent(s)
 set(PLATFORM_SRC
 	${COMMON}
 	${SERIAL_SRC}
+	${SPI_SRC}
 	CACHE INTERNAL "zephyr sources"
 )
 

@@ -223,6 +223,44 @@ config LUDLC_NUM_RX_BUFFERS
 	help
 	  Number of RX packet buffers used by Zephyr serial transport.
 
+config LUDLC_SPI_CONN
+	bool "LuDLC SPI peripheral connection support"
+	default n
+	depends on SPI
+	select SPI_SLAVE
+	select GPIO
+	# What a link here falls back on when the application names no
+	# framing: the announced length already delimits the frame.
+	select LUDLC_FRAMING_RAW
+	# As for LUDLC_SERIAL_CONN: for the CRC-16/KERMIT of the default args,
+	# and for an application that brings its own checksum.
+	select CRC
+	select EVENTS
+	help
+	  Build LuDLC with support for links over an SPI bus driven by
+	  somebody else, the Linux ludlc_spi_master driver being the
+	  controller it was written against. A frame goes out as it stands,
+	  its length announced before it, and the checksum comes from the
+	  application, as it does for serial.
+
+	  Slave support is per-driver in Zephyr and not every SPI
+	  controller has it. The board also needs a hardware chip select
+	  line, and wants a spare GPIO for the data-ready line, without
+	  which the controller has to poll.
+
+config LUDLC_STATIC_SPI_CONN
+	bool "Predefine LuDLC SPI connections as a static array"
+	default n
+	depends on LUDLC_SPI_CONN
+	help
+	  Take SPI connections from a pool sized at build time rather
+	  than from the heap.
+
+config LUDLC_STATIC_SPI_CONN_NUM
+	int "Number of predefined SPI connections"
+	default 1
+	depends on LUDLC_STATIC_SPI_CONN
+
 menu "Sample options"
 
 rsource "../src/samples/zephyr/ludlc_echo/Kconfig.sample"

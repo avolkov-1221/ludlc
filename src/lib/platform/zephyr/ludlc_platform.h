@@ -44,6 +44,19 @@ struct ludlc_platform_connection {
 
 #define LUDLC_CONN_RX_TOUT_EVT		BIT(0)
 	struct k_event		rx_event;
+
+	/**
+	 * @brief Ask the transport for a TX round.
+	 *
+	 * Posting to @c tx_events is enough for a transport whose TX thread
+	 * waits on it. A transport that blocks elsewhere - an SPI peripheral
+	 * waits on the controller, having no way to start a transfer itself -
+	 * would not see the event until that wait ends, which may be what the
+	 * request is meant to bring about. Such a transport sets this
+	 * callback, which runs in the caller's context. Optional, NULL when
+	 * not needed.
+	 */
+	void (*start_tx)(struct ludlc_connection *conn);
 };
 
 /* --- Atomics --- */

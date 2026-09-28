@@ -72,6 +72,10 @@ int ludlc_default_get_timestamp(ludlc_timestamp_t *ts)
 void ludlc_platform_request_tx(struct ludlc_connection *conn)
 {
 	k_event_post(&conn->pconn.tx_events, LUDLC_CONN_FORCE_TX_F);
+
+	if (conn->pconn.start_tx) {
+		conn->pconn.start_tx(conn);
+	}
 }
 
 void ludlc_platform_conn_timeout(struct ludlc_connection *conn)
