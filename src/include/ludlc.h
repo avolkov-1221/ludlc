@@ -128,8 +128,9 @@ void ludlc_connection_cleanup(struct ludlc_connection *conn);
  * re-transmitted after another packet's gap is not charged for it. A value
  * of 0 means a single attempt. Values above @ref LUDLC_MAX_TTL are clamped.
  * @return 0 on success.
- * @return -EINVAL if @p buf is NULL and @p size is not, or if @p size is too
- * large.
+ * @return -EINVAL if @p buf is NULL and @p size is not, if @p size is too
+ * large, or if @p dst_chan is @ref CONFIG_LUDLC_CONTROL_CHANNEL, which is
+ * reserved for the core.
  * @return -EAGAIN if the transmit queue (window) is full.
  */
 int ludlc_enqueue_data(struct ludlc_connection *conn,
@@ -158,7 +159,9 @@ int ludlc_enqueue_data(struct ludlc_connection *conn,
  * @param size The size of the payload, up to
  * @ref CONFIG_LUDLC_MAX_PAYLOAD_SIZE.
  * @return 0 on success.
- * @return -EINVAL if @p buf is NULL, or if @p size is 0 or too large.
+ * @return -EINVAL if @p buf is NULL, if @p size is 0 or too large, or if
+ * @p dst_chan is @ref CONFIG_LUDLC_CONTROL_CHANNEL, which is reserved for
+ * the core.
  * @return -ENOTCONN if the connection is not established. Such a packet is
  * sent immediately or not at all, so it does not wait for a link.
  * @return -EAGAIN if the previous unnumbered packet has not been sent yet.
@@ -169,15 +172,26 @@ int ludlc_send_urgent_data(struct ludlc_connection *conn,
 		const void *buf, ludlc_payload_size_t size);
 
 /**
- * @brief Sends a graceful disconnect control request to the peer.
+ * @brief Tells the peer that this side is leaving.
  *
- * This helper sends an empty header as disconnect notification
- * on @ref CONFIG_LUDLC_CONTROL_CHANNEL.
- * The peer will process it through the explicit control disconnect path.
+ * Sends @ref LUDLC_CTRL_DISCONNECT as an unnumbered packet on
+ * @ref CONFIG_LUDLC_CONTROL_CHANNEL, so it goes out ahead of anything queued
+ * and takes no room in the window. The peer ends the session on it rather
+ * than waiting out its watchdog.
  *
- * @param conn The connection to send the disconnect request on.
+ * This side goes down once the frame has been sent, and @c on_disconnect
+ * reports it as it would any other disconnect. Packets still queued are
+ * failed with @c EPIPE, so a caller with data that must arrive should see it
+ * confirmed first. An unnumbered packet still waiting to be sent is dropped
+ * and confirmed with @c ECANCELED, the DISCONNECT being the last frame of the
+ * session.
+ *
+ * @param conn The connection to send the disconnect on.
  * @return 0 on success.
- * @return -EAGAIN if the transmit queue (window) is full.
+ * @return -EINVAL if @p conn is NULL.
+ * @return -ENOTCONN if there is no session to end.
+ * @return -EAGAIN if an unnumbered packet is on its way out as this runs, its
+ * buffer being held by the transport.
  */
 int ludlc_send_disconnect(struct ludlc_connection *conn);
 

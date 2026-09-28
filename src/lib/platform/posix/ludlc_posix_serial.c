@@ -44,6 +44,9 @@
 /** @brief Flag: RX thread started successfully. */
 #define RX_THREAD_OK	(1<<1)
 
+/** @brief How long the shutdown waits for the DISCONNECT to go out, in ms. */
+#define LUDLC_DISCONNECT_WAIT_MS	50U
+
 #define TX_BUF_SIZE \
 	LUDLC_ROUND_UP(2U * (unsigned int)LUDLC_MAX_PACKET_SIZE, sizeof(void *))
 
@@ -535,14 +538,6 @@ static int send_tx_fifo(struct ludlc_serial_connection *sconn)
 	return written;
 }
 
-static void complete_disconnect(struct ludlc_connection *conn)
-{
-	ludlc_handle_disconnect(conn);
-	ludlc_platform_clear_bit(
-		LUDLC_CONN_DISC_AFTER_TX_F,
-		&conn->flags);
-}
-
 /**
  * @brief Main thread function for the serial transmitter (TX).
  *
@@ -560,7 +555,6 @@ static void *ludlc_tx_serial_thread(void *arg)
 	struct ludlc_serial_connection *sconn = arg;
 	struct ludlc_connection *conn = &sconn->conn;
 	struct ludlc_senc_state enc_state;
-	bool disconnect_after_tx = false;
 	bool can_sleep = true;
 	struct pollfd pfd[2];
 	short int uart_events = POLLERR | POLLHUP;
@@ -615,9 +609,7 @@ static void *ludlc_tx_serial_thread(void *arg)
 					LUDLC_LOG_ERROR(
 						"Drop packet due to failed start_tx");
 					LUDLC_INC_STATS(&sconn->conn, dropped);
-
-					complete_disconnect(conn);
-					disconnect_after_tx = false;
+					ludlc_handle_disconnect(conn);
 				} else if (!kfifo_is_empty(&sconn->tx_fifo)) {
 					uart_events |= POLLOUT;
 				} else {
@@ -628,17 +620,6 @@ static void *ludlc_tx_serial_thread(void *arg)
 			if (kfifo_is_full(&sconn->tx_fifo)) {
 				uart_events |= POLLOUT;
 				continue;
-			}
-
-			if (disconnect_after_tx) {
-				if (!ludlc_serial_encoder_idle(&enc_state) ||
-				    !kfifo_is_empty(&sconn->tx_fifo)) {
-					uart_events |= POLLOUT;
-					continue;
-				}
-
-				complete_disconnect(conn);
-				disconnect_after_tx = false;
 			}
 
 			if (!ludlc_platform_test_and_clear_bit(
@@ -658,18 +639,15 @@ static void *ludlc_tx_serial_thread(void *arg)
 				&enc_state.payload_size);
 
 			if (is_tx_empty < 0) {
+				/* Nothing to send. A DISCONNECT that has just
+				 * drained ends the session this way, the core
+				 * having taken the link down with it.
+				 */
 				ludlc_serial_encoder_init(&enc_state, sconn->csum);
-				LUDLC_LOG_ERROR(
-					"Failed to get packet to send: %d",
-					is_tx_empty);
+				LUDLC_LOG_DEBUG(
+					"No packet to send: %d", is_tx_empty);
 				continue;
 			}
-
-			disconnect_after_tx =
-					ludlc_is_disconnect_after_tx_packet(
-						conn, enc_state.hdr,
-						enc_state.hdr_size,
-						enc_state.payload_size);
 
 			/* Postpone the ping timer for one PING_TIME later */
 			ludlc_platform_start_timer(&sconn->conn.ping_timer,
@@ -730,6 +708,22 @@ void ludlc_serial_connection_destroy(struct ludlc_connection *conn)
 	struct ludlc_serial_connection *sconn =
 		container_of(conn, struct ludlc_serial_connection, conn);
 	struct ludlc_platform_connection *pconn = &conn->pconn;
+
+	/* Send a DISCONNECT before going, so that the peer need not wait out
+	 * its watchdog. The core takes the link down once the frame has
+	 * drained, which is what the bounded wait below is for.
+	 */
+	if (ludlc_platform_test_bit(LUDLC_CONN_INITED_F, &conn->flags) &&
+	    ludlc_send_disconnect(conn) == 0) {
+		unsigned int ms = LUDLC_DISCONNECT_WAIT_MS;
+
+		while (ms-- && conn->conn_state == LUDLC_STATE_CONNECTED) {
+			/* No descriptors to watch: just a 1 ms sleep. */
+			poll(NULL, 0, 1);
+		}
+
+		tcdrain(sconn->uart_fd);
+	}
 
 	/* Signal threads to terminate */
 	conn->conn_state = LUDLC_STATE_TERMINATE;

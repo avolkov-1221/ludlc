@@ -53,6 +53,9 @@
 
 #define TX_BUF_SIZE	ROUND_UP(2*LUDLC_MAX_PACKET_SIZE, sizeof(void *))
 
+/** @brief How long the shutdown waits for the DISCONNECT to go out, in ms. */
+#define LUDLC_DISCONNECT_WAIT_MS	50U
+
 #define TX_ASYNC_BUSY	0
 #define USE_ASYNC_API	1
 
@@ -407,7 +410,6 @@ static void tx_serial_thread(void *p1, void *p2, void *p3)
 {
 	struct ludlc_serial_connection *sconn = p1;
 	struct ludlc_senc_state enc_state;
-	bool disconnect_after_tx = false;
 	bool packet_done = true;
 
 	ARG_UNUSED(p2);
@@ -454,15 +456,14 @@ static void tx_serial_thread(void *p1, void *p2, void *p3)
 				&enc_state.payload_size);
 
 			if (is_tx_empty < 0) {
+				/*
+				 * Nothing to send. A DISCONNECT that has just
+				 * drained ends the session this way, the core
+				 * having taken the link down with it.
+				 */
 				ludlc_serial_encoder_init(&enc_state, sconn->csum);
 				continue;
 			}
-
-			disconnect_after_tx =
-				ludlc_is_disconnect_after_tx_packet(
-					&sconn->conn,
-					enc_state.hdr, enc_state.hdr_size,
-					enc_state.payload_size);
 
 			/* Postpone the ping timer for one PING_TIME later */
 			ludlc_platform_start_timer(&sconn->conn.ping_timer,
@@ -489,20 +490,6 @@ static void tx_serial_thread(void *p1, void *p2, void *p3)
 				/* The full packet has been encoded */
 				LUDLC_INC_STATS(&sconn->conn, tx_packet);
 				packet_done = true;
-
-				/*
-				 * Encoder has finished the disconnect packet so
-				 * no more LuDLC bytes remain to be generated.
-				 * Do not wait for UART HW/DMA drain.
-				 * Disconnect now.
-				 */
-				if (disconnect_after_tx) {
-					ludlc_handle_disconnect(&sconn->conn);
-					ludlc_platform_clear_bit(
-						LUDLC_CONN_DISC_AFTER_TX_F,
-						&sconn->conn.flags);
-					disconnect_after_tx = false;
-				}
 			}
 		}
 
@@ -523,6 +510,19 @@ void ludlc_serial_connection_destroy(struct ludlc_connection *conn)
 {
 	struct ludlc_serial_connection *sconn =
 		CONTAINER_OF(conn, struct ludlc_serial_connection, conn);
+
+	/*
+	 * Send a DISCONNECT before going, so that the peer need not wait out
+	 * its watchdog. The core takes the link down once the frame has
+	 * drained, which is what the bounded wait below is for.
+	 */
+	if (ludlc_send_disconnect(conn) == 0) {
+		unsigned int ms = LUDLC_DISCONNECT_WAIT_MS;
+
+		while (ms-- && conn->conn_state == LUDLC_STATE_CONNECTED) {
+			k_sleep(K_MSEC(1));
+		}
+	}
 
 	conn->conn_state = LUDLC_STATE_TERMINATE;
 

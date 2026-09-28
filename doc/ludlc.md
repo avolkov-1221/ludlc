@@ -95,6 +95,8 @@ within an outer protocol that adds an addressing layer.
 
 * **Connection-Oriented**: A 3-way handshake is used to establish a
   symmetrical, peer-to-peer connection.
+* **Announced Disconnect**: A node on its way out says so, in a frame that
+  needs no room in the window, so the peer need not wait out its watchdog.
 * **Reliable Delivery**: Guarantees in-order packet delivery using
   sequence numbers and acknowledgments (ACKs).
 * **Error Recovery**: Uses Negative Acknowledgments (NAK) and
@@ -313,10 +315,10 @@ If no valid packet (including PINGs) is received for a watchdog period
 and the network stack resets to Disconnected.
 
 **Disconnect**
-A (non-ping) empty control-channel packet with any IDs, received while
-the network stack is in the Connected state, is treated as a disconnect
-notification, causing the connection to reset. Such a packet may be sent
-by the peer node, for example, after its reboot.
+A session ends in one of three ways: it is announced, it is inferred from a
+peer that has restarted, or it runs out on the watchdog above. The announced
+form is an unnumbered packet and is described with those, after
+[Unnumbered Packets](#unnumbered-packets).
 
 #### Reliable Data Transfer
 
@@ -417,6 +419,55 @@ no place in either node's window, so:
 
 A sender holds at most one unnumbered packet at a time, as a packet meant
 not to wait should not queue behind another of its kind.
+
+#### Connection Disconnect
+
+A session ends in one of three ways: it is announced, it is inferred from a
+peer that has restarted, or it runs out on the watchdog.
+
+An **announced disconnect** is an unnumbered packet on the control channel
+whose single payload octet is the Disconnect opcode (`0x01`):
+
+```text
+    +-------------------+---------------+-------------------+
+    | PING Flag + Next  | Control Chan  |  Disconnect (0x01)|
+    |   Seq / Ack IDs   |               |                   |
+    +-------------------+---------------+-------------------+
+```
+
+Being unnumbered, it goes out ahead of anything queued and needs no room in
+the window, so a node on its way out can say so whatever its queue is doing.
+A caller's unnumbered packet still waiting is displaced, a bye being the
+last frame of the session either way.
+
+```text
+      Node A                                   Node B
+ (State 3, CONNECTED)                      (State 3, CONNECTED)
+       |                                          |
+       | --- [Unnumbered, Ctrl, 0x01] ------>     |
+       |                                          |
+(Session ends as the frame leaves)   (Receives it, ends at once)
+ (State 0, DISCONNECTED)                   (State 0, DISCONNECTED)
+```
+
+The receiver ends the session at once rather than waiting out its watchdog,
+and sends nothing back: a handshake step would invite a peer that has just
+left, whilst one on its way back begins the handshake itself. The sender's
+own session ends as the frame leaves, and the packets still queued are
+failed.
+
+A peer that has **restarted** cannot announce anything, having no memory of
+a session to end. It begins a handshake instead, and its first step, an
+empty control packet, is taken as notice that the session is over.
+
+The last handshake step is an empty control packet as well, and arrives a
+second time whenever the reply to it is lost. A step carrying that ID is
+therefore read as the handshake rather than as a restart. The two are told
+apart exactly, a deliberate disconnect no longer being empty.
+
+The control channel is reserved for these packets. Callers cannot send on
+it, as a handshake step and a disconnect are told apart by the shape of the
+packet, which a caller could otherwise imitate.
 
 ## Appendix A: Optional Serial Framing Implementation
 

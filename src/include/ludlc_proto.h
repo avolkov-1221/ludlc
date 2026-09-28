@@ -228,6 +228,20 @@ typedef uint32_t ludlc_channel_t;
 #define CONFIG_LUDLC_CONTROL_CHANNEL	0
 #endif
 
+/**
+ * @def LUDLC_CTRL_DISCONNECT
+ * @brief Control channel opcode announcing that the sender is leaving.
+ *
+ * Carried as the single payload octet of an unnumbered packet addressed to
+ * @ref CONFIG_LUDLC_CONTROL_CHANNEL. The receiver ends the session on it
+ * instead of waiting out its watchdog.
+ *
+ * The opcode distinguishes a deliberate disconnect from a peer that has
+ * restarted, the latter announcing itself with an empty control packet as the
+ * first step of its handshake.
+ */
+#define LUDLC_CTRL_DISCONNECT	0x01
+
 #define LUDLC_MAX_TTL		127
 
 /**

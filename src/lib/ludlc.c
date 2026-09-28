@@ -65,6 +65,24 @@ static inline bool is_ping(ludlc_id_t id)
 }
 
 /**
+ * @brief Tells the peer's last handshake step from a peer that has restarted.
+ *
+ * Both arrive as an empty control packet. A restarted peer begins again from
+ * the first step; the last step is one this side has already handled, and
+ * arrives again only when the reply to it was lost. Ending the session over
+ * it would undo a handshake that has just completed. A deliberate disconnect
+ * carries @ref LUDLC_CTRL_DISCONNECT on an unnumbered packet, so the step ID
+ * separates the two remaining cases exactly.
+ *
+ * @param id Sequence number of the received packet.
+ * @return true if the packet is the peer's last handshake step.
+ */
+static inline bool is_last_handshake_step(ludlc_id_t id)
+{
+	return id == LUDLC_STATE_WAIT_CONN_2;
+}
+
+/**
  * @brief Checks if the transmit (TX) queue is empty.
  *
  * @param conn Pointer to the connection structure.
@@ -236,9 +254,13 @@ static void on_disconnect_lock(struct ludlc_connection *conn,
 
 	/* The unnumbered packet is not part of the window, so it is not among
 	 * those failed below, but its buffer must be returned all the same.
+	 * A DISCONNECT is the exception: it belongs to the core, and no
+	 * caller is waiting for it.
 	 */
-	if (!ludlc_platform_test_bit(LUDLC_CONN_U_IDLE_F, &conn->flags) ||
+	if ((!ludlc_platform_test_bit(LUDLC_CONN_U_IDLE_F, &conn->flags) ||
 			!ludlc_platform_test_bit(LUDLC_CONN_U_DONE_F,
+				&conn->flags)) &&
+			!ludlc_platform_test_bit(LUDLC_CONN_DISC_AFTER_TX_F,
 				&conn->flags)) {
 		conn->u_packet.status.result = EPIPE;
 		ludlc_on_confirm_lock(conn, &conn->u_packet, cq, confirmed_num);
@@ -304,6 +326,14 @@ int ludlc_enqueue_data(struct ludlc_connection *conn,
 	int ret;
 
 	if (!buf && size) {
+		return -EINVAL;
+	}
+
+	/* The control channel belongs to the core, which distinguishes a
+	 * handshake step from a disconnect by the layout of the packet. A
+	 * caller sending on it could imitate either one.
+	 */
+	if (dst_chan == CONFIG_LUDLC_CONTROL_CHANNEL) {
 		return -EINVAL;
 	}
 
@@ -383,6 +413,11 @@ int ludlc_send_urgent_data(struct ludlc_connection *conn,
 		return -EINVAL;
 	}
 
+	/* Reserved for the core, as for @ref ludlc_enqueue_data. */
+	if (dst_chan == CONFIG_LUDLC_CONTROL_CHANNEL) {
+		return -EINVAL;
+	}
+
 	LUDLC_LOCK(&conn->lock);
 	if (conn->conn_state != LUDLC_STATE_CONNECTED) {
 		ret = -ENOTCONN;
@@ -410,21 +445,60 @@ int ludlc_send_urgent_data(struct ludlc_connection *conn,
 
 int ludlc_send_disconnect(struct ludlc_connection *conn)
 {
+	static const uint8_t opcode = LUDLC_CTRL_DISCONNECT;
+	LUDLC_DECLARE_CONFIRMED_QUEUE(confirmed_q);
+	ludlc_id_t confirmed_num = 0;
 	int ret;
 
 	if (!conn) {
 		return -EINVAL;
 	}
 
-	/*
-	 * Request local disconnect after TX thread drains this control packet.
-	 * Set the flag before enqueue to avoid missing the packet due to races.
-	 */
-	ludlc_platform_set_bit(LUDLC_CONN_DISC_AFTER_TX_F, &conn->flags);
-	ret = ludlc_enqueue_data(conn, CONFIG_LUDLC_CONTROL_CHANNEL, NULL, 0, 1);
-	if (ret) {
-		ludlc_platform_clear_bit(LUDLC_CONN_DISC_AFTER_TX_F, &conn->flags);
+	LUDLC_LOCK(&conn->lock);
+	if (conn->conn_state != LUDLC_STATE_CONNECTED) {
+		ret = -ENOTCONN;
+	} else if (!ludlc_platform_test_bit(LUDLC_CONN_U_DONE_F,
+				&conn->flags)) {
+		/* The transport is reading that buffer as this runs, so the
+		 * slot cannot be taken from it.
+		 */
+		ret = -EAGAIN;
+	} else {
+		/* A DISCONNECT replaces an unnumbered packet still waiting,
+		 * since it is the last frame of the session in any case. The
+		 * replaced buffer is returned to its owner through the usual
+		 * path, unless it is a DISCONNECT already waiting, which
+		 * belongs to the core and has no caller to report to.
+		 */
+		if (!ludlc_platform_test_bit(LUDLC_CONN_U_IDLE_F,
+					     &conn->flags) &&
+		    !ludlc_platform_test_bit(LUDLC_CONN_DISC_AFTER_TX_F,
+					     &conn->flags)) {
+			conn->u_packet.status.result = ECANCELED;
+			ludlc_on_confirm_lock(conn, &conn->u_packet,
+					confirmed_q, &confirmed_num);
+		}
+
+		conn->u_packet.hdr.chan = CONFIG_LUDLC_CONTROL_CHANNEL;
+		conn->u_packet.payload = &opcode;
+		conn->u_packet.size = sizeof(opcode);
+
+		/* The core owns this packet: the flag below marks it as such,
+		 * so its confirmation is not reported to the user but ends the
+		 * session instead.
+		 */
+		ludlc_platform_set_bit(LUDLC_CONN_DISC_AFTER_TX_F,
+				&conn->flags);
+		ludlc_platform_clear_bit(LUDLC_CONN_U_IDLE_F, &conn->flags);
+
+		ret = 0;
 	}
+	LUDLC_UNLOCK(&conn->lock);
+
+	ludlc_confirm_unlocked(conn, confirmed_q, confirmed_num);
+
+	if (!ret)
+		ludlc_platform_request_tx(conn); /* Signal TX task */
 
 	return ret;
 }
@@ -584,8 +658,8 @@ static int rx_handle_nak(struct ludlc_connection *conn, ludlc_id_t num_wait)
  * called with the connection lock held. It performs the following steps:
  * 1. Validates packet size.
  * 2. If not connected, calls @ref rx_handle_handshake.
- * 3. Handles control channel packets (regular control payloads and explicit
- *    disconnect opcode).
+ * 3. Handles control channel packets: an announced disconnect, and an empty
+ *    one, which is a handshake step from a peer that has restarted.
  * 4. Resets the connection watchdog timer.
  * 5. Validates the packet's TX ID sequence (`tx_id`).
  * 6. Sets flags for NAK or acceptance.
@@ -634,12 +708,30 @@ static int rx_handle_packet(
 	}
 
 	id = packet->hdr.id.tx_id & LUDLC_ID_MASK;
+
+	/* An unnumbered packet on the control channel carries an opcode. The
+	 * layout is checked before the channel is read, because a PING ends
+	 * after the two IDs and has no channel field.
+	 */
+	if (ludlc_is_unnumbered_data(packet->hdr.id.tx_id, pkt_sz) &&
+	    packet->hdr.chan == CONFIG_LUDLC_CONTROL_CHANNEL &&
+	    packet->payload[0] == LUDLC_CTRL_DISCONNECT) {
+		/* The peer is closing the session deliberately, so it ends now
+		 * rather than on the watchdog. Nothing is sent back: a
+		 * handshake step would only reopen it, and a peer that comes
+		 * back starts the handshake itself.
+		 */
+		on_disconnect_lock(conn, confirmed_q, confirmed_num);
+		return ret | HANDLE_RX_DISCONNECT_F;
+	}
+
 	if (!ping && packet->hdr.chan == CONFIG_LUDLC_CONTROL_CHANNEL) {
 		if (pkt_sz == sizeof(ludlc_packet_hdr_t)) {
-			if (id != LUDLC_STATE_WAIT_CONN_2) {
-				/* Any empty control packet other than
-				 * last handshake step
-				 */
+			/* An empty control packet is a handshake step, so its
+			 * sender has restarted and does not know this session
+			 * is over.
+			 */
+			if (!is_last_handshake_step(id)) {
 				on_disconnect_lock(conn, confirmed_q,
 						   confirmed_num);
 				ret |= HANDLE_RX_DISCONNECT_F;
@@ -877,7 +969,7 @@ int ludlc_get_packet_to_send(struct ludlc_connection *conn,
 		ludlc_payload_size_t *pay_sz)
 {
 	struct packet_queue_item u_sent, expired;
-	bool u_done = false, exp_done;
+	bool u_done = false, exp_done, disc_done = false;
 	uint8_t ack, id, q_idx;
 	int ret = 1; /* Assume this is the last packet by default */
 
@@ -893,9 +985,28 @@ int ludlc_get_packet_to_send(struct ludlc_connection *conn,
 	 */
 	if (!ludlc_platform_test_and_set_bit(LUDLC_CONN_U_DONE_F,
 			&conn->flags)) {
-		conn->u_packet.status.result = 0;
-		u_sent = conn->u_packet;
-		u_done = true;
+		/* A DISCONNECT is the core's own packet: there is no buffer
+		 * to return, and the session it closed ends here.
+		 */
+		disc_done = ludlc_platform_test_bit(LUDLC_CONN_DISC_AFTER_TX_F,
+				&conn->flags);
+		if (!disc_done) {
+			conn->u_packet.status.result = 0;
+			u_sent = conn->u_packet;
+			u_done = true;
+		}
+	}
+
+	if (disc_done) {
+		LUDLC_UNLOCK(&conn->lock);
+
+		/* Nothing is prepared for the transport: a session that has
+		 * just sent its DISCONNECT has no frame after that one, and
+		 * the queue it would come from is about to be failed.
+		 */
+		ludlc_handle_disconnect(conn);
+
+		return -ENOTCONN;
 	}
 
 	/* The same goes for a packet that has run out of attempts: it is taken
@@ -958,6 +1069,17 @@ int ludlc_get_packet_to_send(struct ludlc_connection *conn,
 				/* The window still has packets waiting */
 				ret = 0;
 			}
+
+			/* A DISCONNECT is the last frame of the session, so
+			 * nothing else asks for a turn once it is out. The
+			 * core counts a frame as sent on the call which asks
+			 * for the next one, so without a turn asked for here
+			 * that call comes from the ping timer and the session
+			 * ends a ping period late.
+			 */
+			if (ludlc_platform_test_bit(LUDLC_CONN_DISC_AFTER_TX_F,
+						    &conn->flags))
+				ludlc_platform_request_tx(conn);
 
 			break;
 		}

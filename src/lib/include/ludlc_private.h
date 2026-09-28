@@ -136,7 +136,10 @@ struct ludlc_connection {
  * @brief Atomic flag bit indicating the connection is inited. */
 #define LUDLC_CONN_INITED_F		1
 /** @def LUDLC_CONN_DISC_AFTER_TX_F
- * @brief Request local disconnect once queued disconnect control packet drains. */
+ * @brief The unnumbered packet is the core's own DISCONNECT.
+ *
+ * Marks the packet as belonging to the core rather than a caller, so that
+ * draining it ends the session instead of confirming a buffer. */
 #define LUDLC_CONN_DISC_AFTER_TX_F	2
 /** @def LUDLC_CONN_U_IDLE_F
  * @brief Clear while an unnumbered packet waits to be sent.
@@ -200,41 +203,6 @@ struct ludlc_connection {
 	/** Current connection FSM state (see @ref ludlc_conn_state). */
 	uint8_t conn_state;
 };
-
-/**
- * @brief Checks whether currently prepared TX frame is disconnect-after-tx one.
- *
- * This helper is shared by platform TX threads to detect the canonical
- * empty control-channel disconnect packet that should trigger local disconnect
- * once the TX path drains.
- *
- * @param conn Connection owning flags/state.
- * @param hdr Pointer to currently prepared frame header.
- * @param hdr_size Header size in bytes.
- * @param payload_size Payload size in bytes.
- * @return true if this frame matches disconnect-after-tx marker.
- */
-static inline bool ludlc_is_disconnect_after_tx_packet(
-		struct ludlc_connection *conn,
-		const void *hdr,
-		ludlc_payload_size_t hdr_size,
-		ludlc_payload_size_t payload_size)
-{
-	if (!conn || !hdr) {
-		return false;
-	}
-
-	if (!ludlc_platform_test_bit(LUDLC_CONN_DISC_AFTER_TX_F, &conn->flags)) {
-		return false;
-	}
-
-	if (hdr_size != sizeof(ludlc_packet_hdr_t) || payload_size != 0) {
-		return false;
-	}
-
-	return ((const ludlc_packet_hdr_t *)hdr)->chan ==
-			CONFIG_LUDLC_CONTROL_CHANNEL;
-}
 
 /**
  * @brief Processes a received LuDLC packet from the transport layer.
