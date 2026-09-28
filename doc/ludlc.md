@@ -531,8 +531,9 @@ both ends of a link must choose the same one.
 The checksum belongs to the transport, not to the protocol engine. A link is
 told which one it runs through `struct ludlc_csum`: the running function, its
 seed, the residual it must leave behind, an optional final transform and its
-width in octets. A transport validating frames in hardware carries no checksum
-at all.
+width in octets. A link that needs none, its transport validating frames in
+hardware for instance, is opened with a NULL checksum: none is then computed,
+sent or checked.
 
 The checksum is transmitted **least significant octet first**, whatever the
 endianness of either peer. An algorithm that is defined the other way round

@@ -444,10 +444,10 @@ static inline bool ludlc_csum_on(const struct ludlc_csum *alg)
 	return alg != NULL;
 }
 
-/** @brief How many octets the checksum takes on the wire. */
+/** @brief How many octets the checksum takes on the wire, zero for none. */
 static inline uint8_t ludlc_csum_octets(const struct ludlc_csum *alg)
 {
-	return alg->octets;
+	return alg ? alg->octets : 0;
 }
 
 /** @brief Start the checksum of a frame about to be sent. */
@@ -497,7 +497,7 @@ static inline bool ludlc_csum_rx_ok(const struct ludlc_csum *alg,
  * shorter. The width comes from @p csum_alg, not from @ref ludlc_csum_t,
  * which is only the register the checksum is computed in.
  *
- * @param csum_alg Checksum this link runs.
+ * @param csum_alg Checksum this link runs, or NULL for none.
  * @return Smallest acceptable decoded frame size, in octets.
  */
 static inline size_t
@@ -515,7 +515,7 @@ ludlc_frame_min_sz(const struct ludlc_csum *csum_alg)
  * and the transports need it. The core works in payloads.
  *
  * @param conn The connection.
- * @param csum_alg Checksum this link runs.
+ * @param csum_alg Checksum this link runs, or NULL for none.
  * @return Octets, never zero.
  */
 static inline ludlc_frame_size_t

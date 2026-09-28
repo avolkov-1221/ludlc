@@ -29,10 +29,11 @@ typedef struct ludlc_platform_args {
 	unsigned long baudrate;
 	unsigned int  parity;
 	/**
-	 * @brief Checksum the link is to run. **Mandatory.**
+	 * @brief Checksum the link runs, or NULL for none.
 	 *
-	 * Both ends of the wire must agree on it. Borrowed, and must outlive
-	 * the connection.
+	 * Both ends of the wire must agree on it. With NULL no checksum is
+	 * computed, sent or checked. Borrowed, and must outlive the
+	 * connection.
 	 */
 	const struct ludlc_csum *csum;
 

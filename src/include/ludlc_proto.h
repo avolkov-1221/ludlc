@@ -336,8 +336,9 @@ int ludlc_default_get_timestamp(ludlc_timestamp_t *out_ts);
  *
  * The transport computes it, but both ends of a link must run the same one,
  * so it is a property of the network and is named in the platform arguments
- * the link is opened with. A transport that validates frames in hardware
- * needs none.
+ * the link is opened with. A link that needs none, its transport validating
+ * frames in hardware for instance, is opened with NULL in its place, and no
+ * checksum is then computed, sent or checked.
  *
  * All the core reads from it is @c octets, the width being what a frame gives
  * up to the checksum and therefore what separates a frame size from the

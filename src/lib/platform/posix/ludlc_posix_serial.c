@@ -794,11 +794,11 @@ int ludlc_serial_connection_create(const ludlc_platform_args_t *args,
 
 	cfg = *ludlc_args_conn_cfg(args);
 
-	/* The framing needs a checksum, so the caller must supply one, and it
-	 * must fit the register it is computed in.
+	/* A link may run no checksum, but one it runs must be complete and fit
+	 * the register it is computed in.
 	 */
-	if (!args->csum || !args->csum->csum ||
-	    !args->csum->octets || args->csum->octets > LUDLC_MAX_CSUM_SIZE)
+	if (args->csum && (!args->csum->csum || !args->csum->octets ||
+			   args->csum->octets > LUDLC_MAX_CSUM_SIZE))
 		return -EINVAL;
 
 	/*

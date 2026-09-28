@@ -28,10 +28,10 @@ struct ludlc_framing;
 typedef struct ludlc_platform_args {
 	const struct device *dev;
 	/**
-	 * @brief Checksum the link is to run. **Mandatory.**
+	 * @brief Checksum the link runs, or NULL for none.
 	 *
-	 * Both ends must agree on it. Borrowed, and must outlive the
-	 * connection.
+	 * Both ends must agree on it. With NULL no checksum is computed, sent
+	 * or checked. Borrowed, and must outlive the connection.
 	 */
 	const struct ludlc_csum *csum;
 

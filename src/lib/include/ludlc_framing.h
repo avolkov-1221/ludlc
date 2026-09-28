@@ -18,6 +18,9 @@
  * going to send anyway and the decoder takes the octets just received, so a
  * link carrying a megabyte costs no more than one carrying eight octets.
  *
+ * Every operation taking a @ref ludlc_csum accepts NULL, for a link that runs
+ * none: no checksum is then computed, sent or checked.
+ *
  * The state machines are in ludlc_hdlc.c, ludlc_cobs.c and ludlc_raw.c,
  * reached through @ref ludlc_framing_ops. A build carrying a single framing
  * calls them by name instead.
@@ -452,8 +455,8 @@ static inline bool ludlc_enc_busy(const struct ludlc_framing_state *fs)
  * room to spare is between frames and pads the rest itself.
  *
  * @param fs The link's framing state.
- * @param csum Checksum this link runs. It is computed as the frame goes
- * out, so every call of one frame must pass the same one.
+ * @param csum Checksum this link runs, or NULL for none. It is computed as
+ * the frame goes out, so every call of one frame must pass the same one.
  * @param dst Where to write.
  * @param cap Room in @p dst.
  * @return Octets written, zero when no packet is loaded.
@@ -486,7 +489,7 @@ static inline void ludlc_dec_init(struct ludlc_framing_state *fs)
  * type is more than a packet alone can be.
  *
  * @param fs The link's framing state.
- * @param csum Checksum this link runs. Seeded here.
+ * @param csum Checksum this link runs, or NULL for none. Seeded here.
  * @param buf Where to gather the packet.
  * @param cap Room in @p buf. For a framing without a delimiter (see
  * @ref ludlc_framing.needs_wire_len) it is also the frame length the

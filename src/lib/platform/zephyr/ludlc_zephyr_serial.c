@@ -601,12 +601,12 @@ int ludlc_serial_connection_create(const ludlc_platform_args_t *arg,
 
 	cfg = *ludlc_args_conn_cfg(arg);
 
-	/* The framing needs a checksum, so the caller must supply one, and it
-	 * must fit the register it is computed in.
+	/* A link may run no checksum, but one it runs must be complete and fit
+	 * the register it is computed in.
 	 */
-	if (!arg->csum || !arg->csum->csum ||
-	    !arg->csum->octets || arg->csum->octets > LUDLC_MAX_CSUM_SIZE) {
-		LUDLC_LOG_ERROR("No usable checksum for the link");
+	if (arg->csum && (!arg->csum->csum || !arg->csum->octets ||
+			  arg->csum->octets > LUDLC_MAX_CSUM_SIZE)) {
+		LUDLC_LOG_ERROR("Unusable checksum for the link");
 		return -EINVAL;
 	}
 
