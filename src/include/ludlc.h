@@ -90,12 +90,20 @@ struct ludlc_conn_cb {
  *
  * @param conn Pointer to the pre-allocated connection structure to
  * initialize.
- * @param cfg The link's clock, or NULL for @ref ludlc_conn_cfg_default.
- * Copied at init, so it need not outlive the call, but the clock it names
- * must, being kept.
+ * @param cfg The link's clock and protocol settings, or NULL for
+ * @ref ludlc_conn_cfg_default. Copied at init, so it need not outlive the
+ * call, but the clock it names must, being kept. The settings below the clock
+ * are read only where the build has @ref CONFIG_LUDLC_MULTI_CONN; with a
+ * single connection they are the CONFIG_* constants and the link keeps none
+ * of them.
  * @param cb Pointer to the user event callbacks.
  * @param user_ctx A user-defined context pointer passed to all callbacks.
- * @return 0 on success, or a negative error code on failure.
+ * @return 0 on success.
+ * @return -EINVAL if @p conn is NULL, or if @p cfg names a checksum, a frame,
+ * a window or a TTL this build cannot hold.
+ * @return -ENOMEM if the queue the window needs could not be allocated. A
+ * build with a single connection embeds that queue in the connection and
+ * never returns this.
  */
 int ludlc_connection_init(
 		struct ludlc_connection *conn,
@@ -113,6 +121,17 @@ int ludlc_connection_init(
 void ludlc_connection_cleanup(struct ludlc_connection *conn);
 
 /**
+ * @brief The largest payload @p conn carries, in octets.
+ *
+ * The frame size the link was opened with, less the header and this link's
+ * checksum, so a link on a narrow checksum - or on none - carries more
+ * payload. @ref ludlc_enqueue_data enforces this limit, so a caller with more
+ * to send has to split it.
+ */
+ludlc_payload_size_t ludlc_conn_max_payload(
+		const struct ludlc_connection *conn);
+
+/**
  * @brief Enqueues a data packet for transmission.
  *
  * Adds a data payload to the transmit queue. The core logic will
@@ -121,8 +140,8 @@ void ludlc_connection_cleanup(struct ludlc_connection *conn);
  * @param conn The connection to send data on.
  * @param dst_chan The destination channel for the packet.
  * @param buf Pointer to the payload data buffer.
- * @param size The size of the payload, up to
- * @ref CONFIG_LUDLC_MAX_PAYLOAD_SIZE.
+ * @param size The size of the payload, up to what this link carries. See
+ * @ref ludlc_conn_max_payload.
  * @param ttl How many times the packet may be sent. The first send counts,
  * and each NAK that reports this packet missing costs one more. A packet
  * re-transmitted after another packet's gap is not charged for it. A value
@@ -156,8 +175,8 @@ int ludlc_enqueue_data(struct ludlc_connection *conn,
  * @param buf Pointer to the payload data buffer. As for
  * @ref ludlc_enqueue_data, the buffer is referenced rather than copied and
  * must stay valid until the packet is confirmed.
- * @param size The size of the payload, up to
- * @ref CONFIG_LUDLC_MAX_PAYLOAD_SIZE.
+ * @param size The size of the payload, up to what this link carries. See
+ * @ref ludlc_conn_max_payload.
  * @return 0 on success.
  * @return -EINVAL if @p buf is NULL, if @p size is 0 or too large, or if
  * @p dst_chan is @ref CONFIG_LUDLC_CONTROL_CHANNEL, which is reserved for

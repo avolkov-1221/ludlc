@@ -123,9 +123,9 @@ struct ludlc_connection {
 	LUDLC_DECLARE_LOCK(lock);
 
 	/** Timer for sending keep-alive pings. */
-	ludlc_platform_timer_t	ping_timer;
+	ludlc_platform_timer_t		ping_timer;
 	/** Watchdog timer for connection timeout. */
-	ludlc_platform_timer_t	wd_timer;
+	ludlc_platform_timer_t		wd_timer;
 
 /** @def LUDLC_CONN_NO_NAK_F
  * @brief Clear when the peer is to be told a packet went missing.
@@ -165,22 +165,38 @@ struct ludlc_connection {
 	ludlc_platform_atomic_t		flags;
 
 	/**
-	 * @brief The link's clock, its own copy.
+	 * @brief Protocol settings for this link, its own copy.
 	 *
 	 * Filled at init from the caller's cfg, or from
-	 * @ref ludlc_conn_cfg_default, never borrowed: the caller's cfg may be
-	 * a compound literal that is out of scope by the time a packet is
-	 * received.
+	 * @ref ludlc_conn_cfg_default. Read through the ludlc_conn_*()
+	 * accessors below, never through a borrowed pointer: the caller's
+	 * cfg may be a compound literal that is out of scope by the time a
+	 * packet is sent. A single-connection build resolves most of these at
+	 * compile time, leaving only what a port still selects per link.
 	 */
 	struct ludlc_conn_cfg		cfg;
 
-	/** Connection statistics. */
-	LUDLC_DECLARE_STATS(stats);
+#if CONFIG_LUDLC_MULTI_CONN
+	/**
+	 * @brief The sliding window packet queue.
+	 *
+	 * @ref ludlc_conn_window() slots, allocated at init. A pointer rather
+	 * than an array because the window size is only known at runtime
+	 * here.
+	 */
+	struct packet_queue_item	*packets_q;
+#else
+	/**
+	 * @brief The sliding window packet queue.
+	 *
+	 * Sized for the build's largest window; this link uses only the first
+	 * @ref ludlc_conn_window() slots.
+	 */
+	struct packet_queue_item	packets_q[CONFIG_LUDLC_WINDOW];
+#endif
 
 	/** Pre-allocated header for control packets (PING, Handshake). */
-	ludlc_packet_hdr_t ctrl_packet;
-	/** @brief The sliding window packet queue. */
-	struct packet_queue_item packets_q[CONFIG_LUDLC_WINDOW];
+	ludlc_packet_hdr_t		ctrl_packet;
 
 	/** @brief The pending unnumbered packet, see the flags above.
 	 *
@@ -188,20 +204,23 @@ struct ludlc_connection {
 	 * Its payload is the caller's buffer, as for a queued packet. */
 	struct packet_queue_item	u_packet;
 
+	/** Connection statistics. */
+	LUDLC_DECLARE_STATS(stats);
+
 	/** @brief The platform specific extension. */
 	struct ludlc_platform_connection pconn;
 
 	/** ID of the last packet enqueued by the user. */
-	ludlc_id_t last_queued;
+	ludlc_id_t	last_queued;
 	/** ID of the last packet actually sent on the wire. */
-	ludlc_id_t last_sent;
+	ludlc_id_t	last_sent;
 	/** ID of the last packet acknowledged by the peer. */
-	ludlc_id_t last_ack;
+	ludlc_id_t	last_ack;
 	/** ID of the last valid, in-sequence packet received. */
-	ludlc_id_t last_received;
+	ludlc_id_t	last_received;
 
 	/** Current connection FSM state (see @ref ludlc_conn_state). */
-	uint8_t conn_state;
+	uint8_t		conn_state;
 };
 
 /**
@@ -233,6 +252,55 @@ int ludlc_get_packet_to_send(struct ludlc_connection *conn,
  */
 void ludlc_handle_disconnect(struct ludlc_connection *conn);
 
+/** @brief Restarts the watchdog for another period. */
+void ludlc_watchdog_rearm(struct ludlc_connection *conn);
+
+/**
+ * @name Per-connection protocol settings
+ *
+ * Macros rather than functions because with one connection per build there is
+ * nothing to read: each expands to the CONFIG_* constant it was built with,
+ * so a window mask becomes an immediate and the connection stores no settings
+ * at all. With @ref CONFIG_LUDLC_MULTI_CONN the same expressions become one
+ * load from the link's own copy.
+ *
+ * Each takes the connection, evaluates it once, and ignores it where the
+ * answer is a constant, which is what the cast to void is for.
+ * @{
+ */
+
+#if CONFIG_LUDLC_MULTI_CONN
+
+/** @brief Largest payload this link carries, in octets. Never zero. */
+#define ludlc_conn_payload_lim(conn)	((conn)->cfg.max_payload)
+/** @brief This link's window size, in packets (a power of two). */
+#define ludlc_conn_window(conn)		((unsigned int)(conn)->cfg.window)
+/** @brief Mask for indexing @c packets_q with this link's window. */
+#define ludlc_conn_window_mask(conn)	((unsigned int)(conn)->cfg.window - 1U)
+/** @brief Keepalive period for this link, in microseconds. */
+#define ludlc_conn_ping_time(conn)	((unsigned long)(conn)->cfg.ping_time)
+/** @brief TTL this link applies where the caller names none. */
+#define ludlc_conn_default_ttl(conn)	((uint8_t)(conn)->cfg.default_ttl)
+
+#else /* one connection: the settings are the build's constants */
+
+#define ludlc_conn_payload_lim(conn)					\
+	((void)(conn), (ludlc_payload_size_t)CONFIG_LUDLC_MAX_PAYLOAD_SIZE)
+#define ludlc_conn_window(conn)						\
+	((void)(conn), (unsigned int)CONFIG_LUDLC_WINDOW)
+#define ludlc_conn_window_mask(conn)					\
+	((void)(conn), (unsigned int)LUDLC_WINDOW_MASK)
+#define ludlc_conn_ping_time(conn)					\
+	((void)(conn), (unsigned long)CONFIG_LUDLC_PING_TIME)
+#define ludlc_conn_default_ttl(conn)					\
+	((void)(conn), (uint8_t)LUDLC_DEFAULT_TTL)
+
+#endif /* CONFIG_LUDLC_MULTI_CONN */
+
+/** @brief Watchdog period for this link: three keepalive periods. */
+#define ludlc_conn_wd_time(conn)	(3UL * ludlc_conn_ping_time(conn))
+/** @} */
+
 /** @brief The active-low flags, as they stand with nothing outstanding.
  *
  * Zeroed memory reads as all of them pending, so init and the disconnect
@@ -252,5 +320,27 @@ void ludlc_handle_disconnect(struct ludlc_connection *conn);
 #define LUDLC_CONN_SWEEP_CLEAR_MASK					\
 	((ludlc_platform_atomic_t)~(LUDLC_CONN_SWEEP_KEEP_MASK |	\
 				    LUDLC_CONN_IDLE_MASK))
+
+/**
+ * @brief The payload a cfg asks for, resolved as ludlc_connection_init() would.
+ *
+ * A port reports this size when the link fails to open, since there is then
+ * no connection to read it back from.
+ *
+ * @param cfg The cfg, or NULL for the build's own.
+ * @return Octets, never zero.
+ */
+static inline ludlc_payload_size_t
+ludlc_cfg_max_payload(const struct ludlc_conn_cfg *cfg)
+{
+#if CONFIG_LUDLC_MULTI_CONN
+	if (cfg && cfg->max_payload)
+		return cfg->max_payload;
+#else
+	(void)cfg;
+#endif
+
+	return (ludlc_payload_size_t)CONFIG_LUDLC_MAX_PAYLOAD_SIZE;
+}
 
 #endif /* __LUDLC_PRIVATE_H__ */

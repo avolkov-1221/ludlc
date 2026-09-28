@@ -83,6 +83,43 @@ static inline bool is_last_handshake_step(ludlc_id_t id)
 }
 
 /**
+ * @brief Allocates the connection's sliding window.
+ *
+ * Only a multi-connection build allocates, the window size being a runtime
+ * value there; a single-connection build has the array as a member.
+ *
+ * @param conn The connection, with its cfg already resolved.
+ * @return 0, or -ENOMEM.
+ */
+static int ludlc_conn_queue_alloc(struct ludlc_connection *conn)
+{
+#if CONFIG_LUDLC_MULTI_CONN
+	ludlc_id_t wnd = ludlc_conn_window(conn);
+
+	conn->packets_q =
+		ludlc_platform_alloc(wnd * sizeof(*conn->packets_q));
+	if (!conn->packets_q) {
+		return -ENOMEM;
+	}
+
+#else /* one link: the window is a member, sized by the build's constant */
+	(void)conn;
+#endif
+	return 0;
+}
+
+/** @brief Frees what @ref ludlc_conn_queue_alloc allocated. */
+static void ludlc_conn_queue_free(struct ludlc_connection *conn)
+{
+#if CONFIG_LUDLC_MULTI_CONN
+	ludlc_platform_free(conn->packets_q);
+	conn->packets_q = NULL;
+#else
+	(void)conn;
+#endif
+}
+
+/**
  * @brief Checks if the transmit (TX) queue is empty.
  *
  * @param conn Pointer to the connection structure.
@@ -90,8 +127,9 @@ static inline bool is_last_handshake_step(ludlc_id_t id)
  */
 static inline bool ludlc_tx_queue_empty(struct ludlc_connection *conn)
 {
-	if( (conn->last_queued - conn->last_ack) & LUDLC_ID_MASK )
+	if ((conn->last_queued - conn->last_ack) & LUDLC_ID_MASK) {
 		return false;
+	}
 	return true;
 }
 
@@ -105,8 +143,10 @@ static inline bool ludlc_tx_queue_empty(struct ludlc_connection *conn)
 static inline bool ludlc_tx_queue_full(struct ludlc_connection *conn)
 {
 	if (((conn->last_queued - conn->last_ack) & LUDLC_ID_MASK) >=
-			CONFIG_LUDLC_WINDOW)
+				ludlc_conn_window(conn)) {
 		return true;
+	}
+
 	return false;
 }
 
@@ -282,12 +322,13 @@ static void on_disconnect_lock(struct ludlc_connection *conn,
 	/* Iterate and fail all pending packets */
 	i = conn->last_ack;
 	for (; cnt; cnt--) {
+		struct packet_queue_item *it;
+
 		i = (i + 1) & LUDLC_ID_MASK;
-		conn->packets_q[i & LUDLC_WINDOW_MASK].status.result = EPIPE;
-		ludlc_on_confirm_lock(
-			conn,
-			&conn->packets_q[i & LUDLC_WINDOW_MASK],
-			cq, confirmed_num);
+		it = &conn->packets_q[i & ludlc_conn_window_mask(conn)];
+		it->status.result = EPIPE;
+
+		ludlc_on_confirm_lock(conn, it, cq, confirmed_num);
 	}
 
 	/* Reset queue pointers */
@@ -316,7 +357,7 @@ static void on_disconnect_lock(struct ludlc_connection *conn,
  * @ref LUDLC_MAX_TTL are clamped.
  * @return 0 on success.
  * @return -EINVAL if @p buf is NULL and @p size is not, or if @p size is
- * above @ref CONFIG_LUDLC_MAX_PAYLOAD_SIZE.
+ * above what this link carries.
  * @return -EAGAIN if the transmit queue is full.
  */
 int ludlc_enqueue_data(struct ludlc_connection *conn,
@@ -325,7 +366,7 @@ int ludlc_enqueue_data(struct ludlc_connection *conn,
 {
 	int ret;
 
-	if (!buf && size) {
+	if (!conn || (!buf && size)) {
 		return -EINVAL;
 	}
 
@@ -340,7 +381,7 @@ int ludlc_enqueue_data(struct ludlc_connection *conn,
 	/* A larger payload would be sent and then dropped by the receiver,
 	 * where it would look like a packet that never arrived.
 	 */
-	if (size > CONFIG_LUDLC_MAX_PAYLOAD_SIZE) {
+	if (size > ludlc_conn_payload_lim(conn)) {
 		return -EINVAL;
 	}
 
@@ -354,7 +395,7 @@ int ludlc_enqueue_data(struct ludlc_connection *conn,
 	if (!ludlc_tx_queue_full(conn)) {
 		/* Calculate next queue ID */
 		ludlc_id_t id = (conn->last_queued + 1) & LUDLC_ID_MASK;
-		ludlc_id_t q_idx = id & LUDLC_WINDOW_MASK;
+		ludlc_id_t q_idx = id & ludlc_conn_window_mask(conn);
 
 		/* Populate the queue slot */
 		conn->packets_q[q_idx].hdr.chan = dst_chan;
@@ -395,8 +436,8 @@ int ludlc_enqueue_data(struct ludlc_connection *conn,
  * until the packet is confirmed.
  * @param size The size of the payload data in bytes.
  * @return 0 on success.
- * @return -EINVAL if @p buf is NULL, or @p size is 0 or above
- * @ref CONFIG_LUDLC_MAX_PAYLOAD_SIZE.
+ * @return -EINVAL if @p buf is NULL, or @p size is 0 or above what this
+ * link carries.
  * @return -ENOTCONN if the connection is not established. An unnumbered
  * packet is sent immediately or not at all, so it does not wait for the link
  * to come up.
@@ -409,7 +450,7 @@ int ludlc_send_urgent_data(struct ludlc_connection *conn,
 	int ret;
 
 	if (!conn || !buf || !size ||
-	    size > CONFIG_LUDLC_MAX_PAYLOAD_SIZE) {
+	    size > ludlc_conn_payload_lim(conn)) {
 		return -EINVAL;
 	}
 
@@ -639,7 +680,7 @@ static int rx_handle_handshake(
 static int rx_handle_nak(struct ludlc_connection *conn, ludlc_id_t num_wait)
 {
 	ludlc_id_t id = (conn->last_ack + 1) & LUDLC_ID_MASK;
-	ludlc_id_t q_idx = id & LUDLC_WINDOW_MASK;
+	ludlc_id_t q_idx = id & ludlc_conn_window_mask(conn);
 
 	/* The missing packet is the first unacknowledged one */
 	if (num_wait && conn->packets_q[q_idx].ttl) {
@@ -742,9 +783,7 @@ static int rx_handle_packet(
 	}
 
 	/* Any valid packet (even ping) resets the connection watchdog */
-	ludlc_platform_start_timer(&conn->wd_timer,
-			3 * CONFIG_LUDLC_PING_TIME,
-			0);
+	ludlc_watchdog_rearm(conn);
 
 	/* 1. check the correctness of the incoming packet's sequence. */
 	next_rcvd_id = (conn->last_received + 1) & LUDLC_ID_MASK;
@@ -788,7 +827,7 @@ static int rx_handle_packet(
 		for (; num_acked; num_acked--) {
 			uint8_t q_idx;
 			conn->last_ack = (conn->last_ack + 1) & LUDLC_ID_MASK;
-			q_idx = conn->last_ack & LUDLC_WINDOW_MASK;
+			q_idx = conn->last_ack & ludlc_conn_window_mask(conn);
 			conn->packets_q[q_idx].status.result = 0;
 			ludlc_on_confirm_lock(conn, &conn->packets_q[q_idx],
 					confirmed_q, confirmed_num);
@@ -906,7 +945,7 @@ static bool ludlc_tx_drop_expired(struct ludlc_connection *conn,
 		struct packet_queue_item *expired)
 {
 	ludlc_id_t id = (conn->last_ack + 1) & LUDLC_ID_MASK;
-	ludlc_id_t q_idx = id & LUDLC_WINDOW_MASK;
+	ludlc_id_t q_idx = id & ludlc_conn_window_mask(conn);
 	ludlc_id_t num;
 
 	/* Nothing outstanding, or the leading packet still has attempts left.
@@ -924,8 +963,8 @@ static bool ludlc_tx_drop_expired(struct ludlc_connection *conn,
 	for (; num; num--) {
 		ludlc_id_t next = (id + 1) & LUDLC_ID_MASK;
 
-		conn->packets_q[id & LUDLC_WINDOW_MASK] =
-			conn->packets_q[next & LUDLC_WINDOW_MASK];
+		conn->packets_q[id & ludlc_conn_window_mask(conn)] =
+			conn->packets_q[next & ludlc_conn_window_mask(conn)];
 
 		id = next;
 	}
@@ -1098,7 +1137,7 @@ int ludlc_get_packet_to_send(struct ludlc_connection *conn,
 		}
 
 		/* send packet from the queue */
-		q_idx = id & LUDLC_WINDOW_MASK;
+		q_idx = id & ludlc_conn_window_mask(conn);
 
 		/* Fill in the dynamic header fields */
 		conn->packets_q[q_idx].hdr.id.tx_id = id;
@@ -1232,6 +1271,23 @@ void ludlc_handle_disconnect(struct ludlc_connection *conn)
 }
 
 /**
+ * @brief Restarts the watchdog for another period.
+ *
+ * An arriving packet normally re-arms the watchdog, which is enough for a
+ * running link. It is not enough for one whose timers were stopped, such as
+ * across a suspend: the peer may be gone by the time this end resumes, and
+ * with nothing arriving there would be nothing to notice it.
+ *
+ * @param conn The connection, or NULL.
+ */
+void ludlc_watchdog_rearm(struct ludlc_connection *conn)
+{
+	if (conn)
+		ludlc_platform_start_timer(&conn->wd_timer,
+					   ludlc_conn_wd_time(conn), 0);
+}
+
+/**
  * @brief Cleans up a connection structure.
  *
  * @param conn Pointer to the connection structure to be zeroed.
@@ -1252,6 +1308,8 @@ void ludlc_connection_cleanup(struct ludlc_connection *conn)
 	ludlc_platform_destroy_timer(&conn->ping_timer);
 
 	ludlc_platform_conn_destroy(conn);
+
+	ludlc_conn_queue_free(conn);
 }
 
 /**
@@ -1262,16 +1320,20 @@ void ludlc_connection_cleanup(struct ludlc_connection *conn)
  * timers, and binding the protocol cfg.
  *
  * @param conn Pointer to the connection structure to initialize.
- * @param cfg What to open the link with: its clock, or NULL for
- * @ref ludlc_conn_cfg_default. Copied here, so a compound literal will do;
- * only the clock pointer is kept and must outlive the connection.
+ * @param cfg What to open the link with: its clock and its protocol settings,
+ * or NULL for @ref ludlc_conn_cfg_default. Copied here, so a compound literal
+ * will do; only the clock pointer is kept and must outlive the connection.
+ * The settings are read only in a @ref CONFIG_LUDLC_MULTI_CONN build, being
+ * the CONFIG_* constants otherwise.
  * @param cb Pointer to the user-facing event callbacks (e.g., on_connect,
  * on_recv).
  * @param user_ctx A user-defined context pointer that will be passed back
  * in all callbacks.
  *
  * @return 0 on success.
- * @return -EINVAL if `conn` is NULL.
+ * @return -EINVAL if `conn` is NULL, or if `cfg` names a payload, a window or
+ * a TTL this build cannot hold.
+ * @return -ENOMEM if the window could not be allocated.
  */
 int ludlc_connection_init(struct ludlc_connection *conn,
 		const struct ludlc_conn_cfg *cfg,
@@ -1282,6 +1344,8 @@ int ludlc_connection_init(struct ludlc_connection *conn,
 
 	if (!conn)
 		return -EINVAL;
+
+	LUDLC_LOG_DEBUG("Start connection initialization");
 
 	if (!cfg)
 		cfg = &ludlc_conn_cfg_default;
@@ -1296,6 +1360,43 @@ int ludlc_connection_init(struct ludlc_connection *conn,
 		cfg->get_timestamp ? cfg->get_timestamp
 			   : ludlc_default_get_timestamp;
 
+#if CONFIG_LUDLC_MULTI_CONN
+
+	conn->cfg.max_payload = cfg->max_payload ? cfg->max_payload
+			   : (ludlc_payload_size_t)
+			     CONFIG_LUDLC_MAX_PAYLOAD_SIZE;
+
+	conn->cfg.window = cfg->window ? cfg->window
+			   : (ludlc_id_t)CONFIG_LUDLC_WINDOW;
+
+	conn->cfg.ping_time = cfg->ping_time ? cfg->ping_time
+			   : (unsigned int)CONFIG_LUDLC_PING_TIME;
+
+	conn->cfg.default_ttl = cfg->default_ttl ? cfg->default_ttl
+			   : (uint8_t)LUDLC_DEFAULT_TTL;
+
+	/*
+	 * The transport derives this from the frame its link carries. A frame
+	 * the build cannot hold gives a payload it cannot hold either.
+	 */
+	if (conn->cfg.max_payload > CONFIG_LUDLC_MAX_PAYLOAD_SIZE)
+		return -EINVAL;
+
+	/* A window the IDs cannot tell apart, or cannot be indexed by. */
+	if (conn->cfg.window > LUDLC_MAX_TX_ID / 2 ||
+	    (conn->cfg.window & (conn->cfg.window - 1U)) != 0)
+		return -EINVAL;
+
+	if (conn->cfg.default_ttl >= LUDLC_MAX_TTL)
+		return -EINVAL;
+
+#endif
+	ret = ludlc_conn_queue_alloc(conn);
+	if (ret) {
+		LUDLC_LOG_ERROR("ludlc_conn_queue_alloc has failed (%d)", -ret);
+		return ret;
+	}
+
 	conn->cb = cb;
 	conn->user_ctx = user_ctx;
 	conn->ctrl_packet.chan = CONFIG_LUDLC_CONTROL_CHANNEL;
@@ -1305,23 +1406,39 @@ int ludlc_connection_init(struct ludlc_connection *conn,
 
 	ret = ludlc_platform_conn_init(conn);
 	if (ret)
-		return ret;
+		goto fail_platform_init;
 
 	/* Initialize platform-specific timers */
 	ret = ludlc_platform_init_timer(conn, &conn->ping_timer,
 			ludlc_ping_timer);
 	if (!ret) {
 		ret = ludlc_platform_init_timer(conn, &conn->wd_timer,
-				ludlc_wd_timer);
+						ludlc_wd_timer);
 		if (!ret) {
 			ludlc_platform_set_bit(LUDLC_CONN_INITED_F,
-					&conn->flags);
+				&conn->flags);
+			LUDLC_LOG_DEBUG("The connection initialized");
 			return 0;
 		}
 		ludlc_platform_destroy_timer(&conn->ping_timer);
 	}
 
+fail_platform_init:
+
+	ludlc_conn_queue_free(conn);
+
+	LUDLC_LOG_ERROR("Connection initialization has failed (%d)", -ret);
+
 	return ret;
 }
 
 const struct ludlc_conn_cfg ludlc_conn_cfg_default = LUDLC_CONN_CFG_DEFAULT;
+
+ludlc_payload_size_t ludlc_conn_max_payload(const struct ludlc_connection *conn)
+{
+	if (!conn) {
+		return 0;
+	}
+
+	return ludlc_conn_payload_lim(conn);
+}

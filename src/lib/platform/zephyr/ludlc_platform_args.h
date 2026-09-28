@@ -35,9 +35,12 @@ typedef struct ludlc_platform_args {
 	const struct ludlc_csum *csum;
 
 	/**
-	 * @brief What to open the link with: its clock.
+	 * @brief What to open the link with: its clock and its settings.
 	 *
-	 * Copied into the connection at create.
+	 * Copied into the connection at create. Without
+	 * @ref CONFIG_LUDLC_MULTI_CONN only the clock is set here, the rest
+	 * coming from the CONFIG_* settings; the checksum is taken from
+	 * @c csum above rather than from this field.
 	 */
 	struct ludlc_conn_cfg cfg;
 } ludlc_platform_args_t;

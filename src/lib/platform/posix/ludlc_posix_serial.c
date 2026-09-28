@@ -651,8 +651,8 @@ static void *ludlc_tx_serial_thread(void *arg)
 
 			/* Postpone the ping timer for one PING_TIME later */
 			ludlc_platform_start_timer(&sconn->conn.ping_timer,
-					CONFIG_LUDLC_PING_TIME,
-					CONFIG_LUDLC_PING_TIME);
+					ludlc_conn_ping_time(&sconn->conn),
+					ludlc_conn_ping_time(&sconn->conn));
 
 			if (!is_tx_empty) {
 				/* We are sending data, demand to send more */
@@ -775,10 +775,13 @@ int ludlc_serial_connection_create(const ludlc_platform_args_t *args,
 		const struct ludlc_conn_cb *cb)
 {
 	struct ludlc_serial_connection *sconn = NULL;
+	struct ludlc_conn_cfg cfg;
 	int ret;
 
 	if (!args || !conn)
 		return -EINVAL;
+
+	cfg = *ludlc_args_conn_cfg(args);
 
 	/* The frames carry a checksum, so the caller must supply one, and it
 	 * must fit the register it is computed in.
@@ -804,9 +807,11 @@ int ludlc_serial_connection_create(const ludlc_platform_args_t *args,
 	LUDLC_RING_BUF_INIT(&sconn->tx_fifo, sconn->tx_buf, TX_BUF_SIZE);
 
 	/* Initialize the core LuDLC connection */
-	ret = ludlc_connection_init(&sconn->conn, ludlc_args_conn_cfg(args), cb,
-				    sconn);
+	ret = ludlc_connection_init(&sconn->conn, &cfg, cb, sconn);
 	if (ret) {
+		LUDLC_LOG_ERROR("Can't open a link of %u payload octets: %d",
+				(unsigned int)ludlc_cfg_max_payload(&cfg),
+				ret);
 		goto err;
 	}
 

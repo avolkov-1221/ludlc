@@ -22,10 +22,11 @@
 
 /**
  * @def CONFIG_LUDLC_WINDOW
- * @brief Defines the maximal size of the packets waiting queue (sliding window).
+ * @brief Largest sliding-window size a connection may use.
  *
- * This value **must** be a power of 2.
- * Defaults to 4 if not specified.
+ * Must be a power of 2. Defaults to 4. Each connection's queue is this many
+ * slots; with @ref CONFIG_LUDLC_MULTI_CONN a link may run a smaller window
+ * via @ref ludlc_conn_cfg.
  */
 #ifndef CONFIG_LUDLC_WINDOW
 #define CONFIG_LUDLC_WINDOW	4
@@ -36,12 +37,23 @@
 
 /**
  * @def LUDLC_WINDOW_MASK
- * @brief A bitmask derived from @ref CONFIG_LUDLC_WINDOW.
+ * @brief Bitmask for the build's largest window (@ref CONFIG_LUDLC_WINDOW).
  *
- * Used to wrap around packet ID numbers to get an index into the
- * `packets_q` array.
+ * Prefer @ref ludlc_conn_window_mask() for indexing a connection's queue.
  */
 #define LUDLC_WINDOW_MASK	((CONFIG_LUDLC_WINDOW) - 1U)
+
+/**
+ * @def CONFIG_LUDLC_MULTI_CONN
+ * @brief Several links, each with its own @ref ludlc_conn_cfg.
+ *
+ * When unset, every connection runs @ref LUDLC_CONN_CFG_DEFAULT (the
+ * CONFIG_* values). When set, each link takes a const cfg from the platform
+ * args: window, frame size, ping period and default TTL.
+ */
+#ifndef CONFIG_LUDLC_MULTI_CONN
+#define CONFIG_LUDLC_MULTI_CONN	0
+#endif
 
 /**
  * @def CONFIG_LUDLC_ID_BITS
@@ -180,7 +192,8 @@ typedef uint32_t ludlc_payload_size_t;
  *
  * The payload ceiling is the build's and the framing around it the link's, so
  * a link on a narrow checksum - or on none - carries a shorter frame for the
- * same payload rather than more payload.
+ * same payload rather than more payload. A link asks for its own frame size
+ * when it is opened, up to this.
  */
 #define LUDLC_MAX_FRAME_SIZE(csum_oct)					\
 	LUDLC_FRAME_SIZE(CONFIG_LUDLC_MAX_PAYLOAD_SIZE, csum_oct)
@@ -340,13 +353,22 @@ struct ludlc_csum {
 
 /**
  * @struct ludlc_conn_cfg
- * @brief Everything a link is opened with.
+ * @brief Everything a link is opened with: its clock and its settings.
  *
  * Read at @ref ludlc_connection_init and copied, never borrowed, so a
- * compound literal will do. A field left at zero takes the build's default;
+ * compound literal will do. Constant for the life of the link, and both ends
+ * must agree on @c max_payload and @c window. A field left at zero takes the
+ * build's default, so a cfg naming one setting need not name the rest;
  * @ref LUDLC_CONN_CFG_DEFAULT spells those defaults out.
  *
- * The checksum is not here. It belongs to the transport.
+ * The checksum is not here. It belongs to the transport, which subtracts its
+ * width to get @c max_payload. The clock is present whatever the build. The
+ * settings below it exist only where the build has
+ * @ref CONFIG_LUDLC_MULTI_CONN; with one connection each is the CONFIG_*
+ * constant the build was made with, the core reads them as immediates and the
+ * connection stores none of them. Naming one of them then does not compile.
+ * That is deliberate: a build that cannot hold a payload size must not appear
+ * to accept one.
  */
 struct ludlc_conn_cfg {
 	/**
@@ -357,17 +379,61 @@ struct ludlc_conn_cfg {
 	 * connection, which keeps it.
 	 */
 	ludlc_get_timestamp_t get_timestamp;
+
+#if CONFIG_LUDLC_MULTI_CONN
+	/**
+	 * @brief Largest payload this link carries, in octets.
+	 *
+	 * The transport computes it: the frame it carries, less the header and
+	 * its checksum. Zero asks for @ref CONFIG_LUDLC_MAX_PAYLOAD_SIZE.
+	 */
+	ludlc_payload_size_t max_payload;
+
+	/**
+	 * @brief Keepalive ping period, in microseconds.
+	 *
+	 * The watchdog is three times this. Zero asks for
+	 * @ref CONFIG_LUDLC_PING_TIME.
+	 */
+	unsigned int ping_time;
+
+	/**
+	 * @brief Sliding-window size for in-flight packets.
+	 *
+	 * Must be power of two. Zero asks for @ref CONFIG_LUDLC_WINDOW.
+	 */
+	ludlc_id_t window;
+
+	/**
+	 * @brief Default transmit retry budget when the caller passes 0 for TTL
+	 * in the sense of "use the link default". See enqueue. Clamped to
+	 * @ref LUDLC_MAX_TTL by the core when used. Zero asks for
+	 * @ref LUDLC_DEFAULT_TTL.
+	 */
+	uint8_t default_ttl;
+#endif /* CONFIG_LUDLC_MULTI_CONN */
 };
 
 /**
  * @def LUDLC_CONN_CFG_DEFAULT
  * @brief Initializer from the CONFIG_* defaults.
  *
- * A zero clock asks for the platform's own.
+ * A zero @c max_payload asks the core for the largest payload this build
+ * holds, and a zero clock for the platform's own. With one connection the
+ * clock is the only setting a caller may name.
  */
+#if CONFIG_LUDLC_MULTI_CONN
+#define LUDLC_CONN_CFG_DEFAULT {					\
+	.max_payload = 0,						\
+	.window = CONFIG_LUDLC_WINDOW,					\
+	.ping_time = CONFIG_LUDLC_PING_TIME,				\
+	.default_ttl = LUDLC_DEFAULT_TTL,				\
+}
+#else
 #define LUDLC_CONN_CFG_DEFAULT {					\
 	.get_timestamp = NULL,						\
 }
+#endif
 
 /** @brief Shared instance of @ref LUDLC_CONN_CFG_DEFAULT. */
 extern const struct ludlc_conn_cfg ludlc_conn_cfg_default;

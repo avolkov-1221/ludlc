@@ -26,7 +26,20 @@ config LUDLC_WINDOW
 	range 1 256
 	default 4
 	help
-	  Sliding-window size for in-flight packets. Must be a power of two.
+	  Largest sliding-window size a connection may use. Must be a power
+	  of two. With LUDLC_MULTI_CONN a link may run a smaller window via
+	  its ludlc_conn_cfg.
+
+config LUDLC_MULTI_CONN
+	bool "Per-connection protocol settings"
+	default n
+	help
+	  When disabled, every link runs LUDLC_CONN_CFG_DEFAULT (the CONFIG_*
+	  values for window, payload size, ping period and default TTL).
+
+	  When enabled, each link carries a ludlc_conn_cfg in the platform
+	  args: window (up to LUDLC_WINDOW), max_payload, ping_time and
+	  default_ttl may differ per connection.
 
 config LUDLC_ID_BITS
 	int "Packet ID width (bits)"
