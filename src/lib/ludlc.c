@@ -1028,16 +1028,17 @@ int ludlc_connection_init(struct ludlc_connection *conn,
 	conn->ctrl_packet.chan = CONFIG_LUDLC_CONTROL_CHANNEL;
 	conn->conn_state = LUDLC_STATE_DISCONNECTED;
 
-	ludlc_platform_conn_init(conn);
+	ret = ludlc_platform_conn_init(conn);
+	if (ret)
+		return ret;
 
 	/* Initialize platform-specific timers */
 	ret = ludlc_platform_init_timer(conn, &conn->ping_timer,
 			ludlc_ping_timer);
-
 	if (!ret) {
 		ret = ludlc_platform_init_timer(conn, &conn->wd_timer,
 				ludlc_wd_timer);
-		if(!ret) {
+		if (!ret) {
 			ludlc_platform_set_bit(LUDLC_CONN_INITED_F,
 					&conn->flags);
 			return 0;
