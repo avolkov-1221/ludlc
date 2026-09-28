@@ -128,16 +128,25 @@ static inline void free_serial_connection(struct ludlc_serial_connection *conn)
 #endif /* LUDLC_STATIC_CONN */
 
 /**
+ * @def LUDLC_BAUD_UNSUPPORTED
+ * @brief What @ref baud2speed returns for a rate this platform lacks.
+ *
+ * @c speed_t is unsigned, so the sentinel is named rather than compared
+ * against a bare -1.
+ */
+#define LUDLC_BAUD_UNSUPPORTED	((speed_t)-1)
+
+/**
  * @brief Converts a numeric baud rate to a POSIX `speed_t` constant.
  * (Borrowed from minicom).
  *
  * @param baud The numeric baud rate (e.g., 9600, 115200).
- * @return The corresponding `speed_t` constant (e.g., `B9600`), or -1
- * if the baud rate is not supported.
+ * @return The corresponding `speed_t` constant (e.g., `B9600`), or
+ * @ref LUDLC_BAUD_UNSUPPORTED if this platform has no constant for it.
  */
-speed_t baud2speed(unsigned long baud)
+static speed_t baud2speed(unsigned long baud)
 {
-	speed_t spd = -1;
+	speed_t spd = LUDLC_BAUD_UNSUPPORTED;
 
 	switch (baud / 100) {
 	case 0:
@@ -297,11 +306,13 @@ static int set_interface_attribs(int fd, unsigned long baud, int parity)
 	}
 
 	speed = baud2speed(baud);
-
-	if (speed != -1) {
-		cfsetospeed(&tty, speed);
-		cfsetispeed(&tty, speed);
+	if (speed == LUDLC_BAUD_UNSUPPORTED) {
+		LUDLC_LOG_ERROR("unsupported baud rate %lu", baud);
+		return -EINVAL;
 	}
+
+	cfsetospeed(&tty, speed);
+	cfsetispeed(&tty, speed);
 
 	/* 8-bit chars */
 	tty.c_cflag = (tty.c_cflag & ~CSIZE) | CS8;
@@ -502,7 +513,7 @@ static void *ludlc_rx_serial_thread(void *arg)
 				state = rx_idle;
 		}
 	}
-out:
+
 	LUDLC_LOG_DEBUG("Exit from serial RX thread");
 
 	return NULL;
@@ -702,7 +713,6 @@ void ludlc_serial_connection_destroy(struct ludlc_connection *conn)
 {
 	struct ludlc_serial_connection *sconn =
 		container_of(conn, struct ludlc_serial_connection, conn);
-	struct ludlc_platform_connection *pconn = &conn->pconn;
 
 	/* Send a DISCONNECT before going, so that the peer need not wait out
 	 * its watchdog. The core takes the link down once the frame has
@@ -776,6 +786,8 @@ int ludlc_serial_connection_create(const ludlc_platform_args_t *args,
 	if (!args || !conn)
 		return -EINVAL;
 
+	*conn = NULL;
+
 	cfg = *ludlc_args_conn_cfg(args);
 
 	/* The frames carry a checksum, so the caller must supply one, and it
@@ -801,7 +813,6 @@ int ludlc_serial_connection_create(const ludlc_platform_args_t *args,
 
 	LUDLC_RING_BUF_INIT(&sconn->tx_fifo, sconn->tx_buf, TX_BUF_SIZE);
 
-	/* Initialize the core LuDLC connection */
 	ret = ludlc_connection_init(&sconn->conn, &cfg, cb, sconn);
 	if (ret) {
 		LUDLC_LOG_ERROR("Can't open a link of %u payload octets: %d",
@@ -836,7 +847,8 @@ int ludlc_serial_connection_create(const ludlc_platform_args_t *args,
 	}
 
 err:
-	/* Cleanup on failure */
+	/* Set above, before ludlc_connect() had its say. */
+	*conn = NULL;
 	ludlc_serial_connection_destroy(&sconn->conn);
 	return ret;
 }
@@ -863,9 +875,10 @@ static const struct ludlc_csum ludlc_crc16_ccitt_pr0 = {
 };
 
 /**
- * @brief Fills a platform arguments structure with default serial settings.
+ * @brief 115200 baud, and this build's default framing and checksum.
  *
- * @param args The structure to fill.
+ * No port: there is no console UART to assume on a host, so the caller names
+ * the device it wants before opening the link.
  */
 void ludlc_default_serial_platform_args(ludlc_platform_args_t *args)
 {
@@ -874,6 +887,7 @@ void ludlc_default_serial_platform_args(ludlc_platform_args_t *args)
 		.csum = &ludlc_crc16_ccitt_pr0,
 	};
 
-	if(args)
+	if (args) {
 		*args = def_args;
+	}
 }
