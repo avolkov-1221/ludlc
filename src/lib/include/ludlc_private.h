@@ -438,6 +438,89 @@ void ludlc_watchdog_rearm(struct ludlc_connection *conn);
 
 /** @} */
 
+/**
+ * @def CONFIG_LUDLC_SINGLE_CSUM
+ * @brief The build runs one checksum, which the port computes inline.
+ *
+ * The checksum counterpart of a build carrying a single framing, which calls
+ * it by name. The escaping framing and the frame sizes below then only check
+ * the struct ludlc_csum they are passed for NULL, a link running none, and
+ * otherwise call the port's hooks, which on a target with a CRC unit can
+ * become register accesses. Each direction has its own:
+ * ludlc_platform_csum_tx_init(), ludlc_platform_csum_tx() and
+ * ludlc_platform_csum_tx_final() on transmit, ludlc_platform_csum_rx_init(),
+ * ludlc_platform_csum_rx() and ludlc_platform_csum_rx_ok() on receive, and
+ * LUDLC_PLATFORM_CSUM_OCTETS for the width. The framing never reads the value
+ * it passes between them, so one direction may own a CRC unit and keep its
+ * state there while the other computes in software.
+ */
+#ifndef CONFIG_LUDLC_SINGLE_CSUM
+#define CONFIG_LUDLC_SINGLE_CSUM	0
+#endif
+
+#if CONFIG_LUDLC_SINGLE_CSUM
+#if !defined(LUDLC_PLATFORM_CSUM_OCTETS)
+#error "CONFIG_LUDLC_SINGLE_CSUM: the port provides no inline checksum"
+#endif
+
+/** @brief Whether @p alg runs at all. NULL means no checksum. */
+static inline bool ludlc_csum_on(const struct ludlc_csum *alg)
+{
+	return alg != NULL;
+}
+
+/** @brief How many octets the checksum takes on the wire, zero for none. */
+static inline uint8_t ludlc_csum_octets(const struct ludlc_csum *alg)
+{
+	return alg ? LUDLC_PLATFORM_CSUM_OCTETS : 0;
+}
+
+/** @brief Start the checksum of a frame about to be sent. */
+static inline ludlc_csum_t ludlc_csum_tx_init(const struct ludlc_csum *alg)
+{
+	(void)alg;
+	return ludlc_platform_csum_tx_init();
+}
+
+/** @brief Add @p data, an octet being sent, to @p csum. */
+static inline ludlc_csum_t ludlc_csum_tx(const struct ludlc_csum *alg,
+					 ludlc_csum_t csum, uint8_t data)
+{
+	(void)alg;
+	return ludlc_platform_csum_tx(csum, data);
+}
+
+/** @brief The checksum of the frame sent, as it goes on the wire. */
+static inline ludlc_csum_t ludlc_csum_tx_final(const struct ludlc_csum *alg,
+					       ludlc_csum_t csum)
+{
+	(void)alg;
+	return ludlc_platform_csum_tx_final(csum);
+}
+
+/** @brief Start the checksum of a frame about to be received. */
+static inline ludlc_csum_t ludlc_csum_rx_init(const struct ludlc_csum *alg)
+{
+	(void)alg;
+	return ludlc_platform_csum_rx_init();
+}
+
+/** @brief Add @p data, an octet received, to @p csum. */
+static inline ludlc_csum_t ludlc_csum_rx(const struct ludlc_csum *alg,
+					 ludlc_csum_t csum, uint8_t data)
+{
+	(void)alg;
+	return ludlc_platform_csum_rx(csum, data);
+}
+
+/** @brief Whether the frame received, its checksum included, is intact. */
+static inline bool ludlc_csum_rx_ok(const struct ludlc_csum *alg,
+				    ludlc_csum_t csum)
+{
+	(void)alg;
+	return ludlc_platform_csum_rx_ok(csum);
+}
+#else
 /** @brief Whether @p alg runs at all. NULL means no checksum. */
 static inline bool ludlc_csum_on(const struct ludlc_csum *alg)
 {
@@ -489,6 +572,7 @@ static inline bool ludlc_csum_rx_ok(const struct ludlc_csum *alg,
 {
 	return csum == alg->verify;
 }
+#endif
 
 /**
  * @brief Minimum useful frame: a PING packet plus the checksum.

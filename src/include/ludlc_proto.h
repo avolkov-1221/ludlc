@@ -342,7 +342,9 @@ int ludlc_default_get_timestamp(ludlc_timestamp_t *out_ts);
  *
  * All the core reads from it is @c octets, the width being what a frame gives
  * up to the checksum and therefore what separates a frame size from the
- * payload that fits in it. Must outlive the connection opened on it.
+ * payload that fits in it. Must outlive the connection opened on it. A build
+ * running a single checksum computes it inline instead, and the escaping
+ * framing does not read this; see CONFIG_LUDLC_SINGLE_CSUM.
  */
 struct ludlc_csum {
 	const char *name;

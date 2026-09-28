@@ -113,3 +113,11 @@ A port configures the build with `-DCONFIG_LUDLC_*`. The defaults, and the
 type widths they select, are in `ludlc_proto.h` and `ludlc_framing.h`. Both
 ends of a link must agree on the payload ceiling, the window and the framing,
 so those cannot be chosen freely.
+
+A port whose build runs one checksum can have the escaping framing compute it
+inline. It sets `-DCONFIG_LUDLC_SINGLE_CSUM=1`, and its `ludlc_platform.h`
+provides `LUDLC_PLATFORM_CSUM_OCTETS` and three hooks for each direction,
+`ludlc_platform_csum_tx_init()`, `_tx()` and `_tx_final()` for transmit and
+`ludlc_platform_csum_rx_init()`, `_rx()` and `_rx_ok()` for receive. Each
+direction may use its own backend, a CRC unit on one side and software on the
+other. `ludlc_private.h` describes the contract.
