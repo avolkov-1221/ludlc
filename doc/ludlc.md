@@ -54,9 +54,9 @@ wait for an ACK. This prevents overruns of the receiver's link buffers.
 
 **TTL (Time-To-Live)**
 
-A counter on an unconfirmed packet. Each time a NAK is received
-(indicating a re-transmission is needed), the TTL is decremented.
-If it reaches zero, the packet is dropped.
+A counter on an unconfirmed packet. Each time a NAK reports this
+particular packet missing, its TTL is decremented. If it reaches
+zero, the packet is dropped.
 
 **SOF (Start of Frame)**
 
@@ -360,12 +360,23 @@ belongs to the link and bounds only the packets in flight on it.
   * **NAK Reception**: When a sender receives a NAK:
     1.  It resets its internal send counter back to its last
         confirmed packet.
-    2.  It decrements a Time-To-Live (TTL) counter for all unconfirmed
-        packets.
-    3.  If a packet's TTL reaches 0, it is dropped and reported as
-        a failure to the user.
+    2.  It decrements the Time-To-Live (TTL) counter of the packet the
+        NAK identifies, which is the one after the Acknowledgment
+        Number, as that is the packet that failed to arrive. No other
+        TTL is decremented. The remaining packets are re-transmitted
+        because the receiver discards everything after a gap, not
+        because they were lost.
+    3.  If that packet's TTL reaches 0, it is dropped and reported as
+        a failure to the user. As a NAK identifies a single packet, at
+        most one packet is dropped per NAK, and the remaining packets
+        move up to fill the gap.
     4.  The sender begins re-transmitting all surviving unconfirmed
         packets in its window.
+
+A packet that is repeatedly lost is decremented by each NAK that reports
+it, so it still expires in the end, whilst a packet delayed by another
+packet's gap keeps its full budget. A link that has stopped carrying
+anything at all is handled by the watchdog rather than by TTL.
 
 #### Unnumbered Packets
 

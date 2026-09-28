@@ -123,10 +123,10 @@ void ludlc_connection_cleanup(struct ludlc_connection *conn);
  * @param buf Pointer to the payload data buffer.
  * @param size The size of the payload, up to
  * @ref CONFIG_LUDLC_MAX_PAYLOAD_SIZE.
- * @param ttl If greater than zero and less than MAX_TTL, the stack uses the
- * default retry mechanism, and the packet will be resent up to ttl times.
- * If 0, then this is a “one-shot” packet and will be sent just once.
- * If ttl is MAX_TTL, then the packet will be resent indefinitely.
+ * @param ttl How many times the packet may be sent. The first send counts,
+ * and each NAK that reports this packet missing costs one more. A packet
+ * re-transmitted after another packet's gap is not charged for it. A value
+ * of 0 means a single attempt. Values above @ref LUDLC_MAX_TTL are clamped.
  * @return 0 on success.
  * @return -EINVAL if @p buf is NULL and @p size is not, or if @p size is too
  * large.

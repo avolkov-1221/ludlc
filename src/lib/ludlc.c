@@ -288,8 +288,10 @@ static void on_disconnect_lock(struct ludlc_connection *conn,
  * @param dst_chan The destination channel for the packet.
  * @param buf Pointer to the payload data buffer.
  * @param size The size of the payload data in bytes.
- * @param ttl Transmission retry budget. A value of 0 is normalized to 1
- * (single send attempt). Values above @ref LUDLC_MAX_TTL are clamped.
+ * @param ttl How many times the packet may be sent. The first send counts,
+ * and each NAK that reports this packet missing costs one more. A value of
+ * 0 is normalized to 1 (single send attempt). Values above
+ * @ref LUDLC_MAX_TTL are clamped.
  * @return 0 on success.
  * @return -EINVAL if @p buf is NULL and @p size is not, or if @p size is
  * above @ref CONFIG_LUDLC_MAX_PAYLOAD_SIZE.
@@ -543,74 +545,31 @@ static int rx_handle_handshake(
 /**
  * @brief Handles a Negative Acknowledgment (NAK) condition.
  *
- * This function is called when a NAK is received. It iterates
- * through the unacknowledged packets in the queue:
- * 1. Decrements the TTL of each packet.
- * 2. If TTL reaches 0, the packet is marked as failed (EREMOTEIO) and
- *    moved to the confirmed queue.
- * 3. Other packets are compacted to the front of the un-ACK'd window.
+ * A NAK identifies one packet: it acknowledges the last packet received
+ * in order, so the missing one is the next after it. Only that packet has
+ * its TTL decremented. The packets behind it are re-transmitted because
+ * the receiver discards everything after a gap, not because they were
+ * lost, so their TTL is left alone.
+ *
+ * A packet left with no attempts is not dropped here but by
+ * @ref ludlc_tx_drop_expired, on the next transmit. The transport reads the
+ * queue once the lock is released, and this may run while it does so.
  *
  * Finally, it resets `last_sent` to `last_ack` to force a re-transmission
  * of all remaining unacknowledged packets.
  *
  * @param conn Pointer to the connection structure.
- * @param packet The received packet that triggered the NAK (unused).
  * @param num_wait The number of packets waiting for acknowledgment.
- * @param cq Temporary queue for confirmed (failed) packets (for MT build).
- * @param confirmed_num Pointer to counter for `cq` (for MT build).
  * @return @ref HANDLE_RX_REQUEST_TX_F to signal an immediate re-transmission.
  */
-static int rx_handle_nak(
-		struct ludlc_connection *conn,
-		ludlc_packet_t *packet,
-		ludlc_id_t num_wait,
-		struct packet_queue_item *cq,
-		ludlc_id_t *confirmed_num)
+static int rx_handle_nak(struct ludlc_connection *conn, ludlc_id_t num_wait)
 {
-	ludlc_id_t wr_idx = (conn->last_ack + 1) & LUDLC_ID_MASK;
-	ludlc_id_t id = wr_idx;
+	ludlc_id_t id = (conn->last_ack + 1) & LUDLC_ID_MASK;
+	ludlc_id_t q_idx = id & LUDLC_WINDOW_MASK;
 
-	/* Update TTL counter and remove expired packages from the queue */
-	for (; num_wait; num_wait--) {
-		ludlc_id_t q_idx = id & LUDLC_WINDOW_MASK;
-
-		if (--conn->packets_q[q_idx].ttl) {
-			/* Put the item to the new place, */
-			/* and fill the gap */
-			if (wr_idx != id) {
-				ludlc_id_t q_wr_idx =
-					wr_idx & LUDLC_WINDOW_MASK;
-				conn->packets_q[q_wr_idx] =
-						conn->packets_q[q_idx];
-			}
-			wr_idx = (wr_idx + 1) & LUDLC_ID_MASK;
-		} else {
-			/* Packet expired (TTL=0) */
-			conn->packets_q[q_idx].status.result = ETIMEDOUT;
-			ludlc_on_confirm_lock(conn,
-					&conn->packets_q[q_idx],
-					cq, confirmed_num);
-		}
-
-		id = (id + 1) & LUDLC_ID_MASK;
-	}
-
-	if (wr_idx != id) {
-		/* Move the rest of the packets in the queue to fill the gaps */
-		num_wait = (conn->last_queued - wr_idx) & LUDLC_ID_MASK;
-
-		for (; num_wait; num_wait--) {
-			ludlc_id_t q_idx = id & LUDLC_WINDOW_MASK;
-
-			/* Put the item to the new place */
-			ludlc_id_t q_wr_idx = wr_idx & LUDLC_WINDOW_MASK;
-			conn->packets_q[q_wr_idx] = conn->packets_q[q_idx];
-
-			wr_idx = (wr_idx + 1) & LUDLC_ID_MASK;
-			id = (id + 1) & LUDLC_ID_MASK;
-		}
-
-		conn->last_queued = wr_idx;
+	/* The missing packet is the first unacknowledged one */
+	if (num_wait && conn->packets_q[q_idx].ttl) {
+		conn->packets_q[q_idx].ttl--;
 	}
 
 	/* resend all unconfirmed packets */
@@ -749,8 +708,7 @@ static int rx_handle_packet(
 		if (packet->hdr.id.ack_id & LUDLC_NAK_FLAG) {
 			num_wait = (conn->last_sent - conn->last_ack) &
 					LUDLC_ID_MASK;
-			ret |= rx_handle_nak(conn, packet, num_wait,
-					     confirmed_q, confirmed_num);
+			ret |= rx_handle_nak(conn, num_wait);
 		}
 	} else {
 		/* The peer ACKed packets we never sent, so the two sides are
@@ -832,6 +790,60 @@ int ludlc_receive(struct ludlc_connection *conn,
 }
 
 /**
+ * @brief Drops the leading packet if its retry budget has run out.
+ *
+ * A NAK decrements the TTL of the packet it names but leaves it in place, so
+ * the queue is only rearranged here, on the transmit side. By this point the
+ * previous frame has been sent and the transport has finished reading the
+ * slot it came from; dropping the packet as the NAK arrived would move a slot
+ * the transport is still encoding and free a payload it is still reading.
+ *
+ * Only the first unacknowledged packet is ever decremented, so at most one
+ * can be waiting to be dropped. The packets behind it move up one place, each
+ * taking the previous ID. A NAK also rewinds `last_sent` to `last_ack`, so
+ * those packets are all unsent and keep their order.
+ *
+ * @note This function must be called with the connection lock held.
+ *
+ * @param conn Pointer to the connection structure.
+ * @param[out] expired The dropped packet, to be confirmed once the lock has
+ * been released.
+ * @return true if a packet was dropped and @p expired filled in.
+ */
+static bool ludlc_tx_drop_expired(struct ludlc_connection *conn,
+		struct packet_queue_item *expired)
+{
+	ludlc_id_t id = (conn->last_ack + 1) & LUDLC_ID_MASK;
+	ludlc_id_t q_idx = id & LUDLC_WINDOW_MASK;
+	ludlc_id_t num;
+
+	/* Nothing outstanding, or the leading packet still has attempts left.
+	 * A queued packet starts with at least one, so only a NAK can bring it
+	 * to 0.
+	 */
+	if (conn->last_queued == conn->last_ack || conn->packets_q[q_idx].ttl)
+		return false;
+
+	conn->packets_q[q_idx].status.result = ETIMEDOUT;
+	*expired = conn->packets_q[q_idx];
+
+	num = (conn->last_queued - id) & LUDLC_ID_MASK;
+
+	for (; num; num--) {
+		ludlc_id_t next = (id + 1) & LUDLC_ID_MASK;
+
+		conn->packets_q[id & LUDLC_WINDOW_MASK] =
+			conn->packets_q[next & LUDLC_WINDOW_MASK];
+
+		id = next;
+	}
+
+	conn->last_queued = (conn->last_queued - 1) & LUDLC_ID_MASK;
+
+	return true;
+}
+
+/**
  * @brief Retrieves the next packet to be sent by the transport layer.
  *
  * This function is called by the transmit task to get the next packet
@@ -864,8 +876,8 @@ int ludlc_get_packet_to_send(struct ludlc_connection *conn,
 		const void **payload,
 		ludlc_payload_size_t *pay_sz)
 {
-	struct packet_queue_item u_sent;
-	bool u_done = false;
+	struct packet_queue_item u_sent, expired;
+	bool u_done = false, exp_done;
 	uint8_t ack, id, q_idx;
 	int ret = 1; /* Assume this is the last packet by default */
 
@@ -885,6 +897,11 @@ int ludlc_get_packet_to_send(struct ludlc_connection *conn,
 		u_sent = conn->u_packet;
 		u_done = true;
 	}
+
+	/* The same goes for a packet that has run out of attempts: it is taken
+	 * off the queue here, where the transport is between frames.
+	 */
+	exp_done = ludlc_tx_drop_expired(conn, &expired);
 
 	switch (conn->conn_state) {
 	default:/* LUDLC_STATE_DISCONNECTED, LUDLC_STATE_WAIT_CONN_1, etc. */
@@ -985,6 +1002,9 @@ int ludlc_get_packet_to_send(struct ludlc_connection *conn,
 
 	if (u_done)
 		ludlc_call_on_confirm(conn, &u_sent);
+
+	if (exp_done)
+		ludlc_call_on_confirm(conn, &expired);
 
 	return ret;
 }
