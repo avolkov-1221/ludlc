@@ -17,8 +17,10 @@ ifneq ($(KERNELRELEASE),)
 
 # Descend into the Linux platform driver directory. Module composition, the
 # enable/disable switches and the per-directory build flags all live in
-# src/lib/platform/linux/Makefile.
+# src/lib/platform/linux/Makefile. The echo sample is a bus client and is
+# built beside the transports.
 obj-m += src/lib/platform/linux/
+obj-m += src/samples/linux/
 
 else
 
