@@ -24,6 +24,7 @@
 # let a value given on the command line override it.
 CONFIG_LUDLC_CORE       ?= m
 CONFIG_LUDLC_SERDEV     ?= $(if $(CONFIG_SERIAL_DEV_BUS),m,n)
+CONFIG_LUDLC_SPI_MASTER ?= $(if $(CONFIG_SPI_MASTER),m,n)
 
 # The checksum a link runs when neither the crc= module parameter, firmware nor
 # configfs names one. Both ends of a link must agree on it, so change it only
@@ -115,6 +116,13 @@ $(error LuDLC serdev transport needs \
 endif
 endif
 
+ifneq ($(filter m y,$(CONFIG_LUDLC_SPI_MASTER)),)
+ifeq ($(CONFIG_SPI_MASTER),)
+$(error LuDLC SPI transport needs \
+	CONFIG_SPI_MASTER (y or m) in the target kernel)
+endif
+endif
+
 endif
 
 # Serial transport: the serdev driver (ludlc_serdev_drv.o) plus its optional
@@ -123,3 +131,10 @@ ludlc_serdev-y := ludlc_serdev_drv.o
 ludlc_serdev-$(CONFIG_CONFIGFS_FS) += ludlc_serdev_cfg.o
 
 obj-$(CONFIG_LUDLC_SERDEV) += ludlc_serdev.o
+
+# SPI transport: a link to a peer on a bus this system drives, plus its
+# optional configfs front-end, built only on kernels that provide configfs.
+ludlc_spi_master-y := ludlc_spi_master_drv.o
+ludlc_spi_master-$(CONFIG_CONFIGFS_FS) += ludlc_spi_cfg.o
+
+obj-$(CONFIG_LUDLC_SPI_MASTER) += ludlc_spi_master.o

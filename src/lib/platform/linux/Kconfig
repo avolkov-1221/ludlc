@@ -101,3 +101,18 @@ config LUDLC_SERDEV
 	  configfs write, and falls back on the escaping.
 
 	  Say M here to build it as a module, ludlc_serdev.
+
+config LUDLC_SPI_MASTER
+	tristate "LuDLC SPI master transport"
+	depends on LUDLC_CORE && SPI_MASTER
+	help
+	  Transport for a LuDLC link to a peer on an SPI bus this system
+	  drives. Every exchange says how long its frame is before sending it,
+	  so a frame goes out as it stands and the rest of the transfer is
+	  padding; COBS is there for a peer that expects the stuffed form.
+	  Both ends must agree, so a link takes its framing from the "framing"
+	  module parameter, a "ludlc,framing" firmware property or a configfs
+	  write, and falls back on the frame as it stands. The peer asks to be
+	  heard over a data-ready line described alongside it.
+
+	  Say M here to build it as a module, ludlc_spi_master.

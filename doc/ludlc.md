@@ -563,12 +563,12 @@ itself: `hdlc`, which such a link runs unless it is told otherwise, or `cobs`,
 whose cost does not depend on the data.
 
 A transport that carries a frame in a transfer of its own has the opposite
-requirement. It states the length of a frame before sending it, so it needs a
-framing whose wire form can be measured before it is produced. `raw` is that
-framing, and is what such a link runs by default; `cobs` counts its own
-stuffing and can be carried as well, for a peer that would rather not speak two
-framings. `hdlc` cannot be carried at all, as escaping cannot be measured until
-it has been done.
+requirement. It states the length of a frame before sending it (see Appendix
+B), so it needs a framing whose wire form can be measured before it is
+produced. `raw` is that framing, and is what such a link runs by default;
+`cobs` counts its own stuffing and can be carried as well, for a peer that
+would rather not speak two framings. `hdlc` cannot be carried at all, as
+escaping cannot be measured until it has been done.
 
 #### Stuffing and a Delimiter (`cobs`)
 
@@ -686,3 +686,57 @@ starts afresh.
 
 This is the framing for a transport that delimits, and on such a link it is
 the default.
+
+## Appendix B: Transports That Announce a Frame
+
+A transport that carries each frame in a transfer of its own, rather than
+handing over an octet stream, has to know how long that frame is before it
+starts: both ends clock the same octets, so both must be told the same length
+first. SPI is the case implemented, and its wire format is specified by
+`ludlc_spi_proto.h`, the header both ends compile, precisely because an
+announcement written by one and read by the other is where two
+implementations drift apart in silence. In outline:
+
+  * **One exchange is two transfers**, each with its own chip select. Nothing
+    on an SPI bus moves until the controller clocks it, and every octet
+    clocked out brings one back, so the two directions are announced and then
+    carried together rather than independently.
+  * **The first transfer is the announcement** and never varies in length.
+    Each end sends a magic octet, a check octet over what follows, and the
+    length of the frame it wants to send, least significant octet first as
+    everywhere else in this protocol. Either length may be zero, which is how
+    an end says it has nothing. Each end reads the other's in the same clocks.
+  * **The second transfer carries the frames**, and is as long as the longer
+    of the two lengths announced. Both ends know both by then, so neither has
+    to be told. An end whose frame is shorter pads the rest, an end with
+    nothing to send pads all of it, and if both announced nothing the transfer
+    does not happen. Padding is never read: the announcement says where a
+    frame ends and the receiver stops there.
+  * **The gap between the two** is where a peripheral prepares a buffer of the
+    announced length. How long it needs is a property of its firmware, which
+    says so, and the controller waits that long.
+  * **The framing must state a length before producing a frame**, which is
+    what rules `hdlc` out (see Appendix A). `raw` leans on the announcement
+    entirely and is what such a link runs by default; `cobs` counts its own
+    stuffing and announces the stuffed length.
+
+The checksum is the link's rather than the transport's here as anywhere else:
+both ends agree on it the same way as on a link over any other wire.
+
+**Being heard**
+
+A peripheral cannot begin an exchange, so the format is built around the
+controller asking and around the peripheral being able to ask it to. An
+exchange happens when the controller has a frame of its own to send, when the
+peripheral raises a data-ready line, or, on a link with no such line, on a
+poll interval. A controller polling announces nothing and learns in the same
+exchange what the peripheral has.
+
+**Losing step**
+
+The two transfers are told apart by their order and by nothing in them, so an
+end that misses one reads the next as the other half. Nothing prevents this
+and nothing needs to: an announcement read out of a frame fails its check
+octet, a frame read out of an announcement fails the checksum, and the
+protocol resends what was lost. A link finds its footing again within an
+exchange or two.

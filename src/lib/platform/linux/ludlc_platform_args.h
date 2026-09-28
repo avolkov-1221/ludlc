@@ -25,6 +25,10 @@
 #include <linux/serdev.h>
 #endif
 
+#if IS_ENABLED(CONFIG_SPI_MASTER)
+#include <linux/spi/spi.h>
+#endif
+
 #include <ludlc_proto.h>
 
 struct ludlc_csum;
@@ -49,10 +53,12 @@ typedef struct ludlc_platform_args {
 	/**
 	 * @brief How this link delimits its frames.
 	 *
-	 * NULL selects @ref ludlc_framing_hdlc, since a frame in a stream of
-	 * octets must mark where it ends. Otherwise one of the ludlc_framing_*
-	 * descriptors: a transport refuses the ones it cannot carry rather
-	 * than silently running another.
+	 * NULL selects @ref ludlc_framing_hdlc on a transport that hands over a
+	 * stream of octets, since a frame in a stream must mark where it ends,
+	 * and @ref ludlc_framing_raw over SPI, which announces the length of
+	 * every frame. Otherwise one of the ludlc_framing_* descriptors: a
+	 * transport refuses the ones it cannot carry rather than silently
+	 * running another.
 	 */
 	const struct ludlc_framing *framing;
 
@@ -72,6 +78,34 @@ typedef struct ludlc_platform_args {
 			bool flow_control;
 			enum serdev_parity parity;
 		} serdev;
+#endif
+
+#if IS_ENABLED(CONFIG_SPI_MASTER)
+		struct {
+			struct spi_device *dev;
+
+			/**
+			 * @brief Gap between the two halves of an exchange,
+			 * in microseconds.
+			 *
+			 * The peer learns how long the second transfer will be
+			 * from the first one, and has until the next chip
+			 * select to point its controller at a buffer of that
+			 * length. How long that takes is a property of the
+			 * peer's firmware, which states it.
+			 */
+			u32 turnaround_us;
+
+			/**
+			 * @brief How often to ask a peer that cannot ask us,
+			 * in milliseconds, or 0 for never.
+			 *
+			 * Only used where no data-ready line was described:
+			 * with one, an exchange happens when there is a reason
+			 * for it.
+			 */
+			u32 poll_interval_ms;
+		} spi;
 #endif
 	};
 } ludlc_platform_args_t;

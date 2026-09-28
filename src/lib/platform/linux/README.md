@@ -3,7 +3,7 @@
 # LuDLC Linux platform
 
 This directory holds the Linux home of the LuDLC core and the transports for
-it. It builds two modules.
+it. It builds three modules.
 
 ## Modules
 
@@ -23,6 +23,10 @@ it. It builds two modules.
   - `ludlc_serdev_cfg.o`: the UART's own configfs attributes under
     `/sys/kernel/config/ludlc-serdev`, built only where the kernel provides
     configfs
+- `ludlc_spi_master` — transport for a peer on an SPI bus this system drives
+  - `ludlc_spi_master_drv.o`: the driver, matching `ludlc,spi`
+  - `ludlc_spi_cfg.o`: the exchange's own configfs attributes under
+    `/sys/kernel/config/ludlc-spi`, built the same way
 
 ## Device model
 
@@ -98,7 +102,8 @@ port, and restarting the link on the way out.
 - Integrate this directory's `Kconfig` and `Makefile` into your kernel tree.
 - Ensure `ludlc.c` and the public/private LuDLC headers are built with
   `CONFIG_LUDLC_CORE` (same module or built-in object group).
-- Enable `CONFIG_LUDLC_SERDEV` for a link over a UART.
+- Enable `CONFIG_LUDLC_SERDEV` for a link over a UART, `CONFIG_LUDLC_SPI_MASTER`
+  for one over an SPI bus this system drives.
 - Pick the checksum a link runs when neither the `crc=` module parameter,
   firmware nor configfs names one: `CONFIG_LUDLC_CRC_DFLT_*` in tree, or
   `CONFIG_LUDLC_CRC_DFLT` in the `Makefile` out of tree. Both ends of a link
@@ -117,7 +122,7 @@ wrong gives a link on which nothing ever arrives.
 | firmware | `ludlc,csum = "crc16-pr0"` | `ludlc,framing = "cobs"` | `ludlc,max-payload = <32>` |
 | configfs | `csum`, with `csum_available` | `framing`, with `framing_available` | `max_payload`, with `max_payload_available` |
 | parameter | `ludlc_core.crc=` | `<transport>.framing=` | `<transport>.max_payload=` |
-| default | `CONFIG_LUDLC_CRC_DFLT_*` | `hdlc` | `CONFIG_LUDLC_MAX_PAYLOAD_SIZE` |
+| default | `CONFIG_LUDLC_CRC_DFLT_*` | `hdlc`, `raw` over SPI | `CONFIG_LUDLC_MAX_PAYLOAD_SIZE` |
 
 Where a checksum is chosen by name, `none` is also accepted, for a link that
 runs no checksum: none is computed, sent or checked, so the peer must be set
@@ -134,15 +139,23 @@ all, leaving the transport to say where it ends.
 
 The serdev transport carries the two that delimit themselves: a port hands over
 a stream of octets and has nothing to say about where a frame stops, so it
-defaults to `hdlc` and leaves `cobs` for a peer that speaks it. The driver
-takes its framing the same three ways and refuses, in all of them, one its
-wire cannot carry; `framing_available` in a port directory lists what is left.
+defaults to `hdlc` and leaves `cobs` for a peer that speaks it. The SPI
+transport announces a frame's length before sending it and pads the rest of the
+transfer, which is delimiting enough, so it defaults to `raw` and pays nothing
+for framing; `cobs` is there for a peer that only speaks it. `hdlc` it cannot
+carry at all, escaping being unmeasurable until it is done. Each driver takes
+its framing the same three ways and refuses, in all of them, one its wire
+cannot carry; `framing_available` in a port directory lists what is left.
+
+Both ends must also agree on the frame size, since that is what an SPI
+announcement is checked against.
 
 ## Describing a link without firmware
 
 Where firmware describes the port but not the LuDLC link on it, or leaves the
 port disabled for user space to claim, a link is described under configfs
-instead. The serdev transport registers the tree `ludlc-serdev`:
+instead. Both transports register the same tree, `ludlc-serdev` and
+`ludlc-spi`, differing only in the settings of their own wire:
 
 ```
 	/sys/kernel/config/ludlc-serdev/serial0-0/
@@ -150,6 +163,10 @@ instead. The serdev transport registers the tree `ludlc-serdev`:
 		csum framing max_payload            the link
 		live                                open it
 		ludlc/<dev>/                        what the link carries
+
+	/sys/kernel/config/ludlc-spi/spi0.0/
+		turnaround_us poll_interval_ms      the exchange
+		csum framing max_payload live ludlc/  as above
 ```
 
 A directory must be named after the device it describes, as `dev_name()` shows
@@ -159,6 +176,9 @@ its `ludlc/` subdirectory leaves a firmware-described device alone.
 
 Writing `live` is the only way to open a link on a port firmware left
 unavailable, and a way to reopen one it does describe with different settings.
+An SPI peripheral is not created here: a system that describes one well enough
+for the SPI core to register it has already said where it sits on the bus and
+how fast; what it has no way of saying is that LuDLC runs over it.
 
 ## How large a payload
 
@@ -175,6 +195,7 @@ is compiled and a checksum is named where a link is opened:
 | | Per link | Sized by |
 | --- | --- | --- |
 | `ludlc_serdev` | one RX frame, one TX frame, one TX fifo | `LUDLC_COBS_FRAME_MAX` |
+| `ludlc_spi_master` | one RX frame, one TX frame | the same |
 
 So raising the ceiling, which `CONFIG_LUDLC_MAX_PAYLOAD_SIZE` does, costs
 memory on every link whether it uses it or not, while lowering a single link's
@@ -186,3 +207,11 @@ wider one would have spent.
 
 A peripheral has the same buffers on far less memory, and it is the smaller end
 that settles what a link can carry.
+
+## The other end of an SPI link
+
+`ludlc_spi_master` drives the bus; something has to answer on it. The wire
+format is neither end's to define and lives in
+[`ludlc_spi_proto.h`](../../include/ludlc_spi_proto.h), shared with the
+peripheral so that an announcement built by one and read by the other cannot
+drift.
