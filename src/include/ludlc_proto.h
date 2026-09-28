@@ -212,6 +212,37 @@ typedef uint32_t ludlc_payload_size_t;
 #define LUDLC_FRAME_BUF_SIZE	LUDLC_MAX_FRAME_SIZE(LUDLC_MAX_CSUM_SIZE)
 
 /**
+ * @def CONFIG_LUDLC_FRAME_BITS
+ * @brief Defines the bit-width used to store frame sizes.
+ *
+ * Wider than @ref CONFIG_LUDLC_PAYLOAD_BITS has to be, a frame being the
+ * payload plus a header and a checksum. Defaults to 16 bits, which covers any
+ * frame the default payload size can produce; a build with large frames may
+ * set 32.
+ */
+#ifndef CONFIG_LUDLC_FRAME_BITS
+#define CONFIG_LUDLC_FRAME_BITS 16
+#endif
+/**
+ * @typedef ludlc_frame_size_t
+ * @brief Type definition for storing the size of a frame.
+ *
+ * A frame is a packet and its checksum, before or after a framing has wrapped
+ * it: the stuffing a framing adds is counted in this type too.
+ */
+#if CONFIG_LUDLC_FRAME_BITS == 8
+typedef uint8_t ludlc_frame_size_t;
+#elif CONFIG_LUDLC_FRAME_BITS == 16
+typedef uint16_t ludlc_frame_size_t;
+#elif CONFIG_LUDLC_FRAME_BITS == 32
+typedef uint32_t ludlc_frame_size_t;
+#elif CONFIG_LUDLC_FRAME_BITS == 64
+typedef uint64_t ludlc_frame_size_t;
+#else
+#error Unsupported CONFIG_LUDLC_FRAME_BITS value (supported: 8, 16, 32, 64)
+#endif
+
+/**
  * @def CONFIG_LUDLC_CHANNEL_BITS
  * @brief Defines the bit-width used for channel identifiers.
  *

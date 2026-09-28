@@ -38,6 +38,8 @@ if(NOT TARGET_PLATFORM_ZEPHYR)
     "POSIX: allocate serial connections from a fixed pool (no heap)." OFF)
   set(LUDLC_STATIC_CONN_NUM 1 CACHE STRING
     "POSIX: number of static serial connection slots")
+  set(CONFIG_LUDLC_STATIC_FRAMING_NUM "" CACHE STRING
+    "Framing states preallocated per codec; empty leaves the codec default")
   set(target_libraries ${ludlc_target})
 endif()
 

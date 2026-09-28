@@ -39,6 +39,9 @@
 /* kfifo.h uses LUDLC_ROUND_UP and LUDLC_MIN, so it is included after them. */
 #include "kfifo.h"
 
+#define LUDLC_CONTAINER_OF(ptr, type, member) \
+	((type *)((uint8_t *)(ptr) - offsetof(type, member)))
+
 /** @brief Bits in one @ref ludlc_platform_atomic_t. */
 #define LUDLC_BITS_PER_WORD	(sizeof(ludlc_platform_atomic_t) * CHAR_BIT)
 

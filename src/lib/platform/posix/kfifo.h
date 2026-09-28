@@ -1,15 +1,17 @@
 // SPDX-License-Identifier: (Apache-2.0 OR GPL-2.0-or-later)
-/*
- * kfifo.h
+/**
+ * @file kfifo.h
  *
- * Single-producer/single-consumer byte ring buffer (Linux kernel kfifo-style)
- * for POSIX userspace without Linux- or BSD-only headers.
+ * @brief Single-producer, single-consumer byte ring buffer for POSIX userspace.
  *
+ * @copyright
  * Copyright (C) 2025-2026 Andrey VOLKOV <andrey@volkov.fr> & LuDLC Contributors
  *
- * This file is licensed under either the Apache License, Version 2.0,
- * or the GNU General Public License, version 2 or (at your option)
- * any later version.
+ * @details
+ * Modelled on the Linux kernel's kfifo, and built on C11 atomics and the
+ * standard C library alone, with no Linux- or BSD-only header. One thread
+ * puts while another gets, and neither takes a lock: each moves only its
+ * own index.
  */
 
 #ifndef __KFIFO_H__
@@ -21,7 +23,6 @@
 #include <stdatomic.h>
 #include <string.h>
 
-/* The main kfifo structure */
 struct kfifo {
 	uint8_t  *data;	   /* Pointer to the data buffer */
 	unsigned int size; /* Total size of the buffer (must be a power of 2) */
@@ -67,9 +68,6 @@ static inline unsigned int kfifo_len(const struct kfifo *fifo)
  */
 static inline bool kfifo_is_full(const struct kfifo *fifo)
 {
-	/* The FIFO is full if the number of bytes in
-	 * it equals its total capacity.
-	 */
 	return kfifo_len(fifo) == fifo->size;
 }
 
@@ -120,12 +118,39 @@ static inline bool kfifo_put(struct kfifo *fifo, uint8_t val)
 
 	fifo->data[in & (fifo->size - 1)] = val;
 
-	/* Use a release store to "publish" the write. This ensures the data is
-	 * written before the 'in' index is updated and visible to the consumer.
+	/* Release store: the data must be written before the 'in' index
+	 * becomes visible to the consumer.
 	 */
 	atomic_store_explicit(&fifo->in, in + 1, memory_order_release);
 
 	return true;
+}
+
+/**
+ * @brief Copies up to @p len bytes from @p src into the FIFO.
+ *
+ * @return How many of @p len were taken.
+ */
+static inline unsigned int kfifo_in(struct kfifo *fifo, const void *src,
+				    unsigned int len)
+{
+	unsigned int in = atomic_load_explicit(&fifo->in, memory_order_relaxed);
+	unsigned int out = atomic_load_explicit(&fifo->out,
+			memory_order_acquire);
+	unsigned int free = fifo->size - (in - out);
+	unsigned int l;
+	const uint8_t *p = src;
+
+	len = LUDLC_MIN(len, free);
+	l = LUDLC_MIN(len, fifo->size - (in & (fifo->size - 1)));
+
+	memcpy(fifo->data + (in & (fifo->size - 1)), p, l);
+	if (len - l)
+		memcpy(fifo->data, p + l, len - l);
+
+	atomic_store_explicit(&fifo->in, in + len, memory_order_release);
+
+	return len;
 }
 
 /**
@@ -138,9 +163,7 @@ static inline bool kfifo_put(struct kfifo *fifo, uint8_t val)
  */
 static inline bool kfifo_get(struct kfifo *fifo, uint8_t *val_ptr)
 {
-	/* Use an acquire load to ensure we see the
-	 * producer's latest 'in' index.
-	 */
+	/* Acquire load, to see the producer's latest 'in' index. */
 	unsigned int in = atomic_load_explicit(&fifo->in, memory_order_acquire);
 	unsigned int out = atomic_load_explicit(&fifo->out,
 			memory_order_relaxed);
@@ -149,14 +172,10 @@ static inline bool kfifo_get(struct kfifo *fifo, uint8_t *val_ptr)
 		return false;
 	}
 
-	/* Read the data from the buffer. The acquire load on 'in' guarantees
-	 * that this data is valid.
-	 */
+	/* The acquire load on 'in' guarantees this data is valid. */
 	*val_ptr = fifo->data[out & (fifo->size - 1)];
 
-	/* Use a release store to "publish" the newly freed space
-	 * to the producer.
-	 */
+	/* Release store: publishes the freed space to the producer. */
 	atomic_store_explicit(&fifo->out, out + 1, memory_order_release);
 
 	return true;
@@ -175,9 +194,7 @@ unsigned int kfifo_out(struct kfifo *fifo, void *dst, unsigned int sz)
 {
 	unsigned int l;
 
-	/* Use an acquire load to get the 'in' index. This is the crucial
-	 * memory barrier that ensures we see the data the producer wrote.
-	 */
+	/* Acquire load: this is what makes the producer's data visible. */
 	unsigned int in =
 		atomic_load_explicit(&fifo->in, memory_order_acquire);
 	unsigned int out =
@@ -187,71 +204,109 @@ unsigned int kfifo_out(struct kfifo *fifo, void *dst, unsigned int sz)
 
 	sz = LUDLC_MIN(sz, data_len);
 
-	/* Calculate how much data to copy before the buffer wraps around. */
+	/* How much can be copied before the buffer wraps. */
 	l = LUDLC_MIN(sz, fifo->size - (out & (fifo->size - 1)));
 
-	/* Perform the copy, potentially in two parts if it wraps. */
+	/* Copy in two parts when the read wraps. */
 	memcpy(dst, fifo->data + (out & (fifo->size - 1)), l);
-	l = sz - l;
-	if (l) {
-		memcpy((uint8_t *)dst + l, fifo->data, l);
+	if (sz - l) {
+		memcpy((uint8_t *)dst + l, fifo->data, sz - l);
 	}
 
-	/* Use a release store to update the 'out' index. This "publishes"
-	 * the newly available space to the producer thread.
-	 */
+	/* Release store: publishes the freed space to the producer. */
 	atomic_store_explicit(&fifo->out, out + sz, memory_order_release);
 
 	return sz;
 }
 
 /**
- * @brief Advances read index by @p count bytes without copying data.
+ * @brief Claims the next writable region, for the producer to fill in place.
  *
- * @param fifo FIFO instance to consume from.
- * @param count Number of bytes to discard.
+ * Hands out the FIFO's own storage, so a caller that generates its bytes need
+ * not stage them anywhere first. The region stops at the end of the backing
+ * buffer, so a caller with more to write claims again once the wrap has been
+ * published. Nothing is reserved until @ref kfifo_put_finish, which means only
+ * one claim can be outstanding.
+ *
+ * @param fifo FIFO instance to write to.
+ * @param ptr Set to the first writable byte.
+ * @param n Most bytes wanted.
+ * @return Bytes writable through @p ptr, 0 when the FIFO is full.
  */
-static inline
-void kfifo_skip_count(struct kfifo *fifo, unsigned int count)
+static inline unsigned int kfifo_put_claim(struct kfifo *fifo, uint8_t **ptr,
+					   unsigned int n)
 {
-	unsigned int out =
-		atomic_load_explicit(&fifo->out, memory_order_relaxed);
+	unsigned int in = atomic_load_explicit(&fifo->in, memory_order_relaxed);
+	unsigned int out = atomic_load_explicit(&fifo->out,
+			memory_order_acquire);
+	unsigned int head = in & (fifo->size - 1);
 
-	atomic_store_explicit(&fifo->out, out + count, memory_order_release);
+	n = LUDLC_MIN(n, fifo->size - (in - out));
+	*ptr = fifo->data + head;
+
+	return LUDLC_MIN(n, fifo->size - head);
 }
 
 /**
- * @brief Returns pointer to the next linear readable region.
+ * @brief Publishes @p count bytes written through @ref kfifo_put_claim.
  *
- * The returned length does not wrap: it is limited by contiguous data up to
- * the end of the backing buffer.
- *
- * @param fifo FIFO instance to inspect.
- * @param ptr Output pointer to contiguous readable bytes (unchanged if NULL).
- * @param n Maximum number of bytes requested.
- * @return Number of contiguous bytes available through @p ptr.
+ * @param fifo FIFO instance written to.
+ * @param count Bytes written, at most what the claim returned.
  */
-static inline unsigned int kfifo_out_linear_ptr(struct kfifo *fifo,
-						uint8_t **ptr, unsigned int n)
+static inline void kfifo_put_finish(struct kfifo *fifo, unsigned int count)
 {
-	/* Use an acquire load to get the 'in' index. This is the crucial
-	 * memory barrier that ensures we see the data the producer wrote.
+	unsigned int in = atomic_load_explicit(&fifo->in, memory_order_relaxed);
+
+	/* Release store: the bytes must be written before the new 'in' index
+	 * becomes visible to the consumer.
 	 */
-	unsigned int in =
-		atomic_load_explicit(&fifo->in, memory_order_acquire);
-	unsigned int out =
-		atomic_load_explicit(&fifo->out, memory_order_relaxed);
+	atomic_store_explicit(&fifo->in, in + count, memory_order_release);
+}
 
-	if (ptr) {
-		unsigned int tail = (out & (fifo->size - 1));
+/**
+ * @brief Claims the next readable region, for the consumer to read in place.
+ *
+ * Hands out the FIFO's own storage, so a caller that passes the bytes on need
+ * not copy them out first. The region stops at the end of the backing buffer,
+ * so a caller wanting the rest claims again once the wrap has been released.
+ * Nothing is consumed until @ref kfifo_get_finish, which means only one claim
+ * can be outstanding.
+ *
+ * @param fifo FIFO instance to read from.
+ * @param ptr Set to the first readable byte.
+ * @param n Most bytes wanted.
+ * @return Bytes readable through @p ptr, 0 when the FIFO is empty.
+ */
+static inline unsigned int kfifo_get_claim(struct kfifo *fifo, uint8_t **ptr,
+					   unsigned int n)
+{
+	/* Acquire load: this is what makes the producer's data visible. */
+	unsigned int in = atomic_load_explicit(&fifo->in, memory_order_acquire);
+	unsigned int out = atomic_load_explicit(&fifo->out,
+			memory_order_relaxed);
+	unsigned int tail = out & (fifo->size - 1);
 
-		n = LUDLC_MIN(n, in - out);
-		*ptr = fifo->data + tail;
+	n = LUDLC_MIN(n, in - out);
+	*ptr = fifo->data + tail;
 
-		return LUDLC_MIN(n, fifo->size - tail);
-	}
+	return LUDLC_MIN(n, fifo->size - tail);
+}
 
-	return 0;
+/**
+ * @brief Releases @p count bytes read through @ref kfifo_get_claim.
+ *
+ * Also the way to drop bytes without reading them.
+ *
+ * @param fifo FIFO instance read from.
+ * @param count Bytes consumed, at most what the claim returned.
+ */
+static inline void kfifo_get_finish(struct kfifo *fifo, unsigned int count)
+{
+	unsigned int out = atomic_load_explicit(&fifo->out,
+			memory_order_relaxed);
+
+	/* Release store: publishes the freed space to the producer. */
+	atomic_store_explicit(&fifo->out, out + count, memory_order_release);
 }
 
 #endif /* __KFIFO_H__ */

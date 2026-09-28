@@ -10,11 +10,11 @@
  * @details
  * The serial transport on a POSIX system:
  * - opens and configures the TTY (UART) device;
- * - runs the RX and TX threads that decode and encode the frames;
+ * - runs the RX and TX threads that feed the framing;
  * - implements `ludlc_serial_connection_create()` and
  *   `ludlc_serial_connection_destroy()`.
  *
- * The checksum the frames carry comes from the caller in
+ * The checksum the framing runs comes from the caller in
  * `ludlc_platform_args_t`; this file provides only the default one.
  */
 
@@ -37,7 +37,7 @@
 #include <ludlc.h>
 #include <ludlc_private.h>
 #include <ludlc_serial.h>
-#include <ludlc_serial_enc_impl.h>
+#include <ludlc_framing.h>
 
 /** @brief Flag: TX thread started successfully. */
 #define TX_THREAD_OK	(1<<0)
@@ -46,9 +46,6 @@
 
 /** @brief How long the shutdown waits for the DISCONNECT to go out, in ms. */
 #define LUDLC_DISCONNECT_WAIT_MS	50U
-
-#define TX_BUF_SIZE \
-	LUDLC_ROUND_UP(2U * (unsigned int)LUDLC_MAX_PACKET_SIZE, sizeof(void *))
 
 /**
  * @struct ludlc_serial_connection
@@ -68,11 +65,18 @@ struct ludlc_serial_connection {
 
 	struct ludlc_connection conn;
 
+	/** Framing state of this link, allocated at open. The RX and TX
+	 * threads drive the decoder and the encoder.
+	 */
+	struct ludlc_framing_state *fs;
+
 	/** Checksum this link runs. Borrowed from the caller's args. */
 	const struct ludlc_csum *csum;
 
-	/** @brief Platform-level transmit buffer. */
-	uint8_t tx_buf[TX_BUF_SIZE];
+	/** Storage behind @c tx_fifo, which the encoder writes into directly.
+	 * Sized independently of the frame.
+	 */
+	uint8_t tx_buf[LUDLC_TX_FIFO_SIZE];
 };
 
 #ifdef LUDLC_STATIC_CONN
@@ -430,87 +434,74 @@ ssize_t ludlc_serial_read(struct ludlc_serial_connection *sconn,
 /**
  * @brief Main thread function for the serial receiver (RX).
  *
- * This thread continuously reads bytes from the TTY and feeds them into the
- * serial decoder state machine (`ludlc_serial_decode`).
- *
- * When a complete, valid packet is decoded, `ludlc_serial_decode`
- * will internally call `ludlc_receive` to process it.
+ * Reads octets from the TTY and feeds them to the framing decoder. Completed
+ * packets are delivered through @ref ludlc_receive.
  *
  * @param arg A void pointer to the `struct ludlc_serial_connection`.
  * @return Always returns NULL.
  */
 static void *ludlc_rx_serial_thread(void *arg)
 {
-	enum {rx_idle, rx_handle } state = rx_idle;
 	struct ludlc_serial_connection *sconn = arg;
 	struct ludlc_connection *conn = &sconn->conn;
-	struct ludlc_sdec_state dec_state;
 	uint8_t buf[16];
 	/* The frame being decoded: a packet and its checksum. */
 	uint8_t packet[LUDLC_FRAME_BUF_SIZE];
-	ssize_t ret, cnt;
+	const ludlc_frame_size_t pkt_cap = ludlc_conn_frame_sz(conn,
+							      sconn->csum);
+	ssize_t ret;
 
 	LUDLC_LOG_DEBUG("Start serial RX thread");
 
-	ludlc_serial_decoder_init(&dec_state, sconn->csum);
-
-	ludlc_serial_decoder_prep(&dec_state, packet, sizeof(packet));
+	ludlc_dec_init(sconn->fs);
+	ludlc_dec_prep(sconn->fs, sconn->csum, packet, pkt_cap);
 
 	while (conn->conn_state != LUDLC_STATE_TERMINATE) {
-		switch (state) {
-		case rx_idle:
-			ret = ludlc_serial_read(sconn, buf, sizeof(buf), -1);
-			if (ret < 0) {
-				if (ret != -EAGAIN) {
-					/* Handle transport error/timeout in core. */
-					ludlc_handle_disconnect(conn);
-					ludlc_serial_decoder_prep(&dec_state,
-							 packet,
-							 sizeof(packet));
-				}
+		ssize_t i;
+
+		ret = ludlc_serial_read(sconn, buf, sizeof(buf), -1);
+		if (ret < 0) {
+			if (ret != -EAGAIN) {
+				ludlc_handle_disconnect(conn);
+				/* A partial frame cannot be completed after
+				 * a break in the line.
+				 */
+				ludlc_dec_init(sconn->fs);
+				ludlc_dec_prep(sconn->fs, sconn->csum, packet,
+					       pkt_cap);
+			}
+			continue;
+		}
+
+		for (i = 0; i < ret;) {
+			ludlc_timestamp_t ts;
+			bool done;
+
+			i += (ssize_t)ludlc_dec_feed(sconn->fs, sconn->csum,
+						     conn, &buf[i],
+						     (size_t)(ret - i), &done);
+			if (!done)
 				continue;
+
+			if (!sconn->conn.cfg.get_timestamp(&ts)) {
+				ludlc_packet_t *pkt = (ludlc_packet_t *)packet;
+				ludlc_payload_size_t sz =
+						ludlc_dec_size(sconn->fs);
+
+				if ((pkt->hdr.id.tx_id & LUDLC_PING_FLAG) == 0) {
+					LUDLC_LOG_TRACE(
+					"packet tx_id=%x, ack_id=%x, ch=%d, sz=%zu",
+					pkt->hdr.id.tx_id,
+					pkt->hdr.id.ack_id, pkt->hdr.chan,
+					sz);
+				}
+				ludlc_receive(&sconn->conn, pkt, sz, ts);
+			} else {
+				LUDLC_LOG_ERROR(
+				  "Can't get the timestamp, drop the packet");
 			}
 
-			if (ret == 0)
-				continue;
-			state = rx_handle;
-			cnt = 0;
-
-		case rx_handle:
-			/* Feed the byte to the decoder state machine */
-			if (ludlc_serial_decode(conn, &dec_state, buf[cnt])) {
-				ludlc_timestamp_t ts;
-
-				if (conn->cfg.get_timestamp(&ts) == 0) {
-					ludlc_packet_t *pkt =
-						(ludlc_packet_t *)packet;
-					if((pkt->hdr.id.tx_id &
-							LUDLC_PING_FLAG) == 0) {
-						LUDLC_LOG_TRACE(
-							"packet tx_id=%x, "
-							"ack_id=%x, ch=%d, "
-							"sz=%d",
-							pkt->hdr.id.tx_id,
-							pkt->hdr.id.ack_id,
-							pkt->hdr.chan,
-							dec_state.size);
-					}
-					ludlc_receive(conn, pkt,
-							dec_state.size,
-							ts);
-				} else {
-					LUDLC_LOG_ERROR(
-						"Can't get the timestamp, "
-						"drop the packet");
-				}
-
-				ludlc_serial_decoder_prep(&dec_state,
-							packet,
-							sizeof(packet));
-			}
-
-			if (++cnt == ret)
-				state = rx_idle;
+			ludlc_dec_prep(sconn->fs, sconn->csum, packet, pkt_cap);
 		}
 	}
 
@@ -531,7 +522,7 @@ static int send_tx_fifo(struct ludlc_serial_connection *sconn)
 	unsigned int len;
 	ssize_t written = 0;
 
-	len = kfifo_out_linear_ptr(&sconn->tx_fifo, &data_ptr, UINT_MAX);
+	len = kfifo_get_claim(&sconn->tx_fifo, &data_ptr, UINT_MAX);
 	if (len) {
 		written = write(sconn->uart_fd, data_ptr, len);
 		if (written == -1) {
@@ -542,7 +533,7 @@ static int send_tx_fifo(struct ludlc_serial_connection *sconn)
 				written = 0;
 			}
 		} else if (written > 0) {
-			kfifo_skip_count(&sconn->tx_fifo, written);
+			kfifo_get_finish(&sconn->tx_fifo, written);
 		}
 	}
 
@@ -550,13 +541,40 @@ static int send_tx_fifo(struct ludlc_serial_connection *sconn)
 }
 
 /**
+ * @brief Load the next core packet into the framing encoder, if it is idle.
+ */
+static void ludlc_posix_enc_load(struct ludlc_serial_connection *sconn)
+{
+	const void *hdr, *payload;
+	ludlc_payload_size_t hdr_sz, pay_sz;
+	int pending;
+
+	if (ludlc_enc_busy(sconn->fs))
+		return;
+
+	if (!ludlc_platform_test_and_clear_bit(LUDLC_CONN_FORCE_TX_F,
+					       &sconn->conn.pconn.tx_events))
+		return;
+
+	pending = ludlc_get_packet_to_send(&sconn->conn, &hdr, &hdr_sz,
+					       &payload, &pay_sz);
+	if (pending >= 0) {
+		/* Close the run with an EOF only when
+		 * nothing follows this frame.
+		 */
+		ludlc_enc_prep(sconn->fs, hdr, hdr_sz, payload, pay_sz,
+			       pending != 0);
+
+		if (!pending) {
+			ludlc_platform_request_tx(&sconn->conn);
+		}
+	}
+}
+
+/**
  * @brief Main thread function for the serial transmitter (TX).
  *
- * Loads the next frame when @c LUDLC_CONN_FORCE_TX_F is set and the encoder
- * has no primed header (@c hdr_size == 0 after @ref ludlc_serial_encoder_init).
- * Emits octets whenever the TX FIFO has space (including idle @c LUDLC_SOF
- * stuffing when unprimed). After a full frame, re-inits encoder state so stale
- * @c hdr / sizes cannot be re-sent on a later poll wake.
+ * Pumps the framing encoder into the TX fifo and drains the fifo to the TTY.
  *
  * @param arg A void pointer to the `struct ludlc_serial_connection`.
  * @return Always returns NULL.
@@ -565,14 +583,13 @@ static void *ludlc_tx_serial_thread(void *arg)
 {
 	struct ludlc_serial_connection *sconn = arg;
 	struct ludlc_connection *conn = &sconn->conn;
-	struct ludlc_senc_state enc_state;
 	bool can_sleep = true;
 	struct pollfd pfd[2];
 	short int uart_events = POLLERR | POLLHUP;
 
 	LUDLC_LOG_DEBUG("Start serial TX thread");
 
-	ludlc_serial_encoder_init(&enc_state, sconn->csum);
+	ludlc_enc_init(sconn->fs);
 
 	/* Always poll for internal events (new packet, termination) */
 	pfd[0].fd = conn->pconn.tx_pipe[0];
@@ -584,8 +601,10 @@ static void *ludlc_tx_serial_thread(void *arg)
 		int ret;
 
 		if (can_sleep &&
-		    !ludlc_platform_test_and_clear_bit(LUDLC_CONN_FORCE_TX_F,
-						      &conn->pconn.tx_events)) {
+		    !ludlc_platform_test_bit(LUDLC_CONN_FORCE_TX_F,
+					     &conn->pconn.tx_events) &&
+		    !ludlc_enc_busy(sconn->fs) &&
+		    kfifo_is_empty(&sconn->tx_fifo)) {
 
 			pfd[1].events = uart_events;
 
@@ -615,8 +634,7 @@ static void *ludlc_tx_serial_thread(void *arg)
 			if (pfd[1].revents & POLLOUT) {
 				ret = send_tx_fifo(sconn);
 				if (ret < 0) {
-					ludlc_serial_encoder_init(&enc_state,
-								  sconn->csum);
+					ludlc_enc_init(sconn->fs);
 					LUDLC_LOG_ERROR(
 						"Drop packet due to failed start_tx");
 					LUDLC_INC_STATS(&sconn->conn, dropped);
@@ -632,60 +650,46 @@ static void *ludlc_tx_serial_thread(void *arg)
 				uart_events |= POLLOUT;
 				continue;
 			}
-
-			if (!ludlc_platform_test_and_clear_bit(
-				    LUDLC_CONN_FORCE_TX_F,
-				    &conn->pconn.tx_events)) {
-				continue;
-			}
 		}
 
-		if (ludlc_serial_encoder_idle(&enc_state)) {
-			/* Encoder is ready for a new packet. Get one. */
-			int is_tx_empty = ludlc_get_packet_to_send(
-				&sconn->conn,
-				&enc_state.hdr,
-				&enc_state.hdr_size,
-				&enc_state.payload,
-				&enc_state.payload_size);
+		ludlc_posix_enc_load(sconn);
 
-			if (is_tx_empty < 0) {
-				/* Nothing to send. A DISCONNECT that has just
-				 * drained ends the session this way, the core
-				 * having taken the link down with it.
-				 */
-				ludlc_serial_encoder_init(&enc_state, sconn->csum);
-				LUDLC_LOG_DEBUG(
-					"No packet to send: %d", is_tx_empty);
-				continue;
-			}
+		/* A full fifo leaves the rest of the frame for the next pass,
+		 * woken by POLLOUT. The encoder writes into the fifo's own
+		 * storage, so the frame is never copied.
+		 */
+		while (ludlc_enc_busy(sconn->fs)) {
+			uint8_t *dst;
+			unsigned int room;
 
-			if (!is_tx_empty) {
-				/* We are sending data, demand to send more */
-				ludlc_platform_request_tx(&sconn->conn);
-			}
+			room = kfifo_put_claim(&sconn->tx_fifo, &dst,
+					       UINT_MAX);
+			if (!room)
+				break;
 
-			/* Send EOF marker only if queue is empty */
-			ludlc_serial_encoder_send_eof(&enc_state,
-					is_tx_empty != 0);
-			can_sleep = false;
-		}
+			kfifo_put_finish(&sconn->tx_fifo,
+				(unsigned int)ludlc_enc_fill(sconn->fs,
+							     sconn->csum, dst,
+							     room));
 
-		/* Generate one octet from the encoder and queue it */
-		if (!kfifo_is_full(&sconn->tx_fifo)) {
-			uint8_t byte = ludlc_serial_encode(&enc_state);
-			kfifo_put(&sconn->tx_fifo, byte);
-
-			if (ludlc_serial_encoder_idle(&enc_state)) {
-				/* The full packet has been encoded */
+			if (!ludlc_enc_busy(sconn->fs))
 				LUDLC_INC_STATS(&sconn->conn, tx_packet);
-				can_sleep = true;
-			}
 		}
+
+		if (kfifo_is_full(&sconn->tx_fifo) &&
+		    ludlc_enc_busy(sconn->fs))
+			can_sleep = true;
+		else if (!ludlc_enc_busy(sconn->fs) &&
+			 kfifo_is_empty(&sconn->tx_fifo) &&
+			 !ludlc_platform_test_bit(LUDLC_CONN_FORCE_TX_F,
+						  &conn->pconn.tx_events))
+			can_sleep = true;
+		else
+			can_sleep = false;
 
 		ret = send_tx_fifo(sconn);
 		if (ret < 0) {
-			ludlc_serial_encoder_init(&enc_state, sconn->csum);
+			ludlc_enc_init(sconn->fs);
 			LUDLC_LOG_ERROR("Drop packet due to failed start_tx");
 			LUDLC_INC_STATS(&sconn->conn, dropped);
 			can_sleep = true;
@@ -756,7 +760,7 @@ void ludlc_serial_connection_destroy(struct ludlc_connection *conn)
 		close(sconn->uart_fd);
 	}
 
-	/* Free the container structure */
+	ludlc_framing_destroy(sconn->fs);
 	free_serial_connection(sconn);
 }
 
@@ -790,12 +794,22 @@ int ludlc_serial_connection_create(const ludlc_platform_args_t *args,
 
 	cfg = *ludlc_args_conn_cfg(args);
 
-	/* The frames carry a checksum, so the caller must supply one, and it
+	/* The framing needs a checksum, so the caller must supply one, and it
 	 * must fit the register it is computed in.
 	 */
 	if (!args->csum || !args->csum->csum ||
 	    !args->csum->octets || args->csum->octets > LUDLC_MAX_CSUM_SIZE)
 		return -EINVAL;
+
+	/*
+	 * A TTY delivers octets and nothing else, so a framing that needs the
+	 * transport to supply the frame length would never complete a frame.
+	 */
+	if (args->framing && args->framing->needs_wire_len) {
+		LUDLC_LOG_ERROR("%s framing needs a transport that says where "
+				"a frame ends", args->framing->name);
+		return -EINVAL;
+	}
 
 	sconn = alloc_serial_connection();
 	if (!sconn)
@@ -804,14 +818,19 @@ int ludlc_serial_connection_create(const ludlc_platform_args_t *args,
 	sconn->csum = args->csum;
 	sconn->uart_fd = -1;
 
-	/* Open the TTY device */
+	sconn->fs = ludlc_framing_create(args->framing);
+	if (!sconn->fs) {
+		ret = -ENOMEM;
+		goto err;
+	}
+
 	sconn->uart_fd = open(args->port, O_RDWR | O_NOCTTY | O_NONBLOCK);
 	if (sconn->uart_fd < 0) {
 		ret = -errno;
 		goto err;
 	}
 
-	LUDLC_RING_BUF_INIT(&sconn->tx_fifo, sconn->tx_buf, TX_BUF_SIZE);
+	LUDLC_RING_BUF_INIT(&sconn->tx_fifo, sconn->tx_buf, LUDLC_TX_FIFO_SIZE);
 
 	ret = ludlc_connection_init(&sconn->conn, &cfg, cb, sconn);
 	if (ret) {

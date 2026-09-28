@@ -10,7 +10,7 @@
  * @details
  * UART communication in interrupt-driven and asynchronous modes, the RX and TX
  * threads, and the Zephyr primitives they use: events, FIFOs and memory slabs.
- * The checksum the frames carry comes from the caller in
+ * The checksum the framing runs comes from the caller in
  * `ludlc_platform_args_t`; this file provides only the default one.
  */
 
@@ -30,7 +30,7 @@
 #include <ludlc_platform.h>
 #include <ludlc_private.h>
 #include <ludlc_serial.h>
-#include <ludlc_serial_enc_impl.h>
+#include <ludlc_framing.h>
 #include <ludlc_logger.h>
 
 #define RX_THREAD_STACK_SIZE 1024
@@ -50,8 +50,6 @@
 
 #define TX_SPACE_AVAIL_EVT	BIT(LUDLC_PLATFORM_LAST_TX_EVENT)
 #define TX_EMPTY_EVT		BIT(LUDLC_PLATFORM_LAST_TX_EVENT + 1)
-
-#define TX_BUF_SIZE	ROUND_UP(2*LUDLC_MAX_PACKET_SIZE, sizeof(void *))
 
 /** @brief How long the shutdown waits for the DISCONNECT to go out, in ms. */
 #define LUDLC_DISCONNECT_WAIT_MS	50U
@@ -74,7 +72,7 @@ struct ludlc_serial_connection {
 	K_KERNEL_STACK_MEMBER(tx_thread_stack, TX_THREAD_STACK_SIZE);
 
 	uint8_t rx_slab_bufs[RX_BUF_ALIGNED_SIZE * NUM_RX_BUFFERS];
-	uint8_t	tx_rb_buffer[TX_BUF_SIZE];
+	uint8_t	tx_rb_buffer[LUDLC_TX_FIFO_SIZE];
 
 	ludlc_platform_atomic_t flags;
 	const struct device *uart_dev;	/* Zephyr UART device */
@@ -88,7 +86,11 @@ struct ludlc_serial_connection {
 	struct k_mem_slab	rx_slab;
 
 	atomic_ptr_t		curr_rx_buf;
-	struct ludlc_sdec_state	dec_state;
+
+	/** Framing state of this link, allocated at open. The decoder runs
+	 * in the UART IRQ.
+	 */
+	struct ludlc_framing_state *fs;
 
 	struct ring_buf		tx_rb;
 
@@ -154,19 +156,57 @@ static inline void free_serial_connection(struct ludlc_serial_connection *conn)
 
 /* --- UART Callbacks --- */
 
+/** @brief Arm the decoder to gather the next frame into @p buf. */
+static void ludlc_serial_rx_arm(struct ludlc_serial_connection *sconn,
+				void *buf)
+{
+	ludlc_dec_prep(sconn->fs, sconn->csum, buf,
+		       ludlc_conn_frame_sz(&sconn->conn, sconn->csum));
+}
+
 /**
- * @brief UART Interrupt Request (IRQ) callback handler.
+ * @brief Queue a completed frame and arm the next RX buffer for the decoder.
  *
- * This function is invoked by the Zephyr UART driver when an interrupt occurs.
- * It handles both transmit-ready and receive-ready events. For reception,
- * it reads bytes from the UART hardware and puts them into the `rx_fifo`
- * for the `ludlc_rx_serial_thread` to process.
+ * Called from the UART IRQ, on the octet that completed @p rx_buf. Swaps the
+ * slab buffer so decoding can continue while the RX thread calls
+ * ludlc_receive().
  */
-static void uart_irq_cb(const struct device *dev, void *user_data)
+static void ludlc_serial_on_packet(struct ludlc_serial_connection *sconn,
+				   struct rx_packet_item *rx_buf, size_t size)
+{
+	struct rx_packet_item *next_buf = NULL;
+
+	rx_buf->size = (ludlc_payload_size_t)size;
+
+	if (!k_mem_slab_alloc(&sconn->rx_slab, (void **)&next_buf, K_NO_WAIT))
+		ludlc_serial_rx_arm(sconn, next_buf->payload);
+
+	atomic_ptr_set(&sconn->curr_rx_buf, next_buf);
+	k_fifo_put(&sconn->rx_fifo, rx_buf);
+	k_event_post(&sconn->conn.pconn.rx_event, RX_READY_EVT);
+
+	if (!next_buf) {
+		LUDLC_INC_STATS(&sconn->conn, overrun);
+		LUDLC_LOG_TRACE("RX-IRQ slab empty, disable RX IRQ");
+		uart_irq_rx_disable(sconn->uart_dev);
+	}
+}
+
+/**
+ * @brief UART interrupt callback.
+ *
+ * Handles transmit-ready and receive-ready events: received bytes are fed to
+ * the framing decoder.
+ */
+static void ludlc_serial_irq_cb(const struct device *dev, void *user_data)
 {
 	struct ludlc_serial_connection *sconn = user_data;
-	uint8_t c;
+	/* Read in chunks rather than one octet at a time: the decoder accepts
+	 * a run of them, which keeps the loop out of the IRQ.
+	 */
+	uint8_t buf[16];
 	struct rx_packet_item *rx_buf;
+	int n;
 
 	uart_irq_update(dev);
 
@@ -210,36 +250,28 @@ static void uart_irq_cb(const struct device *dev, void *user_data)
 		return;
 	}
 
-	/* Read all available bytes */
-	while (uart_fifo_read(dev, &c, 1) == 1) {
-		struct rx_packet_item *next_buf = NULL;
+	while ((n = uart_fifo_read(dev, buf, sizeof(buf))) > 0) {
+		int i = 0;
 
-		if (!ludlc_serial_decode(&sconn->conn,
-						&sconn->dec_state, c)) {
-			continue;
-		}
+		while (i < n) {
+			bool done;
 
-		rx_buf->size = sconn->dec_state.size;
-		/*
-		 * Publish the next RX buffer before queuing the completed one.
-		 */
-		if (!k_mem_slab_alloc(&sconn->rx_slab, (void **)&next_buf,
-				      K_NO_WAIT)) {
-			ludlc_serial_decoder_prep(&sconn->dec_state,
-						  next_buf->payload,
-						  sizeof(next_buf->payload));
-		}
+			i += (int)ludlc_dec_feed(sconn->fs, sconn->csum,
+						 &sconn->conn, &buf[i],
+						 (size_t)(n - i), &done);
+			if (done)
+				ludlc_serial_on_packet(sconn, rx_buf,
+						ludlc_dec_size(sconn->fs));
 
-		atomic_ptr_set(&sconn->curr_rx_buf, next_buf);
-		k_fifo_put(&sconn->rx_fifo, rx_buf);
-		k_event_post(&sconn->conn.pconn.rx_event, RX_READY_EVT);
-
-		rx_buf = next_buf;
-		if (!next_buf) {
-			LUDLC_INC_STATS(&sconn->conn, overrun);
-			LUDLC_LOG_TRACE("RX-IRQ slab empty, disable RX IRQ");
-			uart_irq_rx_disable(sconn->uart_dev);
-			break;
+			/* A completed frame swaps the buffer, and the slab may
+			 * now be empty, leaving nowhere for the rest. Those
+			 * octets are lost, as is everything else until a
+			 * buffer frees; see the overrun counter in
+			 * ludlc_serial_on_packet().
+			 */
+			rx_buf = atomic_ptr_get(&sconn->curr_rx_buf);
+			if (!rx_buf)
+				return;
 		}
 	}
 }
@@ -253,7 +285,7 @@ static void uart_irq_cb(const struct device *dev, void *user_data)
  * @param p2 Unused.
  * @param p3 Unused.
  */
-static void rx_serial_thread(void *p1, void *p2, void *p3)
+static void ludlc_serial_rx_thread(void *p1, void *p2, void *p3)
 {
 	struct ludlc_serial_connection *sconn = p1;
 
@@ -303,9 +335,7 @@ static void rx_serial_thread(void *p1, void *p2, void *p3)
 		}
 
 		if (!atomic_ptr_get(&sconn->curr_rx_buf)) {
-			ludlc_serial_decoder_prep(&sconn->dec_state,
-				rx_buf->payload,
-				sizeof(rx_buf->payload));
+			ludlc_serial_rx_arm(sconn, rx_buf->payload);
 
 			atomic_ptr_set(&sconn->curr_rx_buf, rx_buf);
 			uart_irq_rx_enable(sconn->uart_dev);
@@ -324,7 +354,7 @@ static void rx_serial_thread(void *p1, void *p2, void *p3)
  * or the interrupt-driven UART API.
  * @param sconn Pointer to the `ludlc_serial_connection` structure.
  */
-static void serial_start_tx(struct ludlc_serial_connection *sconn)
+static void ludlc_serial_start_tx(struct ludlc_serial_connection *sconn)
 {
 	if (IS_ENABLED(CONFIG_UART_ASYNC_API) &&
 	    ludlc_platform_test_bit(USE_ASYNC_API, &sconn->flags)) {
@@ -372,8 +402,8 @@ static void serial_start_tx(struct ludlc_serial_connection *sconn)
  * @param evt Pointer to the UART event structure.
  * @param user_data Pointer to the `ludlc_serial_connection` structure.
  */
-static void uart_async_callback(const struct device *dev,
-		struct uart_event *evt, void *user_data)
+static void ludlc_serial_async_cb(const struct device *dev,
+				  struct uart_event *evt, void *user_data)
 {
 	struct ludlc_serial_connection *sconn = user_data;
 
@@ -385,31 +415,50 @@ static void uart_async_callback(const struct device *dev,
 
 		k_event_post(&sconn->conn.pconn.tx_events, TX_SPACE_AVAIL_EVT);
 
-		/* Re-trigger */
-		serial_start_tx(sconn);
+		ludlc_serial_start_tx(sconn);
 	} else if (evt->type == UART_TX_ABORTED) {
 		ring_buf_get_finish(&sconn->tx_rb, evt->data.tx.len);
 		ludlc_platform_clear_bit(TX_ASYNC_BUSY, &sconn->flags);
 		ludlc_platform_request_tx(&sconn->conn);
 		k_event_post(&sconn->conn.pconn.tx_events, TX_SPACE_AVAIL_EVT);
-		serial_start_tx(sconn);
+		ludlc_serial_start_tx(sconn);
+	}
+}
+
+/**
+ * @brief Load the next core packet into the framing encoder, if it is idle.
+ */
+static void ludlc_serial_enc_load(struct ludlc_serial_connection *sconn)
+{
+	const void *hdr, *payload;
+	ludlc_payload_size_t hdr_sz, pay_sz;
+	int pending;
+
+	if (ludlc_enc_busy(sconn->fs))
+		return;
+
+	pending = ludlc_get_packet_to_send(&sconn->conn, &hdr, &hdr_sz,
+					       &payload, &pay_sz);
+	if (pending >= 0) {
+		/* Close the run with an EOF only when nothing
+		 * follows this frame.
+		 */
+		ludlc_enc_prep(sconn->fs, hdr, hdr_sz, payload, pay_sz,
+			       pending != 0);
+		if (!pending) {
+			ludlc_platform_request_tx(&sconn->conn);
+		}
 	}
 }
 
 /**
  * @brief TX serial thread entry point.
  *
- * This thread is responsible for encoding LuDLC packets and queuing them
- * for transmission via the UART. It waits for force-tx/exit events and does
- * not require UART/ring-buffer drain before local disconnect transition.
- * @param p1 Pointer to the `ludlc_serial_connection` structure.
- * @param p2 Unused.
- * @param p3 Unused.
+ * Pumps the framing encoder into the TX ring and starts the UART transmitter.
  */
-static void tx_serial_thread(void *p1, void *p2, void *p3)
+static void ludlc_serial_tx_thread(void *p1, void *p2, void *p3)
 {
 	struct ludlc_serial_connection *sconn = p1;
-	struct ludlc_senc_state enc_state;
 	bool packet_done = true;
 
 	ARG_UNUSED(p2);
@@ -417,18 +466,19 @@ static void tx_serial_thread(void *p1, void *p2, void *p3)
 
 	LUDLC_LOG_DEBUG("Start the serial TX thread");
 
-	ludlc_serial_encoder_init(&enc_state, sconn->csum);
+	ludlc_enc_init(sconn->fs);
 
 	while (sconn->conn.conn_state != LUDLC_STATE_TERMINATE) {
 		uint32_t evt;
 		uint32_t wait_mask = 0U;
 
+		/* An idle encoder loads a frame only on request, whatever the
+		 * room in the ring: a wake for space alone must not send one.
+		 */
 		if (packet_done) {
 			wait_mask = LUDLC_CONN_FORCE_TX_F |
 				    LUDLC_CONN_TX_EXIT_EVT;
-		}
-
-		if (ring_buf_space_get(&sconn->tx_rb) == 0U) {
+		} else if (ring_buf_space_get(&sconn->tx_rb) == 0U) {
 			wait_mask = LUDLC_CONN_TX_EXIT_EVT | TX_SPACE_AVAIL_EVT;
 		}
 
@@ -446,49 +496,33 @@ static void tx_serial_thread(void *p1, void *p2, void *p3)
 			}
 		}
 
-		if (ludlc_serial_encoder_idle(&enc_state)) {
-			/* Encoder is ready for a new packet. Get one. */
-			int is_tx_empty = ludlc_get_packet_to_send(
-				&sconn->conn,
-				&enc_state.hdr,
-				&enc_state.hdr_size,
-				&enc_state.payload,
-				&enc_state.payload_size);
+		ludlc_serial_enc_load(sconn);
 
-			if (is_tx_empty < 0) {
-				/*
-				 * Nothing to send. A DISCONNECT that has just
-				 * drained ends the session this way, the core
-				 * having taken the link down with it.
-				 */
-				ludlc_serial_encoder_init(&enc_state, sconn->csum);
-				continue;
-			}
+		/* A full ring leaves the rest of the frame for the next pass,
+		 * woken by TX_SPACE_AVAIL_EVT. The encoder writes into the
+		 * ring's own storage, so the frame is never copied.
+		 */
+		while (ludlc_enc_busy(sconn->fs)) {
+			uint8_t *dst;
+			uint32_t room;
 
-			if (!is_tx_empty) {
-				/* We are sending data, demand to send more */
-				ludlc_platform_request_tx(&sconn->conn);
-			}
+			room = ring_buf_put_claim(&sconn->tx_rb, &dst,
+						  UINT32_MAX);
+			if (!room)
+				break;
 
-			/* Send EOF marker only if queue is empty */
-			ludlc_serial_encoder_send_eof(&enc_state,
-					is_tx_empty != 0);
-			packet_done = false;
-		}
+			ring_buf_put_finish(&sconn->tx_rb,
+				(uint32_t)ludlc_enc_fill(sconn->fs,
+							 sconn->csum, dst,
+							 room));
 
-		/* Generate one octet from the encoder and queue it */
-		if (ring_buf_space_get(&sconn->tx_rb)) {
-			uint8_t byte = ludlc_serial_encode(&enc_state);
-			ring_buf_put(&sconn->tx_rb, &byte, 1);
-
-			if (ludlc_serial_encoder_idle(&enc_state)) {
-				/* The full packet has been encoded */
+			if (!ludlc_enc_busy(sconn->fs))
 				LUDLC_INC_STATS(&sconn->conn, tx_packet);
-				packet_done = true;
-			}
 		}
 
-		serial_start_tx(sconn);
+		packet_done = !ludlc_enc_busy(sconn->fs);
+
+		ludlc_serial_start_tx(sconn);
 	}
 
 	LUDLC_LOG_DEBUG("Exit from the serial TX thread");
@@ -535,14 +569,16 @@ void ludlc_serial_connection_destroy(struct ludlc_connection *conn)
 	}
 
 	ludlc_connection_cleanup(&sconn->conn);
+	ludlc_framing_destroy(sconn->fs);
 	free_serial_connection(sconn);
 }
+
 
 /**
  * @brief Creates and initializes a new LuDLC serial connection.
  *
- * This function allocates and configures a `ludlc_serial_connection` structure,
- * initializes Zephyr kernel objects, creates RX/TX threads, and sets up the UART.
+ * Allocates the connection, sets up the UART and starts the RX and TX
+ * threads.
  * @param arg Platform arguments: the UART device, the checksum and the cfg to
  * open the link with.
  * @param conn Output pointer to the newly created core `ludlc_connection`.
@@ -565,12 +601,22 @@ int ludlc_serial_connection_create(const ludlc_platform_args_t *arg,
 
 	cfg = *ludlc_args_conn_cfg(arg);
 
-	/* The frames carry a checksum, so the caller must supply one, and it
+	/* The framing needs a checksum, so the caller must supply one, and it
 	 * must fit the register it is computed in.
 	 */
 	if (!arg->csum || !arg->csum->csum ||
 	    !arg->csum->octets || arg->csum->octets > LUDLC_MAX_CSUM_SIZE) {
 		LUDLC_LOG_ERROR("No usable checksum for the link");
+		return -EINVAL;
+	}
+
+	/*
+	 * A UART delivers octets and nothing else, so a framing that needs the
+	 * transport to supply the frame length would never complete a frame.
+	 */
+	if (arg->framing && arg->framing->needs_wire_len) {
+		LUDLC_LOG_ERROR("%s framing needs a transport that says where "
+				"a frame ends", arg->framing->name);
 		return -EINVAL;
 	}
 
@@ -582,13 +628,19 @@ int ludlc_serial_connection_create(const ludlc_platform_args_t *arg,
 	sconn->uart_dev = arg->dev;
 	sconn->csum = arg->csum;
 
+	sconn->fs = ludlc_framing_create(arg->framing);
+	if (!sconn->fs) {
+		ret = -ENOMEM;
+		goto err;
+	}
+
 	k_fifo_init(&sconn->rx_fifo);
 	k_mem_slab_init(&sconn->rx_slab,
 			sconn->rx_slab_bufs,
 			RX_BUF_ALIGNED_SIZE,
 			NUM_RX_BUFFERS);
 
-	ludlc_serial_decoder_init(&sconn->dec_state, arg->csum);
+	ludlc_dec_init(sconn->fs);
 
 	if (k_mem_slab_alloc(&sconn->rx_slab, (void **)&rx_buf, K_NO_WAIT)) {
 		ret = -ENOMEM;
@@ -603,12 +655,12 @@ int ludlc_serial_connection_create(const ludlc_platform_args_t *arg,
 	ret = -ENOTSUP;
 	if (IS_ENABLED(CONFIG_UART_INTERRUPT_DRIVEN)) {
 		ret = uart_irq_callback_user_data_set(sconn->uart_dev,
-				uart_irq_cb,
+				ludlc_serial_irq_cb,
 				(void *)sconn);
 	}
 
 	if (IS_ENABLED(CONFIG_UART_ASYNC_API) && ret) {
-		ret = uart_callback_set(sconn->uart_dev, uart_async_callback,
+		ret = uart_callback_set(sconn->uart_dev, ludlc_serial_async_cb,
 				(void *)sconn);
 		if (!ret) {
 			ludlc_platform_set_bit(USE_ASYNC_API, &sconn->flags);
@@ -619,7 +671,6 @@ int ludlc_serial_connection_create(const ludlc_platform_args_t *arg,
 		goto err;
 	}
 
-	/* Initialize the core connection, passing sconn->conn as the user_arg */
 	ret = ludlc_connection_init(&sconn->conn, &cfg, cb, &sconn->conn);
 	if (ret) {
 		LUDLC_LOG_ERROR("Can't open a link of %u payload octets: %d",
@@ -627,14 +678,16 @@ int ludlc_serial_connection_create(const ludlc_platform_args_t *arg,
 		goto err;
 	}
 
-	ludlc_serial_decoder_prep(&sconn->dec_state, rx_buf->payload,
-				  sizeof(rx_buf->payload));
+	/*
+	 * A byte stream carries no frame length, so the framing finds the end
+	 * itself; the transport only provides the buffer to gather into.
+	 */
+	ludlc_serial_rx_arm(sconn, rx_buf->payload);
 
-	/* Create RX Thread */
 	sconn->rx_thread = k_thread_create(&sconn->rx_thread_data,
 			sconn->rx_thread_stack,
 			sizeof(sconn->rx_thread_stack),
-			rx_serial_thread,
+			ludlc_serial_rx_thread,
 			sconn, NULL, NULL,
 			RX_THREAD_PRIO, 0, K_NO_WAIT);
 	if (!sconn->rx_thread) {
@@ -647,7 +700,7 @@ int ludlc_serial_connection_create(const ludlc_platform_args_t *arg,
 	sconn->tx_thread = k_thread_create(&sconn->tx_thread_data,
 			sconn->tx_thread_stack,
 			sizeof(sconn->tx_thread_stack),
-			tx_serial_thread,
+			ludlc_serial_tx_thread,
 			sconn, NULL, NULL,
 			TX_THREAD_PRIO, 0, K_NO_WAIT);
 	if (!sconn->tx_thread) {
@@ -693,13 +746,7 @@ static const struct ludlc_csum ludlc_crc16_ccitt_pr0 = {
 	.octets = 2,
 };
 
-/**
- * @brief Provides default platform arguments for a serial connection.
- *
- * This function populates a `ludlc_platform_args_t` structure with default
- * values: `uart0` and CRC-16/KERMIT.
- * @param args Pointer to the `ludlc_platform_args_t` structure to populate.
- */
+/** @brief The board's uart0, and this build's default framing and checksum. */
 void ludlc_default_serial_platform_args(ludlc_platform_args_t *args)
 {
 	static const ludlc_platform_args_t def_args = {

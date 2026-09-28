@@ -23,6 +23,27 @@
 #include <ludlc_packet.h>
 #include <ludlc_logger.h>
 
+/* Borrowed from kernel */
+/*
+ * Add the pseudo keyword 'fallthrough' so case statement blocks
+ * must end with any of these keywords:
+ *   break;
+ *   fallthrough;
+ *   continue;
+ *   goto <label>;
+ *   return [expression];
+ *
+ *  gcc: https://gcc.gnu.org/onlinedocs/gcc/Statement-Attributes.html#Statement-Attributes
+ */
+#ifdef __has_attribute
+# if __has_attribute(__fallthrough__)
+#  define fallthrough			__attribute__((__fallthrough__))
+# endif
+#endif
+#ifndef fallthrough
+# define fallthrough			do {} while (0)	/* fallthrough */
+#endif
+
 /**
  * @enum ludlc_conn_state
  * @brief Defines the states of the LuDLC connection finite state machine (FSM).
@@ -417,6 +438,95 @@ void ludlc_watchdog_rearm(struct ludlc_connection *conn);
 
 /** @} */
 
+/** @brief Whether @p alg runs at all. NULL means no checksum. */
+static inline bool ludlc_csum_on(const struct ludlc_csum *alg)
+{
+	return alg != NULL;
+}
+
+/** @brief How many octets the checksum takes on the wire. */
+static inline uint8_t ludlc_csum_octets(const struct ludlc_csum *alg)
+{
+	return alg->octets;
+}
+
+/** @brief Start the checksum of a frame about to be sent. */
+static inline ludlc_csum_t ludlc_csum_tx_init(const struct ludlc_csum *alg)
+{
+	return alg->init;
+}
+
+/** @brief Add @p data, an octet being sent, to @p csum. */
+static inline ludlc_csum_t ludlc_csum_tx(const struct ludlc_csum *alg,
+					 ludlc_csum_t csum, uint8_t data)
+{
+	return alg->csum(csum, data);
+}
+
+/** @brief The checksum of the frame sent, as it goes on the wire. */
+static inline ludlc_csum_t ludlc_csum_tx_final(const struct ludlc_csum *alg,
+					       ludlc_csum_t csum)
+{
+	return alg->to_wire ? alg->to_wire(csum) : csum;
+}
+
+/** @brief Start the checksum of a frame about to be received. */
+static inline ludlc_csum_t ludlc_csum_rx_init(const struct ludlc_csum *alg)
+{
+	return alg->init;
+}
+
+/** @brief Add @p data, an octet received, to @p csum. */
+static inline ludlc_csum_t ludlc_csum_rx(const struct ludlc_csum *alg,
+					 ludlc_csum_t csum, uint8_t data)
+{
+	return alg->csum(csum, data);
+}
+
+/** @brief Whether the frame received, its checksum included, is intact. */
+static inline bool ludlc_csum_rx_ok(const struct ludlc_csum *alg,
+				    ludlc_csum_t csum)
+{
+	return csum == alg->verify;
+}
+
+/**
+ * @brief Minimum useful frame: a PING packet plus the checksum.
+ *
+ * A protocol limit rather than a framing one: every framing rejects anything
+ * shorter. The width comes from @p csum_alg, not from @ref ludlc_csum_t,
+ * which is only the register the checksum is computed in.
+ *
+ * @param csum_alg Checksum this link runs.
+ * @return Smallest acceptable decoded frame size, in octets.
+ */
+static inline size_t
+ludlc_frame_min_sz(const struct ludlc_csum *csum_alg)
+{
+	size_t sz = ludlc_csum_on(csum_alg) ? ludlc_csum_octets(csum_alg) : 0;
+
+	return sz + sizeof(ludlc_ping_packet_t);
+}
+
+/**
+ * @brief Largest frame this link puts on the wire, before any framing.
+ *
+ * The link's payload limit, plus a header and @p csum_alg. Only the framings
+ * and the transports need it. The core works in payloads.
+ *
+ * @param conn The connection.
+ * @param csum_alg Checksum this link runs.
+ * @return Octets, never zero.
+ */
+static inline ludlc_frame_size_t
+ludlc_conn_frame_sz(const struct ludlc_connection *conn,
+		    const struct ludlc_csum *csum_alg)
+{
+	return (ludlc_frame_size_t)
+		LUDLC_FRAME_SIZE(ludlc_conn_payload_lim(conn),
+				 ludlc_csum_octets(csum_alg));
+}
+
 /**
  * @brief The payload a cfg asks for, resolved as ludlc_connection_init() would.
  *
@@ -438,5 +548,7 @@ ludlc_cfg_max_payload(const struct ludlc_conn_cfg *cfg)
 
 	return (ludlc_payload_size_t)CONFIG_LUDLC_MAX_PAYLOAD_SIZE;
 }
+
+struct ludlc_framing_state;
 
 #endif /* __LUDLC_PRIVATE_H__ */

@@ -26,6 +26,7 @@
 
 #include <ludlc_types.h>
 
+#define LUDLC_CONTAINER_OF(p, t, m)	CONTAINER_OF(p, t, m)
 /** @brief Bits in one @ref ludlc_platform_atomic_t. */
 #define LUDLC_BITS_PER_WORD		ATOMIC_BITS
 
@@ -119,6 +120,8 @@ static inline void ludlc_platform_clear_mask(ludlc_platform_atomic_t mask,
 #define LUDLC_UNLOCK(lk)		k_mutex_unlock(lk)
 
 /* --- Allocation --- */
+#if CONFIG_HEAP_MEM_POOL_SIZE > 0
+
 static inline void *ludlc_platform_alloc(size_t sz)
 {
 	return k_calloc(1, sz);
@@ -128,6 +131,22 @@ static inline void ludlc_platform_free(void *ptr)
 {
 	k_free(ptr);
 }
+
+#else /* No heap configured: the caller must fall back on static storage. */
+
+static inline void *ludlc_platform_alloc(size_t sz)
+{
+	(void)sz;
+
+	return NULL;
+}
+
+static inline void ludlc_platform_free(void *ptr)
+{
+	(void)ptr;
+}
+
+#endif /* CONFIG_HEAP_MEM_POOL_SIZE */
 
 /* --- Timers --- */
 typedef struct k_timer ludlc_platform_timer_t;

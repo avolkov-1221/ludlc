@@ -14,4 +14,12 @@
 # LUDLC_CORE_SRC holds absolute paths, and lists nothing from platform/: a
 # port declares its own files.
 
+# The protocol, and whichever framings the port needs. A codec file has no
+# #ifdef on its own config, so a framing is left out of the image by dropping
+# its file here. Pass the same setting to the compiler as
+# CONFIG_LUDLC_FRAMING_*, which is what the headers read.
 set(LUDLC_CORE_SRC ${CMAKE_CURRENT_LIST_DIR}/ludlc.c)
+
+if(CONFIG_LUDLC_FRAMING_HDLC)
+        list(APPEND LUDLC_CORE_SRC ${CMAKE_CURRENT_LIST_DIR}/ludlc_hdlc.c)
+endif(CONFIG_LUDLC_FRAMING_HDLC)

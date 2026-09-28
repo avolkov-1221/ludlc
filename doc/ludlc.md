@@ -58,24 +58,35 @@ A counter on an unconfirmed packet. Each time a NAK reports this
 particular packet missing, its TTL is decremented. If it reaches
 zero, the packet is dropped.
 
+**Frame**
+
+What a transport carries: one LuDLC packet and a checksum over it.
+Its maximum size is agreed by the network, and it is what bounds
+a payload, the header and the checksum coming off it first.
+
+**Framing**
+
+The optional layer that puts a frame on the wire and says where it
+ends. Which one a link runs is agreed by both of its ends, as
+described in Appendix A.
+
 **SOF (Start of Frame)**
 
-A special byte marker used in the optional serial implementation to
+A special byte marker used in the escaping framing (`hdlc`) to
 signal the beginning of a packet.
 
 **EOF (End of Frame)**
 
-A marker for the end of a packet in the optional serial
-implementation. The SOF of a *new* packet implicitly serves
-as the EOF for the *previous* one. A standalone EOF (identical
-to the SOF byte) is only sent if the line is about to go idle.
+A marker for the end of a packet in the escaping framing. The SOF
+of a *new* packet implicitly serves as the EOF for the *previous*
+one. A standalone EOF (identical to the SOF byte) is only sent if
+the line is about to go idle.
 
 **ESC (Escape Byte)**
 
-A special byte marker used in the optional serial implementation
-to facilitate byte stuffing. It signals that the following byte
-has been modified (escaped) to avoid collision with the SOF or
-ESC bytes.
+A special byte marker used in the escaping framing to facilitate
+byte stuffing. It signals that the following byte has been modified
+(escaped) to avoid collision with the SOF or ESC bytes.
 
 ### Introduction
 
@@ -108,7 +119,8 @@ within an outer protocol that adds an addressing layer.
   connection watchdog.
 * **Multiplexing**: Supports multiple logical channels over a single link.
 * **Flexible Transport**: The protocol is transport-agnostic and can run
-  over various physical layers, such as UART, SPI, or CAN.
+  over various physical layers, such as UART, SPI, or CAN, each link
+  choosing the framing and the integrity check that suit its wire.
 
 ## LuDLC Protocol (Logic Layer)
 
@@ -116,11 +128,13 @@ The LuDLC Protocol defines the logical packet structure, connection
 management, and reliability mechanisms. It is designed to be
 transport-agnostic and can be adapted to different physical layers.
 
-For simple transports (like UART), it can be encapsulated by a framing
-layer (see Appendix A) that adds packet delimitation and error
-detection. For transports with built-in integrity and framing, such as CAN bus,
-this optional layer can be minimal, allowing the LuDLC packet to be transmitted
-nearly directly, with only minor rearrangement of the header’s fields.
+For simple transports (like UART), it can be encapsulated by one of the
+framing layers of Appendix A, which add packet delimitation and error
+detection. Which one a link runs is a property of the network rather than of
+either node, so both ends agree on it as they agree on the checksum. For
+transports with built-in integrity and framing, such as CAN bus, this optional
+layer can be minimal, allowing the LuDLC packet to be transmitted nearly
+directly, with only minor rearrangement of the header’s fields.
 
 #### LuDLC Packet Structure
 
@@ -252,7 +266,8 @@ The connection is now established.
 The handshake packet sent by a node when it enters **State 1**
 (i.e., the packet with `id=1`), may optionally contain a payload. This
 payload **cannot be fragmented** and its size must fit within the
-net wide defined maximum packet size for the connection.
+net wide defined maximum packet size for the connection (see
+Appendix A).
 
 While transports like CAN bus inherently limit this payload (e.g., to 8
 bytes), other transports like UART or SPI may allow for a significantly
@@ -469,18 +484,66 @@ The control channel is reserved for these packets. Callers cannot send on
 it, as a handshake step and a disconnect are told apart by the shape of the
 packet, which a caller could otherwise imitate.
 
-## Appendix A: Optional Serial Framing Implementation
+## Appendix A: Optional Framing Layer
 
-The following describes the serial framing layer implementation. This
-layer is **optional** and is intended for octet-stream transports that
-lack hardware framing and integrity checks (like UART).
+The following describes the framing layer implementations. This layer is
+**optional** and is intended for transports that lack framing, integrity
+checks, or both, such as a UART, which has neither.
+
+#### What a Frame Is
+
+Whichever framing a link runs, what that framing carries is the same: one
+LuDLC packet and a checksum over it.
+
+```text
+    +-------------------------------------+------------------+
+    |        LuDLC Protocol Packet        |     Checksum     |
+    |   (header and payload, see above)   |    (Variable)    |
+    +-------------------------------------+------------------+
+    |<----------------------- Frame ------------------------>|
+```
+
+The largest frame a link may carry is what bounds a payload: the header and
+this link's checksum come off it, and what is left is the most one packet can
+hold. A wider checksum therefore costs payload, and a link whose transport
+checks frames itself, carrying no checksum, keeps those octets for data.
+
+Both ends of a link must agree on the framing, on the checksum and on that
+maximum frame size, for the same reason in all three cases: each describes the
+network and not either node. Disagree on any one of them and nothing ever
+arrives.
+
+#### Checksum
+
+A checksum of the packet *as it stands*, before the framing has touched it,
+used to ensure data integrity. It is what the framing carries and what the
+receiver checks once the framing has been undone, so neither stuffing nor
+escaping is ever covered by it.
+
+The specific algorithm (e.g., CRC-8, CRC-16 etc) is user-defined, and so is
+its width: the algorithm's own width is what goes on the wire, whatever the
+width of the type a given build computes it in. The user should choose an
+algorithm appropriate for their device's architecture and requirements, and
+both ends of a link must choose the same one.
+
+The checksum belongs to the transport, not to the protocol engine. A link is
+told which one it runs through `struct ludlc_csum`: the running function, its
+seed, the residual it must leave behind, an optional final transform and its
+width in octets. A transport validating frames in hardware carries no checksum
+at all.
+
+The checksum is transmitted **least significant octet first**, whatever the
+endianness of either peer. An algorithm that is defined the other way round
+(CRC-16/XMODEM against CRC-16/KERMIT) is expressed by swapping the value
+before it is handed over, which is also where a final XOR belongs (HDLC's
+FCS-16).
+
+#### Escaped Delimiters (`hdlc`)
 
 This framing method is conceptually similar to PPP (Point-to-Point
 Protocol) but, by default, uses different Flag Sequence and Escape values.
 
-#### Frame Structure
-
-A single serial frame has the following structure:
+A single escaped frame has the following structure:
 
 ```text
     +----------+----------------------------+------------------+-----------+
@@ -499,25 +562,8 @@ A single serial frame has the following structure:
   * **Escaped Payload**: This is the complete "LuDLC Protocol Packet"
     (see above), which has been byte-stuffed.
 
-  * **Escaped Checksum**: A checksum of the *original, un-escaped*
-    payload, used to ensure data integrity. The specific algorithm
-    (e.g., CRC-8, CRC-16 etc) is user-defined, and so is its width:
-    the algorithm's own width is what goes on the wire, whatever the
-    width of the type a given build computes it in. The user should
-    choose an algorithm appropriate for their device's architecture
-    and requirements, and both ends of a link must choose the same one.
-
-    The checksum belongs to the transport, not to the protocol engine.
-    A link is told which one it runs through `struct ludlc_csum`: the
-    running function, its seed, the residual it must leave behind, an
-    optional final transform and its width in octets. A transport
-    validating frames in hardware carries no checksum at all.
-
-    The checksum is transmitted **least significant octet first**,
-    whatever the endianness of either peer. An algorithm that is
-    defined the other way round (CRC-16/XMODEM against CRC-16/KERMIT)
-    is expressed by swapping the value before it is handed over, which
-    is also where a final XOR belongs (HDLC's FCS-16).
+  * **Escaped Checksum**: The checksum described above, byte-stuffed in
+    the same way as the payload it covers.
 
   * **[EOF] (End of Frame)**: An optional octet identical to the SOF
     octet. It is **only** sent to explicitly terminate a packet if no
@@ -525,7 +571,7 @@ A single serial frame has the following structure:
     this octet is **omitted**, and the SOF of the *next* packet serves
     as the EOF for this one.
 
-#### Byte Stuffing (Escaping)
+**Byte Stuffing**
 
 To ensure the SOF/EOF octet never appears in the payload or
 checksum, byte stuffing is applied using a special Escape octet.
@@ -554,3 +600,8 @@ ESC=`0xAA`, Mask=`0x20`):
 On reception, if the Escape octet is received, the next octet is read
 and XORed with the escape mask (`0x20`) to reconstruct the
 original octet.
+
+Two octets of every 256 are therefore doubled on average, and a frame of
+unlucky data doubles entirely. This is the price of a framing that need not
+know how long a frame is going to be, and the reason a transport that has to
+say so beforehand cannot carry it.

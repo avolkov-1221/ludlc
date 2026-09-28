@@ -11,9 +11,9 @@
  * @details
  * A caller fills them in, or starts from
  * ludlc_default_serial_platform_args(), and passes them to
- * ludlc_serial_connection_create(). The checksum is borrowed and must
- * outlive the connection; the connection settings are copied when it is
- * created.
+ * ludlc_serial_connection_create(). The checksum and the framing are
+ * borrowed and must outlive the connection; the connection settings are
+ * copied when it is created.
  */
 
 #ifndef __LUDLC_PLATFORM_ARGS_H__
@@ -22,6 +22,7 @@
 #include <ludlc_proto.h>
 
 struct ludlc_csum;
+struct ludlc_framing;
 
 typedef struct ludlc_platform_args {
 	char *port;
@@ -34,6 +35,16 @@ typedef struct ludlc_platform_args {
 	 * the connection.
 	 */
 	const struct ludlc_csum *csum;
+
+	/**
+	 * @brief How this link delimits its frames.
+	 *
+	 * NULL means @ref ludlc_framing_hdlc. Otherwise one of the
+	 * ludlc_framing_* descriptors that delimits its own frames: a TTY
+	 * carries a byte stream and cannot mark the end of one. Borrowed, and
+	 * must outlive the connection.
+	 */
+	const struct ludlc_framing *framing;
 
 	/**
 	 * @brief What to open the link with: its clock and its settings.
