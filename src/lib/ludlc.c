@@ -136,13 +136,20 @@ static inline bool ludlc_tx_queue_empty(struct ludlc_connection *conn)
 /**
  * @brief Checks if the transmit (TX) queue is full (window is saturated).
  *
+ * A slot holds its packet until the confirmation has been reported, not
+ * merely decided, so the count runs from @ref ludlc_conn_last_reported rather
+ * than @c last_ack and the window cannot advance onto a slot whose callback
+ * has yet to run. A build that reports inline makes the two the same, leaving
+ * the plain window check.
+ *
  * @param conn Pointer to the connection structure.
- * @return true if the number of unacknowledged packets has reached the
- * window size, false otherwise.
+ * @return true if the unacknowledged packets, together with those resolved
+ * but not yet reported, have reached the window size, false otherwise.
  */
 static inline bool ludlc_tx_queue_full(struct ludlc_connection *conn)
 {
-	if (((conn->last_queued - conn->last_ack) & LUDLC_ID_MASK) >=
+	if (((conn->last_queued -
+		ludlc_conn_last_reported(conn)) & LUDLC_ID_MASK) >=
 				ludlc_conn_window(conn)) {
 		return true;
 	}
@@ -170,98 +177,195 @@ static inline void ludlc_call_on_disconnect(struct ludlc_connection *conn)
 	}
 }
 
-#ifdef CONFIG_LUDLC_MT
-/* One slot per window packet, plus one for the unnumbered packet. */
-#define LUDLC_DECLARE_CONFIRMED_QUEUE(q_name) \
-	struct packet_queue_item q_name[CONFIG_LUDLC_WINDOW + 1]
 /**
- * @brief (MT) Adds a confirmed packet to a temporary queue for later processing.
+ * @brief Resets the sequence once nothing is left to report.
  *
- * In multi-threaded builds, this function queues confirmed packets. The
- * actual user callback is invoked later, outside the connection lock,
- * by @ref ludlc_confirm_unlocked.
+ * The disconnect sweep cannot clear the counters itself, because a resolved
+ * packet is reported from the slot it was sent from and the counters are what
+ * identify those slots. The sweep therefore sets @ref LUDLC_CONN_BUS_OUT_F
+ * and calls this, as does every pass of @ref ludlc_confirm_unlocked; the call
+ * that finds nothing pending does the reset and reopens the queue. In a build
+ * that reports inline that is always the sweep.
  *
  * @note This function must be called with the connection lock held.
  *
- * @param conn Pointer to the connection structure (unused in this function).
- * @param pkt The packet queue item that has been confirmed.
- * @param cq The temporary array to store confirmed packets.
- * @param confirmed_num Pointer to the counter of confirmed packets in `cq`.
+ * @param conn Pointer to the connection structure.
  */
-static inline void ludlc_on_confirm_lock(struct ludlc_connection *conn,
-				struct packet_queue_item *pkt,
-				struct packet_queue_item *cq,
-				ludlc_id_t *confirmed_num)
+static void ludlc_seq_reset_if_drained(struct ludlc_connection *conn)
+{
+	if (!ludlc_platform_test_bit(LUDLC_CONN_BUS_OUT_F, &conn->flags)) {
+		return;
+	}
+
+#ifdef CONFIG_LUDLC_MT
+	if (conn->last_reported != conn->last_ack ||
+	    ludlc_platform_test_bit(LUDLC_CONN_U_CONFIRM_F, &conn->flags)) {
+		return;
+	}
+
+	conn->last_reported = 0;
+#endif
+
+	conn->last_sent = 0;
+	conn->last_queued = 0;
+	conn->last_ack = 0;
+	conn->last_received = 0;
+
+	ludlc_platform_clear_bit(LUDLC_CONN_BUS_OUT_F, &conn->flags);
+}
+
+#ifdef CONFIG_LUDLC_MT
+/**
+ * @brief (MT) Leaves a resolved packet for @ref ludlc_confirm_unlocked.
+ *
+ * Nothing is copied or queued: the item stays in its slot, and @c last_ack
+ * having moved past it is what marks the callback as pending. The window
+ * cannot reach that slot first; see @ref ludlc_tx_queue_full.
+ *
+ * @note This function must be called with the connection lock held, and the
+ * caller must have written @c status.result into the slot.
+ *
+ * @param conn Pointer to the connection structure.
+ * @param pkt The slot that has been resolved.
+ */
+static inline void ludlc_confirm_queued_lock(struct ludlc_connection *conn,
+				const struct packet_queue_item *pkt)
 {
 	(void)conn;
-	cq[*confirmed_num] = *pkt;
-	(*confirmed_num)++;
+	(void)pkt;
 }
 
 /**
- * @brief (MT) Invokes user confirmation callbacks after releasing the lock.
+ * @brief (MT) Saves the unnumbered packet's confirmation to be reported.
  *
- * Iterates over the temporarily queued confirmed packets and calls the
- * user's `on_confirm` callback for each one.
+ * It has no window slot, so the range cannot describe it. Copied rather than
+ * referenced, because @ref ludlc_send_disconnect reuses @c u_packet for the
+ * next packet in the very next statement.
+ *
+ * @note This function must be called with the connection lock held, and the
+ * caller must have written @c status.result into @c u_packet.
+ *
+ * @param conn Pointer to the connection structure.
+ */
+static inline void ludlc_confirm_u_lock(struct ludlc_connection *conn)
+{
+	conn->u_confirm = conn->u_packet;
+	ludlc_platform_set_bit(LUDLC_CONN_U_CONFIRM_F, &conn->flags);
+}
+
+/**
+ * @brief (MT) Runs the callbacks the lock decided on, with the lock released.
+ *
+ * Each pass copies up to @ref CONFIG_LUDLC_CONFIRM_BATCH of the pending range
+ * <tt>(last_reported, last_ack]</tt> onto the stack, releases the lock and
+ * runs their callbacks, so the stack is bounded by the batch and not by the
+ * window. The batch needs no locking, being on the reporting thread's stack
+ * and nowhere else; @ref LUDLC_REPORT_BUSY_F only fixes the order the
+ * callbacks run in. A caller that finds it set returns, leaving its items to
+ * the thread holding it.
  *
  * @note This function must be called *without* the connection lock held.
  *
  * @param conn Pointer to the connection structure.
- * @param cq The array of confirmed packets.
- * @param confirmed_num The number of packets in `cq`.
  */
-static void ludlc_confirm_unlocked(struct ludlc_connection *conn,
-		struct packet_queue_item *cq, ludlc_id_t confirmed_num)
+static void ludlc_confirm_unlocked(struct ludlc_connection *conn)
 {
-	ludlc_id_t i;
+	if (ludlc_platform_test_and_set_bit(LUDLC_REPORT_BUSY_F,
+					    &conn->report_busy)) {
+		return;
+	}
 
-	for (i = 0; i < confirmed_num; i++) {
-		ludlc_call_on_confirm(conn, &cq[i]);
+	for (;;) {
+		struct packet_queue_item batch[CONFIG_LUDLC_CONFIRM_BATCH];
+		struct packet_queue_item u_pkt;
+		bool u_done = false;
+		unsigned int n = 0;
+		unsigned int i;
+
+		LUDLC_LOCK(&conn->lock);
+
+		if (ludlc_platform_test_bit(LUDLC_CONN_U_CONFIRM_F,
+					    &conn->flags)) {
+			u_pkt = conn->u_confirm;
+			ludlc_platform_clear_bit(LUDLC_CONN_U_CONFIRM_F,
+						 &conn->flags);
+			u_done = true;
+		}
+
+		while (n < CONFIG_LUDLC_CONFIRM_BATCH &&
+		       conn->last_reported != conn->last_ack) {
+			conn->last_reported = (conn->last_reported + 1) &
+					      LUDLC_ID_MASK;
+			batch[n++] = conn->packets_q[
+				conn->last_reported &
+				ludlc_conn_window_mask(conn)];
+		}
+
+		ludlc_seq_reset_if_drained(conn);
+
+		if (!n && !u_done) {
+			/*
+			 * Nothing left, so the flag is cleared here rather
+			 * than after the unlock. A packet is resolved under
+			 * this same lock and its thread tests the flag
+			 * afterwards, so it either appears in a batch above
+			 * or finds the flag clear and becomes the reporter.
+			 * Cleared outside the lock, the two can miss each
+			 * other and the confirmation is never reported.
+			 */
+			ludlc_platform_clear_bit(LUDLC_REPORT_BUSY_F,
+						 &conn->report_busy);
+			LUDLC_UNLOCK(&conn->lock);
+
+			return;
+		}
+
+		LUDLC_UNLOCK(&conn->lock);
+
+		if (u_done) {
+			ludlc_call_on_confirm(conn, &u_pkt);
+		}
+
+		for (i = 0; i < n; i++) {
+			ludlc_call_on_confirm(conn, &batch[i]);
+		}
 	}
 }
 #else
-/* Confirmations are made on the spot in this build, so nothing is held. */
-#define LUDLC_DECLARE_CONFIRMED_QUEUE(q_name) \
-	struct packet_queue_item *q_name = NULL
 /**
  * @brief (non-MT) Immediately invokes the user confirmation callback.
  *
- * In single-threaded builds, this function directly calls the user's
- * `on_confirm` callback.
+ * With no other thread to order against, the callback runs where the
+ * confirmation is decided.
  *
  * @note This function must be called with the connection lock held.
  *
  * @param conn Pointer to the connection structure.
  * @param pkt The packet queue item that has been confirmed.
- * @param cq Unused in non-MT builds.
- * @param confirmed_num Unused in non-MT builds.
  */
-static void ludlc_on_confirm_lock(struct ludlc_connection *conn,
-				struct packet_queue_item *pkt,
-				struct packet_queue_item *cq,
-				ludlc_id_t *confirmed_num)
+static void ludlc_confirm_queued_lock(struct ludlc_connection *conn,
+				const struct packet_queue_item *pkt)
 {
-	(void)cq;
-	(void)confirmed_num;
 	ludlc_call_on_confirm(conn, pkt);
+}
+
+/** @brief (non-MT) Immediately confirms the unnumbered packet. */
+static inline void ludlc_confirm_u_lock(struct ludlc_connection *conn)
+{
+	ludlc_call_on_confirm(conn, &conn->u_packet);
 }
 
 /**
  * @brief (non-MT) Stub function.
  *
- * In single-threaded builds, confirmations are handled immediately in
- * @ref ludlc_on_confirm_lock, so this function does nothing.
+ * Confirmations are reported in @ref ludlc_confirm_queued_lock as they are
+ * decided, so nothing is ever left to report here.
  *
  * @param conn Unused.
- * @param cq Unused.
- * @param confirmed_num Unused.
  */
-static inline void ludlc_confirm_unlocked(struct ludlc_connection *conn,
-		struct packet_queue_item *cq, ludlc_id_t confirmed_num)
+static inline void ludlc_confirm_unlocked(struct ludlc_connection *conn)
 {
 	(void)conn;
-	(void)cq;
-	(void)confirmed_num;
 }
 
 #endif
@@ -273,15 +377,15 @@ static inline void ludlc_confirm_unlocked(struct ludlc_connection *conn,
  * outstanding packet with EPIPE. That covers the transmit queue and the
  * unnumbered packet, if one is still waiting to be sent.
  *
+ * The sequence is reset once all of that has been reported, which is not
+ * necessarily here; the queue stays closed until it is. See
+ * @ref LUDLC_CONN_BUS_OUT_F and @ref ludlc_seq_reset_if_drained.
+ *
  * @note This function must be called with the connection lock held.
  *
  * @param conn Pointer to the connection structure.
- * @param cq Temporary queue for confirmed (failed) packets (for MT build).
- * @param confirmed_num Pointer to counter for `cq` (for MT build).
  */
-static void on_disconnect_lock(struct ludlc_connection *conn,
-		struct packet_queue_item *cq,
-		ludlc_id_t *confirmed_num)
+static void on_disconnect_lock(struct ludlc_connection *conn)
 {
 	ludlc_id_t i, cnt;
 
@@ -291,6 +395,12 @@ static void on_disconnect_lock(struct ludlc_connection *conn,
 	ludlc_platform_stop_timer(&conn->ping_timer);
 
 	conn->conn_state = LUDLC_STATE_DISCONNECTED;
+
+	/* Everything below is failed to the user, and the sequence resets
+	 * once it has all been reported. A packet accepted in between would
+	 * be lost to that reset, so the queue is closed until then.
+	 */
+	ludlc_platform_set_bit(LUDLC_CONN_BUS_OUT_F, &conn->flags);
 
 	/* The unnumbered packet is not part of the window, so it is not among
 	 * those failed below, but its buffer must be returned all the same.
@@ -303,13 +413,15 @@ static void on_disconnect_lock(struct ludlc_connection *conn,
 			!ludlc_platform_test_bit(LUDLC_CONN_DISC_AFTER_TX_F,
 				&conn->flags)) {
 		conn->u_packet.status.result = EPIPE;
-		ludlc_on_confirm_lock(conn, &conn->u_packet, cq, confirmed_num);
+		ludlc_confirm_u_lock(conn);
 	}
 
-	/* Keep the lifecycle bit and clear the runtime protocol flags. That
-	 * frees the unnumbered packet slot confirmed above, which means setting
-	 * the active-low flags rather than clearing them. The idle ones go
-	 * first, so a reader between the two sees the slot free.
+	/* Keep the lifecycle bit, this sweep and any confirmation it just
+	 * saved, and clear the runtime protocol flags. That frees the
+	 * unnumbered packet slot confirmed above, which means setting the
+	 * active-low flags rather than clearing them. The idle ones go first,
+	 * so a reader between the two sees the slot free rather than a
+	 * disconnect still owing a confirmation.
 	 */
 	ludlc_platform_set_mask(LUDLC_CONN_IDLE_MASK, &conn->flags);
 	ludlc_platform_clear_mask(LUDLC_CONN_SWEEP_CLEAR_MASK, &conn->flags);
@@ -328,14 +440,15 @@ static void on_disconnect_lock(struct ludlc_connection *conn,
 		it = &conn->packets_q[i & ludlc_conn_window_mask(conn)];
 		it->status.result = EPIPE;
 
-		ludlc_on_confirm_lock(conn, it, cq, confirmed_num);
+		ludlc_confirm_queued_lock(conn, it);
 	}
 
-	/* Reset queue pointers */
-	conn->last_sent = 0;
-	conn->last_queued = 0;
-	conn->last_ack = 0;
-	conn->last_received = 0;
+	/* Everything the window held is resolved now and pending a callback:
+	 * the range the drain walks runs up to last_ack.
+	 */
+	conn->last_ack = conn->last_queued;
+
+	ludlc_seq_reset_if_drained(conn);
 
 	LUDLC_INC_STATS(conn, on_disconn);
 }
@@ -358,7 +471,8 @@ static void on_disconnect_lock(struct ludlc_connection *conn,
  * @return 0 on success.
  * @return -EINVAL if @p buf is NULL and @p size is not, or if @p size is
  * above what this link carries.
- * @return -EAGAIN if the transmit queue is full.
+ * @return -EAGAIN if the transmit queue is full, or if a disconnect is
+ * failing what the queue held and has yet to reset the sequence.
  */
 int ludlc_enqueue_data(struct ludlc_connection *conn,
 		ludlc_channel_t dst_chan,
@@ -392,7 +506,12 @@ int ludlc_enqueue_data(struct ludlc_connection *conn,
 	}
 
 	LUDLC_LOCK(&conn->lock);
-	if (!ludlc_tx_queue_full(conn)) {
+	if (ludlc_platform_test_bit(LUDLC_CONN_BUS_OUT_F, &conn->flags)) {
+		/* A disconnect is failing the queue and is about to reset the
+		 * sequence, so there is nowhere to put this yet.
+		 */
+		ret = -EAGAIN;
+	} else if (!ludlc_tx_queue_full(conn)) {
 		/* Calculate next queue ID */
 		ludlc_id_t id = (conn->last_queued + 1) & LUDLC_ID_MASK;
 		ludlc_id_t q_idx = id & ludlc_conn_window_mask(conn);
@@ -487,8 +606,6 @@ int ludlc_send_urgent_data(struct ludlc_connection *conn,
 int ludlc_send_disconnect(struct ludlc_connection *conn)
 {
 	static const uint8_t opcode = LUDLC_CTRL_DISCONNECT;
-	LUDLC_DECLARE_CONFIRMED_QUEUE(confirmed_q);
-	ludlc_id_t confirmed_num = 0;
 	int ret;
 
 	if (!conn) {
@@ -516,8 +633,7 @@ int ludlc_send_disconnect(struct ludlc_connection *conn)
 		    !ludlc_platform_test_bit(LUDLC_CONN_DISC_AFTER_TX_F,
 					     &conn->flags)) {
 			conn->u_packet.status.result = ECANCELED;
-			ludlc_on_confirm_lock(conn, &conn->u_packet,
-					confirmed_q, &confirmed_num);
+			ludlc_confirm_u_lock(conn);
 		}
 
 		conn->u_packet.hdr.chan = CONFIG_LUDLC_CONTROL_CHANNEL;
@@ -536,7 +652,7 @@ int ludlc_send_disconnect(struct ludlc_connection *conn)
 	}
 	LUDLC_UNLOCK(&conn->lock);
 
-	ludlc_confirm_unlocked(conn, confirmed_q, confirmed_num);
+	ludlc_confirm_unlocked(conn);
 
 	if (!ret)
 		ludlc_platform_request_tx(conn); /* Signal TX task */
@@ -546,8 +662,6 @@ int ludlc_send_disconnect(struct ludlc_connection *conn)
 
 int ludlc_connect(struct ludlc_connection *conn)
 {
-	LUDLC_DECLARE_CONFIRMED_QUEUE(confirmed_q);
-	ludlc_id_t confirmed_num = 0;
 	int ret = 0;
 
 	if (!conn ||
@@ -564,11 +678,11 @@ int ludlc_connect(struct ludlc_connection *conn)
 		 * stop timers, clear runtime flags, reset FSM/queue state,
 		 * and fail any pending packets through normal confirm path.
 		 */
-		on_disconnect_lock(conn, confirmed_q, &confirmed_num);
+		on_disconnect_lock(conn);
 	}
 	LUDLC_UNLOCK(&conn->lock);
 
-	ludlc_confirm_unlocked(conn, confirmed_q, confirmed_num);
+	ludlc_confirm_unlocked(conn);
 	if (!ret) {
 		ludlc_platform_request_tx(conn);
 	}
@@ -710,8 +824,6 @@ static int rx_handle_nak(struct ludlc_connection *conn, ludlc_id_t num_wait)
  * @param conn Pointer to the connection structure.
  * @param packet Pointer to the received LUDLC packet.
  * @param pkt_sz The total size of the received packet.
- * @param confirmed_q Temporary queue for confirmed packets (for MT build).
- * @param confirmed_num Pointer to counter for `confirmed_q` (for MT build).
  * @return A bitmask of flags:
  * - @ref HANDLE_RX_REQUEST_TX_F to request a response (ACK/NAK/PING).
  * - @ref HANDLE_RX_ACCEPT_F to accept the packet's payload.
@@ -719,9 +831,7 @@ static int rx_handle_nak(struct ludlc_connection *conn, ludlc_id_t num_wait)
 static int rx_handle_packet(
 		struct ludlc_connection *conn,
 		ludlc_packet_t *packet,
-		size_t pkt_sz,
-		struct packet_queue_item *confirmed_q,
-		ludlc_id_t *confirmed_num)
+		size_t pkt_sz)
 {
 	bool ping = is_ping(packet->hdr.id.tx_id);
 	ludlc_id_t id, next_rcvd_id;
@@ -762,7 +872,7 @@ static int rx_handle_packet(
 		 * handshake step would only reopen it, and a peer that comes
 		 * back starts the handshake itself.
 		 */
-		on_disconnect_lock(conn, confirmed_q, confirmed_num);
+		on_disconnect_lock(conn);
 		return ret | HANDLE_RX_DISCONNECT_F;
 	}
 
@@ -773,8 +883,7 @@ static int rx_handle_packet(
 			 * is over.
 			 */
 			if (!is_last_handshake_step(id)) {
-				on_disconnect_lock(conn, confirmed_q,
-						   confirmed_num);
+				on_disconnect_lock(conn);
 				ret |= HANDLE_RX_DISCONNECT_F;
 			}
 			/* Respond to disconnect/handshake */
@@ -829,8 +938,8 @@ static int rx_handle_packet(
 			conn->last_ack = (conn->last_ack + 1) & LUDLC_ID_MASK;
 			q_idx = conn->last_ack & ludlc_conn_window_mask(conn);
 			conn->packets_q[q_idx].status.result = 0;
-			ludlc_on_confirm_lock(conn, &conn->packets_q[q_idx],
-					confirmed_q, confirmed_num);
+			ludlc_confirm_queued_lock(conn,
+						  &conn->packets_q[q_idx]);
 		}
 
 		/* NAK handling needs the unacked count after the cumulative
@@ -873,8 +982,6 @@ int ludlc_receive(struct ludlc_connection *conn,
 			ludlc_timestamp_t tstamp)
 {
 	int ret;
-	LUDLC_DECLARE_CONFIRMED_QUEUE(confirmed_q);
-	ludlc_id_t confirmed_num = 0;
 
 	LUDLC_LOG_TRACE("packet (%x, %x) @%llu",
 			packet->hdr.id.tx_id,
@@ -882,8 +989,7 @@ int ludlc_receive(struct ludlc_connection *conn,
 			tstamp);
 
 	LUDLC_LOCK(&conn->lock);
-		ret = rx_handle_packet(conn, packet, pkt_sz,
-				confirmed_q, &confirmed_num);
+		ret = rx_handle_packet(conn, packet, pkt_sz);
 	LUDLC_UNLOCK(&conn->lock);
 
 	/* --- Actions outside the lock --- */
@@ -900,7 +1006,7 @@ int ludlc_receive(struct ludlc_connection *conn,
 	}
 
 	/* Call deferred on_confirm callbacks (for MT) */
-	ludlc_confirm_unlocked(conn, confirmed_q, confirmed_num);
+	ludlc_confirm_unlocked(conn);
 
 	if (ret & HANDLE_RX_DISCONNECT_F) {
 		ludlc_call_on_disconnect(conn);
@@ -1211,9 +1317,6 @@ static void ludlc_wd_timer(ludlc_platform_timer_arg_t arg)
  * If the connection is already disconnected (or terminating), it is a no-op.
  *
  * @param conn Pointer to the connection structure.
- * @param confirmed_q Temporary confirmation queue (used in MT builds, ignored
- * in non-MT builds).
- * @param confirmed_num Pointer to the number of queued confirmations.
  *
  * @retval true Disconnect transition was executed and caller may notify
  * `on_disconnect`.
@@ -1221,25 +1324,22 @@ static void ludlc_wd_timer(ludlc_platform_timer_arg_t arg)
  *
  * @note User-facing callbacks are dispatched outside `conn->lock`.
  */
-static bool ludlc_disconnect_core(struct ludlc_connection *conn,
-		struct packet_queue_item *confirmed_q,
-		ludlc_id_t *confirmed_num)
+static bool ludlc_disconnect_core(struct ludlc_connection *conn)
 {
 	bool notify = false;
 
-	if (!conn || !confirmed_num) {
+	if (!conn)
 		return false;
-	}
 
 	LUDLC_LOCK(&conn->lock);
 	if (conn->conn_state != LUDLC_STATE_DISCONNECTED &&
 	    conn->conn_state != LUDLC_STATE_TERMINATE) {
-		on_disconnect_lock(conn, confirmed_q, confirmed_num);
+		on_disconnect_lock(conn);
 		notify = true;
 	}
 	LUDLC_UNLOCK(&conn->lock);
 
-	ludlc_confirm_unlocked(conn, confirmed_q, *confirmed_num);
+	ludlc_confirm_unlocked(conn);
 	return notify;
 }
 
@@ -1261,13 +1361,8 @@ static bool ludlc_disconnect_core(struct ludlc_connection *conn,
  */
 void ludlc_handle_disconnect(struct ludlc_connection *conn)
 {
-	LUDLC_DECLARE_CONFIRMED_QUEUE(confirmed_q);
-	ludlc_id_t confirmed_num = 0;
-	bool notify = ludlc_disconnect_core(conn, confirmed_q, &confirmed_num);
-
-	if (notify && conn) {
+	if (ludlc_disconnect_core(conn))
 		ludlc_call_on_disconnect(conn);
-	}
 }
 
 /**
@@ -1294,15 +1389,12 @@ void ludlc_watchdog_rearm(struct ludlc_connection *conn)
  */
 void ludlc_connection_cleanup(struct ludlc_connection *conn)
 {
-	LUDLC_DECLARE_CONFIRMED_QUEUE(confirmed_q);
-	ludlc_id_t confirmed_num = 0;
-
 	if (!conn ||
 		!ludlc_platform_test_bit(LUDLC_CONN_INITED_F, &conn->flags)) {
 		return;
 	}
 
-	(void)ludlc_disconnect_core(conn, confirmed_q, &confirmed_num);
+	(void)ludlc_disconnect_core(conn);
 
 	ludlc_platform_destroy_timer(&conn->wd_timer);
 	ludlc_platform_destroy_timer(&conn->ping_timer);

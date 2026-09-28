@@ -156,6 +156,20 @@ struct ludlc_connection {
  * the slot stays in use until the next frame is requested. The previous
  * frame has been sent by then, and the buffer can be returned. */
 #define LUDLC_CONN_U_DONE_F		4
+/** @def LUDLC_CONN_BUS_OUT_F
+ * @brief A disconnect is failing the queue, and the sequence is not reset yet.
+ *
+ * The reset waits until every failed packet has been reported, which may be
+ * several passes after the sweep. A packet accepted in between would be
+ * dropped by it without a confirmation, so the queue is closed for the whole
+ * span. See @ref ludlc_seq_reset_if_drained. */
+#define LUDLC_CONN_BUS_OUT_F		5
+/** @def LUDLC_CONN_U_CONFIRM_F
+ * @brief The unnumbered packet's confirmation is waiting in @c u_confirm.
+ *
+ * It has no sequence number and no window slot, so it is reported from a slot
+ * of its own rather than from the range the numbered packets use. */
+#define LUDLC_CONN_U_CONFIRM_F		6
 
 	/** @brief The flags above, read and written under @c lock.
 	 *
@@ -182,7 +196,8 @@ struct ludlc_connection {
 	 *
 	 * @ref ludlc_conn_window() slots, allocated at init. A pointer rather
 	 * than an array because the window size is only known at runtime
-	 * here.
+	 * here. A confirmed packet stays in its slot until its callback has
+	 * run; see @c last_reported.
 	 */
 	struct packet_queue_item	*packets_q;
 #else
@@ -204,6 +219,15 @@ struct ludlc_connection {
 	 * Its payload is the caller's buffer, as for a queued packet. */
 	struct packet_queue_item	u_packet;
 
+#ifdef CONFIG_LUDLC_MT
+	/** @brief The unnumbered packet's confirmation, waiting to be run.
+	 *
+	 * A copy, not a reference: @c u_packet is reused for the next
+	 * unnumbered packet as soon as this one is resolved. Only one can be
+	 * outstanding. Valid while @ref LUDLC_CONN_U_CONFIRM_F is set. */
+	struct packet_queue_item	u_confirm;
+#endif
+
 	/** Connection statistics. */
 	LUDLC_DECLARE_STATS(stats);
 
@@ -218,6 +242,31 @@ struct ludlc_connection {
 	ludlc_id_t	last_ack;
 	/** ID of the last valid, in-sequence packet received. */
 	ludlc_id_t	last_received;
+
+#ifdef CONFIG_LUDLC_MT
+	/** @brief ID of the last packet whose confirmation has been reported.
+	 *
+	 * Everything in <tt>(last_reported, last_ack]</tt> is resolved and
+	 * waiting for its callback, still in the window slot it was sent
+	 * from; @ref ludlc_confirm_unlocked walks that range. A range works
+	 * because every path resolves packets in sequence from @c last_ack
+	 * upwards, so nothing has to be stored to know what is pending. A
+	 * build that reports inline has no gap and no counter; see
+	 * @ref ludlc_conn_last_reported. */
+	ludlc_id_t	last_reported;
+
+/** @def LUDLC_REPORT_BUSY_F
+ * @brief Set while a thread is reporting confirmations.
+ *
+ * Not needed for the range, which is read and advanced under the lock, but
+ * for the order the callbacks run in: two threads each holding a batch would
+ * race. A separate word from @c flags, which is written whole under the lock
+ * and would lose it. Never waited on. */
+#define LUDLC_REPORT_BUSY_F		0
+
+	/** @ref LUDLC_REPORT_BUSY_F lives here. */
+	ludlc_platform_atomic_t		report_busy;
+#endif /* CONFIG_LUDLC_MT */
 
 	/** Current connection FSM state (see @ref ludlc_conn_state). */
 	uint8_t		conn_state;
@@ -301,6 +350,40 @@ void ludlc_watchdog_rearm(struct ludlc_connection *conn);
 #define ludlc_conn_wd_time(conn)	(3UL * ludlc_conn_ping_time(conn))
 /** @} */
 
+/**
+ * @name Reporting confirmations
+ * @{
+ */
+
+/**
+ * @def CONFIG_LUDLC_CONFIRM_BATCH
+ * @brief Confirmations carried out of the lock per acquisition of it.
+ *
+ * Bounds the stack, not the work: @ref ludlc_confirm_unlocked copies this
+ * many slots onto the reporting thread's stack, releases the lock, runs their
+ * callbacks and repeats while any remain. Set it to the window for a single
+ * pass, or leave it lower for a window of tens or hundreds. Costs this many
+ * @c struct @c packet_queue_item of stack while draining.
+ */
+#ifndef CONFIG_LUDLC_CONFIRM_BATCH
+#define CONFIG_LUDLC_CONFIRM_BATCH	8
+#endif
+#if (CONFIG_LUDLC_CONFIRM_BATCH) < 1
+#error Please define CONFIG_LUDLC_CONFIRM_BATCH as one or more
+#endif
+
+/**
+ * @brief ID of the last packet whose confirmation the user has seen.
+ *
+ * The window may not advance past it; see @ref ludlc_tx_queue_full. A build
+ * that reports inline uses the last acknowledged ID and stores no counter.
+ */
+#ifdef CONFIG_LUDLC_MT
+#define ludlc_conn_last_reported(conn)	((conn)->last_reported)
+#else
+#define ludlc_conn_last_reported(conn)	((conn)->last_ack)
+#endif
+
 /** @brief The active-low flags, as they stand with nothing outstanding.
  *
  * Zeroed memory reads as all of them pending, so init and the disconnect
@@ -311,7 +394,14 @@ void ludlc_watchdog_rearm(struct ludlc_connection *conn);
 				   (1U << LUDLC_CONN_U_DONE_F)))
 
 /** @brief Flags the disconnect sweep keeps when it clears the runtime ones. */
-#define LUDLC_CONN_SWEEP_KEEP_MASK	(1U << LUDLC_CONN_INITED_F)
+#ifdef CONFIG_LUDLC_MT
+#define LUDLC_CONN_SWEEP_KEEP_MASK					\
+	((1U << LUDLC_CONN_INITED_F) | (1U << LUDLC_CONN_BUS_OUT_F) |	\
+	 (1U << LUDLC_CONN_U_CONFIRM_F))
+#else
+#define LUDLC_CONN_SWEEP_KEEP_MASK					\
+	((1U << LUDLC_CONN_INITED_F) | (1U << LUDLC_CONN_BUS_OUT_F))
+#endif
 
 /** @brief Flags the disconnect sweep clears: whatever it does not keep.
  *
@@ -320,6 +410,8 @@ void ludlc_watchdog_rearm(struct ludlc_connection *conn);
 #define LUDLC_CONN_SWEEP_CLEAR_MASK					\
 	((ludlc_platform_atomic_t)~(LUDLC_CONN_SWEEP_KEEP_MASK |	\
 				    LUDLC_CONN_IDLE_MASK))
+
+/** @} */
 
 /**
  * @brief The payload a cfg asks for, resolved as ludlc_connection_init() would.

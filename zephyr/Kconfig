@@ -30,6 +30,23 @@ config LUDLC_WINDOW
 	  of two. With LUDLC_MULTI_CONN a link may run a smaller window via
 	  its ludlc_conn_cfg.
 
+config LUDLC_CONFIRM_BATCH
+	int "Confirmations reported per lock acquisition"
+	range 1 256
+	default 4
+	depends on LUDLC_MT
+	help
+	  How many confirmations are carried out of the connection lock at a
+	  time, on the stack of the thread reporting them. This bounds the
+	  stack rather than the work: a larger value takes the lock fewer
+	  times when a whole window is confirmed at once, and costs
+	  LUDLC_CONFIRM_BATCH * sizeof(struct packet_queue_item) of stack
+	  while draining.
+
+	  Set it to LUDLC_WINDOW for a single pass, which is what a small
+	  window wants. Leave it lower for a window of tens or hundreds,
+	  where a batch that size is more stack than a confirmation is worth.
+
 config LUDLC_MULTI_CONN
 	bool "Per-connection protocol settings"
 	default n
