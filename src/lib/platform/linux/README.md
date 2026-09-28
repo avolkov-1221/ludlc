@@ -215,3 +215,7 @@ format is neither end's to define and lives in
 [`ludlc_spi_proto.h`](../../include/ludlc_spi_proto.h), shared with the
 peripheral so that an announcement built by one and read by the other cannot
 drift.
+
+The peripheral in this repository is the Zephyr transport in
+[`../zephyr/ludlc_spi_slave.h`](../zephyr/ludlc_spi_slave.h), which the echo
+sample runs on a Nucleo G0B1RE. Its board overlay documents the wiring.

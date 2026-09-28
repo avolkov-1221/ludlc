@@ -27,6 +27,12 @@
 #include <ludlc.h>
 #include <ludlc_serial.h>
 
+#if defined(CONFIG_LUDLC_ECHO_SPI)
+#include <zephyr/drivers/gpio.h>
+
+#include <ludlc_spi_slave.h>
+#endif
+
 LOG_MODULE_REGISTER(ludlc_echo, LOG_LEVEL_DBG);
 
 #define ECHO_CHANNEL		1
@@ -211,19 +217,54 @@ static struct ludlc_conn_cb demo_callbacks = {
 	.on_confirm = on_confirm,
 };
 
-int main(void)
+#if defined(CONFIG_LUDLC_ECHO_SPI)
+
+#if DT_NODE_HAS_PROP(DT_PATH(zephyr_user), ludlc_data_ready_gpios)
+#define ECHO_DATA_READY							\
+	GPIO_DT_SPEC_GET(DT_PATH(zephyr_user), ludlc_data_ready_gpios)
+#else
+/* No line on this board, so the controller polls instead of being told. */
+#define ECHO_DATA_READY		{ 0 }
+#endif
+
+/** @brief Bring the link up on the SPI peripheral the board describes. */
+static int echo_link_up(struct ludlc_connection **conn)
 {
-	struct ludlc_connection *conn = NULL;
-	int ret;
-	static const ludlc_platform_args_t ser_arg = {
+	static const ludlc_platform_args_t arg = {
+		.dev = DEVICE_DT_GET(DT_NODELABEL(spi1)),
+		.csum = &csum,
+		.spi.data_ready = ECHO_DATA_READY,
+	};
+
+	LOG_INF("Using SPI device: %s, data-ready: %s", arg.dev->name,
+		arg.spi.data_ready.port ? arg.spi.data_ready.port->name
+					: "none, the controller polls");
+
+	return ludlc_spi_slave_connection_create(&arg, conn, &demo_callbacks);
+}
+#else
+/** @brief Bring the link up on uart0. */
+static int echo_link_up(struct ludlc_connection **conn)
+{
+	static const ludlc_platform_args_t arg = {
 		.dev = DEVICE_DT_GET(DT_NODELABEL(uart0)),
 		.csum = &csum,
 	};
 
-	LOG_INF("Starting Zephyr LuDLC echo");
-	LOG_INF("Using UART device: %s", ser_arg.dev->name);
+	LOG_INF("Using UART device: %s", arg.dev->name);
 
-	ret = ludlc_serial_connection_create(&ser_arg, &conn, &demo_callbacks);
+	return ludlc_serial_connection_create(&arg, conn, &demo_callbacks);
+}
+#endif /* CONFIG_LUDLC_ECHO_SPI */
+
+int main(void)
+{
+	struct ludlc_connection *conn = NULL;
+	int ret;
+
+	LOG_INF("Starting Zephyr LuDLC echo");
+
+	ret = echo_link_up(&conn);
 	if (ret || !conn) {
 		LOG_ERR("Failed to create LuDLC connection: %d", ret);
 		return 0;

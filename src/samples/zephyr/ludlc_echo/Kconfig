@@ -1,8 +1,11 @@
 # SPDX-License-Identifier: (Apache-2.0 OR GPL-2.0-or-later)
 #
-# Copyright (C) 2025-2026 Andrey VOLKOV <andrey@volkov.fr> & LuDLC Contributors
+# @file Kconfig
 #
-# Zephyr root Kconfig entry point for ludlc_echo sample.
+# @brief Root Kconfig of the echo sample.
+#
+# @copyright
+# Copyright (C) 2025-2026 Andrey VOLKOV <andrey@volkov.fr> & LuDLC Contributors
 
 source "Kconfig.zephyr"
 rsource "Kconfig.sample"

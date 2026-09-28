@@ -1,9 +1,10 @@
 # SPDX-License-Identifier: (Apache-2.0 OR GPL-2.0-or-later)
 #
-# Copyright (C) 2025-2026 Andrey VOLKOV <andrey@volkov.fr> & LuDLC Contributors
+# @file CMakeLists.txt
 #
-# This file is licensed under either the Apache License, Version 2.0,
-# or the GNU General Public License, version 2 or (at your option)
-# any later version.
+# @brief Adds the Zephyr samples to a build of the module.
+#
+# @copyright
+# Copyright (C) 2025-2026 Andrey VOLKOV <andrey@volkov.fr> & LuDLC Contributors
 
 add_subdirectory(ludlc_echo)

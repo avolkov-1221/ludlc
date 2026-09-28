@@ -1,8 +1,11 @@
 # SPDX-License-Identifier: (Apache-2.0 OR GPL-2.0-or-later)
 #
-# Copyright (C) 2025-2026 Andrey VOLKOV <andrey@volkov.fr> & LuDLC Contributors
+# @file Kconfig.sample
 #
-# Sample-specific Kconfig options for LuDLC echo.
+# @brief Options of the echo sample.
+#
+# @copyright
+# Copyright (C) 2025-2026 Andrey VOLKOV <andrey@volkov.fr> & LuDLC Contributors
 
 if LUDLC
 
@@ -17,6 +20,20 @@ config LUDLC_ECHO_PERIODIC_TX
 	  packet per second in addition to normal reply traffic triggered by
 	  received packets. When disabled, the sample operates in reply-only
 	  mode and sends ECHO packets only as direct responses to peer input.
+
+config LUDLC_ECHO_SPI
+	bool "Run the echo link over SPI rather than over a UART"
+	default n
+	depends on LUDLC_SPI_CONN
+	help
+	  Put the link on the SPI peripheral this board describes, with
+	  the Linux ludlc_spi_master driver as the controller, instead of
+	  on uart0. The board overlay says which peripheral and which
+	  GPIO carries the data-ready line; without such a line the
+	  controller has to poll.
+
+	  The sample logic is the same either way: only which transport
+	  the connection is created on changes.
 
 endmenu
 
