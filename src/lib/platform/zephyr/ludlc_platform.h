@@ -26,6 +26,12 @@
 
 #include <ludlc_types.h>
 
+/** @brief Bits in one @ref ludlc_platform_atomic_t. */
+#define LUDLC_BITS_PER_WORD		ATOMIC_BITS
+
+/** @brief Words of ludlc_platform_atomic_t needed to hold @p n bits. */
+#define LUDLC_BITS_TO_WORDS(n)		ATOMIC_BITMAP_SIZE(n)
+
 struct ludlc_platform_connection {
 #define LUDLC_CONN_FORCE_TX_F		BIT(0)
 #define LUDLC_CONN_TX_EXIT_EVT		BIT(1)
@@ -70,6 +76,41 @@ ludlc_platform_test_and_set_bit(long nr, ludlc_platform_atomic_t *addr)
 {
 	return atomic_test_and_set_bit(addr, nr);
 }
+
+/**
+ * @brief Atomically sets every bit of @p mask.
+ * @param mask The bits to set.
+ * @param addr The word they live in.
+ */
+static inline void ludlc_platform_set_mask(ludlc_platform_atomic_t mask,
+					   ludlc_platform_atomic_t *addr)
+{
+	atomic_or(addr, mask);
+}
+
+/**
+ * @brief Atomically clears every bit of @p mask.
+ * @param mask The bits to clear.
+ * @param addr The word they live in.
+ */
+static inline void ludlc_platform_clear_mask(ludlc_platform_atomic_t mask,
+					     ludlc_platform_atomic_t *addr)
+{
+	atomic_and(addr, ~mask);
+}
+
+/**
+ * @name Bitsets
+ *
+ * A bit here is picked at run time, to claim a slot out of a pool, rather
+ * than named like the flags elsewhere. The calls above already take a bit
+ * number and reach the word it lands in, so only the storage is declared here.
+ * @{
+ */
+/** @brief Declares storage for a bitset of @p nbits bits. */
+#define LUDLC_DECLARE_BITSET(name, nbits)	ATOMIC_DEFINE(name, nbits)
+
+/** @} */
 
 /* --- Locks --- */
 #define LUDLC_DECLARE_LOCK(name)	struct k_mutex name

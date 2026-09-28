@@ -96,35 +96,43 @@ struct ludlc_serial_connection {
 };
 
 #ifdef CONFIG_LUDLC_STATIC_SERIAL_CONN
-/** @brief Static pool of serial connections. */
-K_MEM_SLAB_DEFINE_STATIC(g_conn_slab,
-		sizeof(struct ludlc_serial_connection),
-		CONFIG_LUDLC_STATIC_SERIAL_CONN_NUM, sizeof(void*));
+static struct ludlc_serial_connection
+	g_conn[CONFIG_LUDLC_STATIC_SERIAL_CONN_NUM];
+static LUDLC_DECLARE_BITSET(g_conn_busy, CONFIG_LUDLC_STATIC_SERIAL_CONN_NUM);
+
 /**
- * @brief Allocates a serial connection from the static pool.
- * @return Pointer to a free connection, or NULL if the pool is full.
+ * @brief Takes a serial connection from the static pool.
+ * @return Pointer to a free zeroed connection, or NULL if the pool is full.
  */
 static inline struct ludlc_serial_connection *alloc_serial_connection(void)
 {
-	void *conn = NULL;
+	const int slot = ludlc_bitset_claim(g_conn_busy,
+					CONFIG_LUDLC_STATIC_SERIAL_CONN_NUM);
 
-	k_mem_slab_alloc(&g_conn_slab, &conn, K_NO_WAIT);
+	if (slot < 0) {
+		return NULL;
+	}
 
-	return conn;
+	/* A reused slot still holds the last link's state, which the heap
+	 * path never sees.
+	 */
+	memset(&g_conn[slot], 0, sizeof(g_conn[slot]));
+
+	return &g_conn[slot];
 }
 
 /**
  * @brief Returns a serial connection to the static pool.
- * @param conn The connection to free.
+ * @param conn The connection to release (must be from @ref g_conn).
  */
 static inline void free_serial_connection(struct ludlc_serial_connection *conn)
 {
-	k_mem_slab_free(&g_conn_slab, conn);
+	ludlc_platform_clear_bit(conn - g_conn, g_conn_busy);
 }
 #else
 /**
- * @brief Allocates a new serial connection using platform's malloc.
- * @return Pointer to the allocated connection, or NULL on failure.
+ * @brief Allocates a new serial connection on the heap.
+ * @return Pointer to a zeroed connection, or NULL on failure.
  */
 static inline struct ludlc_serial_connection *alloc_serial_connection(void)
 {
@@ -572,7 +580,6 @@ int ludlc_serial_connection_create(const ludlc_platform_args_t *arg,
 	if (!sconn) {
 		return -ENOMEM;
 	}
-	memset(sconn, 0, sizeof(*sconn));
 
 	sconn->uart_dev = arg->dev;
 	sconn->csum = arg->csum;

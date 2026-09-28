@@ -73,16 +73,8 @@ struct ludlc_serial_connection {
 };
 
 #ifdef LUDLC_STATIC_CONN
-#define BITS_PER_WORD                                                          \
-	((const unsigned int)(CHAR_BIT * sizeof(ludlc_platform_atomic_t)))
-
-#define LUDLC_NUM_CONN_WORDS                                                   \
-	((LUDLC_STATIC_CONN_NUM + BITS_PER_WORD - 1) / BITS_PER_WORD)
-
-static pthread_mutex_t g_allock_lock = PTHREAD_MUTEX_INITIALIZER;
-
-static unsigned long g_conn_busy_flags[LUDLC_NUM_CONN_WORDS];
 static struct ludlc_serial_connection g_conn[LUDLC_STATIC_CONN_NUM];
+static LUDLC_DECLARE_BITSET(g_conn_busy, LUDLC_STATIC_CONN_NUM);
 
 /**
  * @brief Takes a serial connection from the static pool.
@@ -90,21 +82,18 @@ static struct ludlc_serial_connection g_conn[LUDLC_STATIC_CONN_NUM];
  */
 static inline struct ludlc_serial_connection *alloc_serial_connection(void)
 {
-	pthread_mutex_lock(&g_allock_lock);
+	const int slot = ludlc_bitset_claim(g_conn_busy, LUDLC_STATIC_CONN_NUM);
 
-	for (size_t i = 0; i < LUDLC_STATIC_CONN_NUM; i++) {
-		unsigned int idx = i / BITS_PER_WORD;
-		unsigned int bit = i % BITS_PER_WORD;
-
-		if ((g_conn_busy_flags[idx] & (1ul << bit)) == 0) {
-			g_conn_busy_flags[idx] |= 1ul << bit;
-			pthread_mutex_unlock(&g_allock_lock);
-			return &g_conn[i];
-		}
+	if (slot < 0) {
+		return NULL;
 	}
 
-	pthread_mutex_unlock(&g_allock_lock);
-	return NULL;
+	/* A reused slot still holds the last link's state, which the heap
+	 * path never sees.
+	 */
+	memset(&g_conn[slot], 0, sizeof(g_conn[slot]));
+
+	return &g_conn[slot];
 }
 
 /**
@@ -113,14 +102,7 @@ static inline struct ludlc_serial_connection *alloc_serial_connection(void)
  */
 static inline void free_serial_connection(struct ludlc_serial_connection *sconn)
 {
-	const ptrdiff_t idx = sconn - g_conn;
-
-	pthread_mutex_lock(&g_allock_lock);
-
-	g_conn_busy_flags[idx / BITS_PER_WORD] &=
-					 ~(1ul << (idx % BITS_PER_WORD));
-
-	pthread_mutex_unlock(&g_allock_lock);
+	ludlc_platform_clear_bit(sconn - g_conn, g_conn_busy);
 }
 #else
 /**

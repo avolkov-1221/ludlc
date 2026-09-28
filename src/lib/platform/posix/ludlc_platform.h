@@ -23,6 +23,7 @@
 #include <pthread.h>
 #include <time.h>
 #include <stdatomic.h>
+#include <limits.h>
 
 #include <ludlc_types.h>
 #include <ludlc_autoconf.h>
@@ -37,6 +38,14 @@
 
 /* kfifo.h uses LUDLC_ROUND_UP and LUDLC_MIN, so it is included after them. */
 #include "kfifo.h"
+
+/** @brief Bits in one @ref ludlc_platform_atomic_t. */
+#define LUDLC_BITS_PER_WORD	(sizeof(ludlc_platform_atomic_t) * CHAR_BIT)
+
+/** @brief Words of ludlc_platform_atomic_t needed to hold @p n bits. */
+#define LUDLC_BITS_TO_WORDS(n)						\
+	(((n) + LUDLC_BITS_PER_WORD - 1) / LUDLC_BITS_PER_WORD)
+
 
 /**
  * @brief Declares a platform-specific lock (maps to pthread_mutex_t).
@@ -213,64 +222,113 @@ static inline struct ludlc_connection *ludlc_timer_arg_to_conn(
 	return arg;
 }
 
+/*
+ * Each of these picks the word the bit lands in, so that a single flag word
+ * and a whole bitmap are addressed the same way, as they are on Linux and
+ * Zephyr. C11 has no bitmap helpers of its own to use instead.
+ */
+#define LUDLC_ATOMIC_WORD(addr, nr)	(&(addr)[(nr) / LUDLC_BITS_PER_WORD])
+#define LUDLC_ATOMIC_MASK(nr)		(1U << ((nr) % LUDLC_BITS_PER_WORD))
+
 /**
  * @brief Atomically tests a bit.
  * @param nr The bit number (0-based) to test.
- * @param addr Pointer to the atomic variable.
+ * @param addr The word, or the first word of a bitmap.
  * @return true if the bit was set, false otherwise.
  */
 static inline bool ludlc_platform_test_bit(long nr,
 		ludlc_platform_atomic_t *addr)
 {
-	return (atomic_load(addr) & (1U << nr)) != 0;
+	return (atomic_load(LUDLC_ATOMIC_WORD(addr, nr)) &
+		LUDLC_ATOMIC_MASK(nr)) != 0;
 }
 
 /**
  * @brief Atomically sets a bit.
  * @param nr The bit number (0-based) to set.
- * @param addr Pointer to the atomic variable.
+ * @param addr The word, or the first word of a bitmap.
  */
 static inline void ludlc_platform_set_bit(long nr,
 		ludlc_platform_atomic_t *addr)
 {
-	atomic_fetch_or(addr, 1U << nr);
+	atomic_fetch_or(LUDLC_ATOMIC_WORD(addr, nr), LUDLC_ATOMIC_MASK(nr));
 }
 
 /**
  * @brief Atomically clears a bit.
  * @param nr The bit number (0-based) to clear.
- * @param addr Pointer to the atomic variable.
+ * @param addr The word, or the first word of a bitmap.
  */
 static inline void ludlc_platform_clear_bit(long nr,
 		ludlc_platform_atomic_t *addr)
 {
-	atomic_fetch_and(addr, ~(1U << nr));
+	atomic_fetch_and(LUDLC_ATOMIC_WORD(addr, nr), ~LUDLC_ATOMIC_MASK(nr));
 }
 
 /**
  * @brief Atomically tests and clears a bit.
  * @param nr The bit number (0-based) to test and clear.
- * @param addr Pointer to the atomic variable.
+ * @param addr The word, or the first word of a bitmap.
  * @return true if the bit was set before being cleared, false otherwise.
  */
 static inline bool ludlc_platform_test_and_clear_bit(long nr,
 		ludlc_platform_atomic_t *addr)
 {
-	unsigned int prev_val = atomic_fetch_and(addr, ~(1U << nr));
-	return !!(prev_val & (1U << nr));
+	unsigned int prev = atomic_fetch_and(LUDLC_ATOMIC_WORD(addr, nr),
+					     ~LUDLC_ATOMIC_MASK(nr));
+
+	return (prev & LUDLC_ATOMIC_MASK(nr)) != 0;
 }
 
 /**
  * @brief Atomically tests and sets a bit.
  * @param nr The bit number (0-based) to test and set.
- * @param addr Pointer to the atomic variable.
+ * @param addr The word, or the first word of a bitmap.
  * @return true if the bit was set before the operation, false otherwise.
  */
 static inline bool ludlc_platform_test_and_set_bit(long nr,
 		ludlc_platform_atomic_t *addr)
 {
-	unsigned int prev_val = atomic_fetch_or(addr, 1U << nr);
-	return !!(prev_val & (1U << nr));
+	unsigned int prev = atomic_fetch_or(LUDLC_ATOMIC_WORD(addr, nr),
+					    LUDLC_ATOMIC_MASK(nr));
+
+	return (prev & LUDLC_ATOMIC_MASK(nr)) != 0;
 }
+
+/**
+ * @brief Atomically sets every bit of @p mask.
+ * @param mask The bits to set.
+ * @param addr The word they live in.
+ */
+static inline void ludlc_platform_set_mask(ludlc_platform_atomic_t mask,
+					   ludlc_platform_atomic_t *addr)
+{
+	atomic_fetch_or(addr, mask);
+}
+
+/**
+ * @brief Atomically clears every bit of @p mask.
+ * @param mask The bits to clear.
+ * @param addr The word they live in.
+ */
+static inline void ludlc_platform_clear_mask(ludlc_platform_atomic_t mask,
+					     ludlc_platform_atomic_t *addr)
+{
+	atomic_fetch_and(addr, ~mask);
+}
+
+/**
+ * @name Bitsets
+ *
+ * A bit here is picked at run time, to claim a slot out of a pool, rather
+ * than named like the flags elsewhere. The calls above already take a bit
+ * number and reach the word it lands in, so only the storage is declared here.
+ * @{
+ */
+/** @brief Declares storage for a bitset of @p nbits bits. */
+#define LUDLC_DECLARE_BITSET(name, nbits)				\
+	ludlc_platform_atomic_t name[LUDLC_BITS_TO_WORDS(nbits)]
+
+/** @} */
 
 #endif /*__LUDLC_CONFIG_H__*/
