@@ -19,7 +19,20 @@
 # its file here. Pass the same setting to the compiler as
 # CONFIG_LUDLC_FRAMING_*, which is what the headers read.
 set(LUDLC_CORE_SRC ${CMAKE_CURRENT_LIST_DIR}/ludlc.c)
+set(LUDLC_FRAMINGS_ON 0)
+
+if(CONFIG_LUDLC_FRAMING_COBS)
+        list(APPEND LUDLC_CORE_SRC ${CMAKE_CURRENT_LIST_DIR}/ludlc_cobs.c)
+        math(EXPR LUDLC_FRAMINGS_ON "${LUDLC_FRAMINGS_ON} + 1")
+endif(CONFIG_LUDLC_FRAMING_COBS)
 
 if(CONFIG_LUDLC_FRAMING_HDLC)
         list(APPEND LUDLC_CORE_SRC ${CMAKE_CURRENT_LIST_DIR}/ludlc_hdlc.c)
+        math(EXPR LUDLC_FRAMINGS_ON "${LUDLC_FRAMINGS_ON} + 1")
 endif(CONFIG_LUDLC_FRAMING_HDLC)
+
+# ludlc_framing.c turns a name into one of the framings built, which a port
+# carrying a single one has nothing to do with.
+if(LUDLC_FRAMINGS_ON GREATER 1)
+        list(APPEND LUDLC_CORE_SRC ${CMAKE_CURRENT_LIST_DIR}/ludlc_framing.c)
+endif()

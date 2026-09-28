@@ -18,9 +18,9 @@
  * going to send anyway and the decoder takes the octets just received, so a
  * link carrying a megabyte costs no more than one carrying eight octets.
  *
- * The state machines are in ludlc_hdlc.c, reached through
- * @ref ludlc_framing_ops. A build carrying a single framing calls them by name
- * instead.
+ * The state machines are in ludlc_hdlc.c and ludlc_cobs.c, reached through
+ * @ref ludlc_framing_ops. A build carrying a single framing
+ * calls them by name instead.
  */
 
 #ifndef __LUDLC_FRAMING_H__
@@ -41,7 +41,8 @@ struct ludlc_framing_ops;
 
 /** @brief How many are built, which decides whether a lookup is needed. */
 #define LUDLC_FRAMING_COUNT				\
-	(CONFIG_LUDLC_FRAMING_HDLC)
+	(CONFIG_LUDLC_FRAMING_HDLC +			\
+	 CONFIG_LUDLC_FRAMING_COBS)
 
 #if LUDLC_FRAMING_COUNT == 0
 #error A build needs at least one framing
@@ -103,7 +104,7 @@ struct ludlc_framing_state {
 	_(name, ludlc_payload_size_t, dec_size,				\
 	  (const struct ludlc_framing_state *fs))
 
-/** @brief One prototype, named for the codec: ludlc_hdlc_enc_init and so on. */
+/** @brief One prototype, named for the codec: ludlc_cobs_enc_init and so on. */
 #define LUDLC_FRAMING_OP_DECL(name, ret, op, params)			\
 	ret ludlc_##name##_##op params;
 
@@ -142,6 +143,9 @@ struct ludlc_framing_state {
 
 #if CONFIG_LUDLC_FRAMING_HDLC
 #include <ludlc_hdlc.h>
+#endif
+#if CONFIG_LUDLC_FRAMING_COBS
+#include <ludlc_cobs.h>
 #endif
 
 /**
@@ -205,7 +209,9 @@ struct ludlc_framing {
 	 *
 	 * Computed from the packet rather than from an encoder, since a
 	 * transport that announces a frame needs the length before writing
-	 * it. NULL on the escaping, whose length depends on which octets need
+	 * it. COBS is the plaintext length, one code octet per 253 data
+	 * octets, and the delimiter.
+	 * NULL on the escaping, whose length depends on which octets need
 	 * escaping: a transport such as SPI, which must announce the length
 	 * up front, cannot carry such a framing and refuses it on this
 	 * pointer.
@@ -240,13 +246,48 @@ extern const struct ludlc_framing ludlc_framing_hdlc;
 #endif
 
 /**
+ * @brief COBS: a stuffed frame terminated by a zero octet.
+ *
+ * It delimits like the escaping, but at a fixed cost of one octet per frame
+ * plus one per 254 octets.
+ */
+#if CONFIG_LUDLC_FRAMING_COBS
+extern const struct ludlc_framing ludlc_framing_cobs;
+#endif
+
+/* A lookup by name is only useful when there is more than one framing. */
+#if LUDLC_FRAMING_COUNT > 1
+
+/**
+ * @brief Turn a name into a framing descriptor.
+ *
+ * @return The framing, or NULL for an unknown name.
+ */
+const struct ludlc_framing *ludlc_framing_lookup(const char *name);
+
+/**
+ * @brief Walk the framings this build carries.
+ *
+ * @param i Index, counting from zero.
+ * @return The framing there, or NULL once @p i is past the last one.
+ */
+const struct ludlc_framing *ludlc_framing_at(unsigned int i);
+
+#endif /* LUDLC_FRAMING_COUNT > 1 */
+
+/**
  * @brief What a transport gets when it names no framing.
  *
- * HDLC, the sensible default over a byte stream.
+ * HDLC where it is built, being the sensible default over a byte stream, and
+ * otherwise the one framing this build does carry.
  */
 static inline const struct ludlc_framing *ludlc_framing_default(void)
 {
+#if CONFIG_LUDLC_FRAMING_HDLC
 	return &ludlc_framing_hdlc;
+#else
+	return &ludlc_framing_cobs;
+#endif
 }
 
 /** @brief The name of @p framing, or of the default if it is NULL. */
@@ -280,9 +321,15 @@ const struct ludlc_framing *ludlc_framing_or_default(
 
 #else /* a single framing: nothing to dispatch on, so call it by name */
 
+#if CONFIG_LUDLC_FRAMING_HDLC
 #define LUDLC_FRAMING_ONLY(op)	ludlc_hdlc_##op
 #define LUDLC_FRAMING_ONLY_NEW	ludlc_create_framing_hdlc
 #define LUDLC_FRAMING_ONLY_DEL	ludlc_destroy_framing_hdlc
+#else
+#define LUDLC_FRAMING_ONLY(op)	ludlc_cobs_##op
+#define LUDLC_FRAMING_ONLY_NEW	ludlc_create_framing_cobs
+#define LUDLC_FRAMING_ONLY_DEL	ludlc_destroy_framing_cobs
+#endif
 
 #define LUDLC_FS_OP(fs, op)	((void)(fs), LUDLC_FRAMING_ONLY(op))
 #define LUDLC_FRAMING_NEW(framing)					\

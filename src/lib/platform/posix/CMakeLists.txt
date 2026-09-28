@@ -11,6 +11,7 @@ set(CONFIG_LUDLC_MT ON CACHE BOOL "Enable multithreading" FORCE)
 find_package(Threads REQUIRED)
 
 set(CONFIG_LUDLC_FRAMING_HDLC ON CACHE BOOL "Enable hdlc coding" FORCE)
+set(CONFIG_LUDLC_FRAMING_COBS OFF CACHE BOOL "Enable cobs coding" FORCE)
 
 configure_file(
 	${CMAKE_CURRENT_SOURCE_DIR}/config.h.in

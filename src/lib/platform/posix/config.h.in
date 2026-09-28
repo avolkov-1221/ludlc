@@ -84,4 +84,11 @@
 #endif
 #endif
 
+#ifndef CONFIG_LUDLC_FRAMING_COBS
+#cmakedefine01	CONFIG_LUDLC_FRAMING_COBS
+#if !CONFIG_LUDLC_FRAMING_COBS
+# undef CONFIG_LUDLC_FRAMING_COBS
+#endif
+#endif
+
 #endif /* __LUDLC_AUTOCONF_H__ */

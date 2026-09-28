@@ -538,6 +538,43 @@ endianness of either peer. An algorithm that is defined the other way round
 before it is handed over, which is also where a final XOR belongs (HDLC's
 FCS-16).
 
+#### Stuffing and a Delimiter (`cobs`)
+
+Consistent Overhead Byte Stuffing removes one octet value from a frame
+and then uses it as the delimiter. That value is configurable; the
+default is `0x00`. A frame is sent as a series of groups:
+
+```text
+    +------+-------------------+------+---------------+-----------+
+    | Code |    Frame octets   | Code |  Frame octets | delimiter |
+    +------+-------------------+------+---------------+-----------+
+    |<-------- group --------->|<------ group ------->|(delimiter)|
+```
+
+  * A **group** is a code octet followed by up to 254 octets of the frame,
+    none of them equal to the delimiter.
+  * The **code** octet is one more than the number of octets that follow it,
+    so it is never equal to the delimiter itself and never says more than
+    255.
+  * A **delimiter value** in the frame is not sent: it is what ends a
+    group, and the receiver puts it back when it starts the next one.
+  * A group that fills up at 254 octets is followed by another code octet even
+    if the frame ends there, as a full group says that 254 octets follow it
+    and not that the frame stops.
+  * A single **delimiter octet** ends the frame. That value never appears
+    within one, so a receiver that has lost its place recovers at the next
+    delimiter.
+
+The cost is therefore two octets per frame, the first code octet and the
+delimiter, plus one more code octet for every full run of 254. It does not
+depend on the data: an occurrence of the delimiter value costs nothing,
+being what a group ends at, so the same frame always occupies the same
+number of octets. That is what lets a transport announce a stuffed frame's
+length before stuffing it.
+
+A run of delimiters with nothing between them is not a frame and is ignored,
+which is how a transport that has to pad a transfer does so.
+
 #### Escaped Delimiters (`hdlc`)
 
 This framing method is conceptually similar to PPP (Point-to-Point

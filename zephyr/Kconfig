@@ -86,7 +86,9 @@ config LUDLC_FRAME_BITS
 	help
 	  Bit-width of frame length fields. A frame is the link's payload plus
 	  a header and a checksum; this type must be able to name that size
-	  after any stuffing a framing adds. Supported values: 8, 16, 32, 64.
+	  after any stuffing a framing adds (for example COBS on SPI). COBS's
+	  255-octet stuffing group is not the frame size. Supported values:
+	  8, 16, 32, 64.
 
 config LUDLC_MAX_PAYLOAD_SIZE
 	int "Maximum payload size (bytes)"
@@ -153,6 +155,15 @@ config LUDLC_FRAMING_HDLC
 	  where they occur inside the frame. A frame grows by one octet per
 	  occurrence, so the worst case is twice its length.
 
+config LUDLC_FRAMING_COBS
+	bool "COBS framing"
+	default y
+	help
+	  Delimit a frame with LUDLC_COBS_DELIMITER and remove that octet from
+	  inside the frame, so a frame grows by one octet per 254 rather than
+	  by its content. Costs more code than the escaping and about the same
+	  RAM.
+
 config LUDLC_STATIC_FRAMING_NUM
 	int "Framing objects preallocated per framing"
 	default 1 if !LUDLC_MULTI_CONN
@@ -174,7 +185,8 @@ config LUDLC_SERIAL_CONN
 	select EVENTS
 	help
 	  Build LuDLC with serial (UART) connection support. A link delimits
-	  its frames with the HDLC escaping.
+	  its frames with the HDLC escaping unless the application asks for
+	  COBS instead.
 
 config LUDLC_STATIC_SERIAL_CONN
 	bool "Predefine LuDLC Serial connection as static array"
