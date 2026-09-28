@@ -1092,6 +1092,12 @@ static bool ludlc_tx_drop_expired(struct ludlc_connection *conn,
  *
  * It provides pointers to the header and payload segments separately.
  *
+ * Returning a frame also restarts the ping timer, which the transport does
+ * not have to do anything about. On a connected link that postpones the
+ * keep-alive by one period, as the frame carries everything a PING would.
+ * During the handshake no PING is sent, and the timer only re-sends the
+ * current step a period after the last frame.
+ *
  * @param conn Pointer to the connection structure.
  * @param[out] hdr Pointer to a `const void*` that will be updated to
  * point to the packet's header.
@@ -1265,6 +1271,17 @@ int ludlc_get_packet_to_send(struct ludlc_connection *conn,
 		break;
 	}
 
+	/*
+	 * On a connected link every frame carries the next sequence ID and the
+	 * current ACK, which is what a PING would say, so it serves as a
+	 * keep-alive and the ping timer can be postponed. An unnumbered packet
+	 * is no exception. During the handshake the same timer re-sends the
+	 * current step a ping period after the last frame.
+	 */
+	ludlc_platform_start_timer(&conn->ping_timer,
+				   ludlc_conn_ping_time(conn),
+				   ludlc_conn_ping_time(conn));
+
 	LUDLC_UNLOCK(&conn->lock);
 
 	if (u_done)
@@ -1279,13 +1296,15 @@ int ludlc_get_packet_to_send(struct ludlc_connection *conn,
 /**
  * @brief Ping timer callback.
  *
- * This function is invoked when the ping timer expires. It simply
- * requests a TX cycle, which will send a PING packet if the queue is
- * empty.
+ * This function is invoked when the ping timer expires, a ping period after
+ * the last frame sent. It only requests a TX cycle, and what that sends
+ * depends on the state: on a connected link a PING if the queue is empty,
+ * during the handshake the current handshake step again. No PING is sent
+ * before the link is up.
  *
  * @param arg Platform timer callback argument.
  */
-void ludlc_ping_timer(ludlc_platform_timer_arg_t arg)
+static void ludlc_ping_timer(ludlc_platform_timer_arg_t arg)
 {
 	struct ludlc_connection *conn = ludlc_timer_arg_to_conn(arg);
 	LUDLC_LOG_TRACE("Ping time");

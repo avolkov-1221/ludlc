@@ -649,11 +649,6 @@ static void *ludlc_tx_serial_thread(void *arg)
 				continue;
 			}
 
-			/* Postpone the ping timer for one PING_TIME later */
-			ludlc_platform_start_timer(&sconn->conn.ping_timer,
-					ludlc_conn_ping_time(&sconn->conn),
-					ludlc_conn_ping_time(&sconn->conn));
-
 			if (!is_tx_empty) {
 				/* We are sending data, demand to send more */
 				ludlc_platform_request_tx(&sconn->conn);
