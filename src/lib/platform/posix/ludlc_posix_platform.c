@@ -1,14 +1,17 @@
 // SPDX-License-Identifier: (Apache-2.0 OR GPL-2.0-or-later)
 /**
- * @file ludlc_posix.c
+ * @file ludlc_posix_platform.c
  *
  * @brief LuDLC POSIX platform-specific implementations.
  *
+ * @copyright
  * Copyright (C) 2025-2026 Andrey VOLKOV <andrey@volkov.fr> & LuDLC Contributors
  *
- * This file is licensed under either the Apache License, Version 2.0,
- * or the GNU General Public License, version 2 or (at your option)
- * any later version.
+ * @details
+ * The platform services the core calls on a POSIX system: its timers, run
+ * as POSIX timers that notify a thread, the monotonic timestamp, and the two
+ * pipes of a connection, which wake its TX thread for a send and its RX
+ * thread when the link times out.
  */
 
 #include <unistd.h>
@@ -27,18 +30,13 @@
 #include <ludlc_private.h>
 
 /**
- * @brief Internal "trampoline" handler for ALL timer expirations.
+ * @brief Internal trampoline handler for all timer expirations.
  *
- * This is the single function registered with `timer_create` via
- * `SIGEV_THREAD`. It receives the pointer to our `ludlc_platform_timer_t`
- * struct and safely calls the user-specified LuDLC callback.
+ * Registered with `timer_create` via `SIGEV_THREAD`. Atomic flags keep it
+ * from racing with `ludlc_platform_stop_timer()`, so the callback does not
+ * run if the timer was stopped.
  *
- * It uses atomic flags to manage race conditions between
- * `ludlc_platform_stop_timer` and the timer's own expiration,
- * ensuring the callback is not executed if the timer was stopped.
- *
- * @param sv The `sigval` union containing the pointer (`sival_ptr`) to
- * the `ludlc_platform_timer_t` structure.
+ * @param sv The `sigval` union carrying the `ludlc_platform_timer_t` pointer.
  */
 static void posix_timer_handler(union sigval sv)
 {
@@ -47,7 +45,7 @@ static void posix_timer_handler(union sigval sv)
 	if (timer == NULL)
 		return;
 
-	/* Mark that the handler is executing to prevent deletion */
+	/* Marks the handler as executing, so a stop or delete waits for it. */
 	atomic_exchange(&timer->handler_running, true);
 
 	/*
@@ -59,17 +57,14 @@ static void posix_timer_handler(union sigval sv)
 	if (atomic_exchange(&timer->pending, false) && timer->function)
 		timer->function(timer->conn);
 
-	/* Mark that the handler has finished */
 	atomic_exchange(&timer->handler_running, false);
 }
 
 /**
  * @brief Initializes a LuDLC platform timer for POSIX.
  *
- * This function creates an underlying POSIX timer (`timer_t`) associated
- * with the `CLOCK_MONOTONIC` clock. It configures the timer to
- * notify via a new thread (`SIGEV_THREAD`), which will execute
- * the `posix_timer_handler` trampoline.
+ * Creates a `CLOCK_MONOTONIC` POSIX timer that notifies through a new thread
+ * (`SIGEV_THREAD`) running the `posix_timer_handler` trampoline.
  *
  * @param conn Pointer to the LuDLC connection, passed to the callback.
  * @param timer Pointer to the `ludlc_platform_timer_t` structure to initialize.
@@ -98,8 +93,7 @@ int ludlc_platform_init_timer(struct ludlc_connection *conn,
 	sev.sigev_value.sival_ptr = timer; /* Pass our struct to the handler */
 	sev.sigev_notify_attributes = NULL;
 
-	/* Create the underlying POSIX timer. */
-	/* We use CLOCK_MONOTONIC, as it's not affected by system time changes. */
+	/* CLOCK_MONOTONIC, so system time changes do not affect the timer. */
 	if (timer_create(CLOCK_MONOTONIC, &sev, &timer->posix_timer_id))
 		return -errno;
 
@@ -134,9 +128,6 @@ int ludlc_default_get_timestamp(ludlc_timestamp_t *out_ts)
 /**
  * @brief Starts or restarts a LuDLC platform timer.
  *
- * This function arms (or re-arms) the specified POSIX timer with a
- * given delay and period.
- *
  * @param timer Pointer to the initialized `ludlc_platform_timer_t` structure.
  * @param delay The initial delay before the first expiration, in microseconds.
  * @param period The period for subsequent expirations, in microseconds.
@@ -154,7 +145,6 @@ int ludlc_platform_start_timer(ludlc_platform_timer_t *timer,
 	if (!timer)
 		return -EINVAL;
 
-	/* Convert microseconds to a relative timespec */
 	its.it_value.tv_sec = delay / 1000000ULL;
 	its.it_value.tv_nsec = (delay % 1000000ULL) * 1000ULL;
 
@@ -164,9 +154,8 @@ int ludlc_platform_start_timer(ludlc_platform_timer_t *timer,
 	/* Set pending flag *before* arming the timer to avoid a race. */
 	timer->pending = true;
 
-	/* Arm the timer (flags = 0 means relative time) */
+	/* flags = 0: the timeout is relative. */
 	if (timer_settime(timer->posix_timer_id, 0, &its, NULL) == -1) {
-		/* Rollback: failed to arm */
 		timer->pending = false;
 		return -errno;
 	}
@@ -177,14 +166,12 @@ int ludlc_platform_start_timer(ludlc_platform_timer_t *timer,
 /**
  * @brief Stops a running LuDLC platform timer.
  *
- * This function disarms the underlying POSIX timer and clears the
- * `pending` flag to prevent any in-flight expirations from
- * executing the callback.
+ * Disarms the POSIX timer and clears the `pending` flag so that an expiry
+ * already in flight does not run the callback.
  *
- * @note This function handles a race condition where the timer might
- * expire and the handler might be scheduled just as this stop function
- * is called. It atomically clears the `pending` flag, which the
- * `posix_timer_handler` checks before executing the user callback.
+ * @note Clearing `pending` atomically is what closes the race with an expiry
+ * scheduled just as this is called: `posix_timer_handler` checks the flag
+ * before calling the user callback.
  *
  * @param timer Pointer to the `ludlc_platform_timer_t` structure to stop.
  * @return 0 on success.
@@ -195,27 +182,22 @@ int ludlc_platform_stop_timer(ludlc_platform_timer_t *timer)
 	if (timer == NULL)
 		return 0;
 
-	/*
-	 * Atomically clear the pending flag.
-	 * This signals to the timer_handler (if it's running or
-	 * about to run) that it should *not* execute the callback.
-	 */
+	/* Tells the handler, running or about to run, not to call back. */
 	timer->pending = false;
 
-	/* Disarm the underlying POSIX timer to prevent future triggers. */
 	struct itimerspec its = {0}; /* {0, 0} disarms the timer */
 
 	if (timer_settime(timer->posix_timer_id, 0, &its, NULL) == -1) {
-		/* This is not fatal, but we should report it. */
-		/* The handler logic will still prevent the callback from */
-		/* running thanks to the 'was_pending' check. */
+		/*
+		 * Not fatal: the cleared pending flag still stops the
+		 * callback.
+		 */
 		return -errno;
 	}
 
 	/*
-	 * Wait if the handler is currently executing.
-	 * This provides a stronger guarantee that the callback is not
-	 * running on another thread when this function returns.
+	 * Wait out a handler already running, so the callback is not on
+	 * another thread when this returns.
 	 */
 	while (timer->handler_running) {
 		(void)sched_yield();
@@ -227,9 +209,8 @@ int ludlc_platform_stop_timer(ludlc_platform_timer_t *timer)
 /**
  * @brief Delete a LuDLC platform timer.
  *
- * This function disarms the underlying POSIX timer and clears the
- * `pending` flag to prevent any in-flight expirations from
- * executing the callback.
+ * Stops the timer first, so an expiry already in flight cannot run the
+ * callback.
  *
  * @param timer Pointer to the `ludlc_platform_timer_t` structure to delete.
  */
@@ -245,23 +226,21 @@ void ludlc_platform_destroy_timer(ludlc_platform_timer_t *timer)
 /**
  * @brief Requests an immediate transmission.
  *
- * This function signals the LuDLC transmit task/thread (if any) to wake
- * up and attempt to send a packet. It sets a flag to force transmission
- * even if no new data has been queued (e.g., to send a PING with ACK).
+ * Wakes the TX thread and forces a send even when no new data has been
+ * queued, for example to carry a PING with an ACK.
  *
  * @param conn Pointer to the connection structure.
  */
 void ludlc_platform_request_tx(struct ludlc_connection *conn)
 {
-	/* Set the force TX flag */
 	ludlc_platform_set_bit(LUDLC_CONN_FORCE_TX_F, &conn->pconn.tx_events);
 
-	/* Wake up the TX thread by writing to the pipe */
 	char msg = 'T';
 	if (write(conn->pconn.tx_pipe[1], &msg, 1) == -1) {
-		/* Handle error, e.g., pipe closed or full.
-		 * It's not a critical error if the pipe is full (EAGAIN),
-		 * as the FORCE_TX flag is already set. Only log other errors. */
+		/*
+		 * A full pipe (EAGAIN) is harmless: the FORCE_TX flag is
+		 * already set. Log anything else.
+		 */
 		if (errno != EAGAIN) {
 			LUDLC_LOG_ERROR("Failed to write to TX wakeup pipe: %s",
 				strerror(errno));
@@ -273,9 +252,10 @@ void ludlc_platform_conn_timeout(struct ludlc_connection *conn)
 {
 	char msg = 'T';
 	if (write(conn->pconn.rx_pipe[1], &msg, 1) == -1) {
-		/* Handle error, e.g., pipe closed or full.
-		 * It's not a critical error if the pipe is full (EAGAIN),
-		 * as the FORCE_TX flag is already set. Only log other errors. */
+		/*
+		 * A full pipe (EAGAIN) is harmless: the RX thread wakes on
+		 * what is already queued. Log anything else.
+		 */
 		if (errno != EAGAIN) {
 			LUDLC_LOG_ERROR("Failed to write to TX wakeup pipe: %s",
 				strerror(errno));
@@ -307,33 +287,58 @@ void ludlc_platform_conn_destroy(struct ludlc_connection *conn)
 
 }
 
+/*
+ * Neither end may block. The reader polls both pipes, and a write finding one
+ * full is not needed, a wakeup being queued already.
+ */
+static int ludlc_pipe_set_nonblock(int fd[2])
+{
+	int i;
+
+	for (i = 0; i < 2; i++) {
+		int flags = fcntl(fd[i], F_GETFL);
+
+		if (flags < 0 ||
+		    fcntl(fd[i], F_SETFL, flags | O_NONBLOCK) < 0) {
+			return -errno;
+		}
+	}
+
+	return 0;
+}
+
 int ludlc_platform_conn_init(struct ludlc_connection *conn)
 {
+	int ret;
+
 	conn->pconn.rx_pipe[0] = -1;
 	conn->pconn.rx_pipe[1] = -1;
+	conn->pconn.tx_pipe[0] = -1;
+	conn->pconn.tx_pipe[1] = -1;
 
-	/* Create rx pipe */
 	if (pipe(conn->pconn.rx_pipe) < 0) {
 		return -errno;
 	}
 
-	/* Set read end of pipe to non-blocking */
-	fcntl(conn->pconn.rx_pipe[0], F_SETFL, O_NONBLOCK);
-
-	conn->pconn.tx_pipe[0] = -1;
-	conn->pconn.tx_pipe[1] = -1;
-
-	if (pipe(conn->pconn.tx_pipe) < 0) {
-		int ret = -errno;
-
-		close(conn->pconn.rx_pipe[0]);
-		conn->pconn.rx_pipe[0] = -1;
-
-		close(conn->pconn.rx_pipe[1]);
-		conn->pconn.rx_pipe[1] = -1;
-		return ret;
+	ret = ludlc_pipe_set_nonblock(conn->pconn.rx_pipe);
+	if (ret) {
+		goto err_destroy;
 	}
 
-	fcntl(conn->pconn.tx_pipe[0], F_SETFL, O_NONBLOCK);
+	if (pipe(conn->pconn.tx_pipe) < 0) {
+		ret = -errno;
+		goto err_destroy;
+	}
+
+	ret = ludlc_pipe_set_nonblock(conn->pconn.tx_pipe);
+	if (ret) {
+		goto err_destroy;
+	}
+
 	return 0;
+
+err_destroy:
+	ludlc_platform_conn_destroy(conn);
+
+	return ret;
 }

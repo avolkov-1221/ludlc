@@ -2,18 +2,14 @@
 /**
  * @file ludlc_posix.h
  *
- * @brief LuDLC POSIX platform-specific data structures.
+ * @brief LuDLC POSIX platform-specific definitions.
  *
- * This file defines data structures used by the POSIX platform
- * abstraction layer. It primarily defines the `ludlc_posix_connection`
- * structure, which extends the core `ludlc_connection` with
- * POSIX-specific state.
- *
+ * @copyright
  * Copyright (C) 2025-2026 Andrey VOLKOV <andrey@volkov.fr> & LuDLC Contributors
  *
- * This file is licensed under either the Apache License, Version 2.0,
- * or the GNU General Public License, version 2 or (at your option)
- * any later version.
+ * @details
+ * What the POSIX port needs and the C library does not provide:
+ * container_of(), which the rest of the code takes from the kernel style.
  */
 
 #ifndef __LUDLC_POSIX_H__
