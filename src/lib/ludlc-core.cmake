@@ -31,6 +31,11 @@ if(CONFIG_LUDLC_FRAMING_HDLC)
         math(EXPR LUDLC_FRAMINGS_ON "${LUDLC_FRAMINGS_ON} + 1")
 endif(CONFIG_LUDLC_FRAMING_HDLC)
 
+if(CONFIG_LUDLC_FRAMING_RAW)
+        list(APPEND LUDLC_CORE_SRC ${CMAKE_CURRENT_LIST_DIR}/ludlc_raw.c)
+        math(EXPR LUDLC_FRAMINGS_ON "${LUDLC_FRAMINGS_ON} + 1")
+endif(CONFIG_LUDLC_FRAMING_RAW)
+
 # ludlc_framing.c turns a name into one of the framings built, which a port
 # carrying a single one has nothing to do with.
 if(LUDLC_FRAMINGS_ON GREATER 1)

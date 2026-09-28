@@ -164,6 +164,14 @@ config LUDLC_FRAMING_COBS
 	  by its content. Costs more code than the escaping and about the same
 	  RAM.
 
+config LUDLC_FRAMING_RAW
+	bool "Raw framing"
+	default y
+	help
+	  Send the octets unchanged, with no delimiter. Usable only where the
+	  transport delimits frames itself, which here means SPI, where the
+	  length is announced before each frame.
+
 config LUDLC_STATIC_FRAMING_NUM
 	int "Framing objects preallocated per framing"
 	default 1 if !LUDLC_MULTI_CONN

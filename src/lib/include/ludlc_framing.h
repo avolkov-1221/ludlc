@@ -18,8 +18,8 @@
  * going to send anyway and the decoder takes the octets just received, so a
  * link carrying a megabyte costs no more than one carrying eight octets.
  *
- * The state machines are in ludlc_hdlc.c and ludlc_cobs.c, reached through
- * @ref ludlc_framing_ops. A build carrying a single framing
+ * The state machines are in ludlc_hdlc.c, ludlc_cobs.c and ludlc_raw.c,
+ * reached through @ref ludlc_framing_ops. A build carrying a single framing
  * calls them by name instead.
  */
 
@@ -42,7 +42,8 @@ struct ludlc_framing_ops;
 /** @brief How many are built, which decides whether a lookup is needed. */
 #define LUDLC_FRAMING_COUNT				\
 	(CONFIG_LUDLC_FRAMING_HDLC +			\
-	 CONFIG_LUDLC_FRAMING_COBS)
+	 CONFIG_LUDLC_FRAMING_COBS +			\
+	 CONFIG_LUDLC_FRAMING_RAW)
 
 #if LUDLC_FRAMING_COUNT == 0
 #error A build needs at least one framing
@@ -147,6 +148,9 @@ struct ludlc_framing_state {
 #if CONFIG_LUDLC_FRAMING_COBS
 #include <ludlc_cobs.h>
 #endif
+#if CONFIG_LUDLC_FRAMING_RAW
+#include <ludlc_raw.h>
+#endif
 
 /**
  * @def LUDLC_TX_FIFO_SIZE
@@ -210,7 +214,7 @@ struct ludlc_framing {
 	 * Computed from the packet rather than from an encoder, since a
 	 * transport that announces a frame needs the length before writing
 	 * it. COBS is the plaintext length, one code octet per 253 data
-	 * octets, and the delimiter.
+	 * octets, and the delimiter. Raw returns the frame size unchanged.
 	 * NULL on the escaping, whose length depends on which octets need
 	 * escaping: a transport such as SPI, which must announce the length
 	 * up front, cannot carry such a framing and refuses it on this
@@ -224,10 +228,11 @@ struct ludlc_framing {
 	 * @brief The frame has no delimiter, so the decoder must be told its
 	 * length.
 	 *
-	 * The transport passes the announced length as the capacity to
-	 * @ref ludlc_dec_prep, having refused one longer than its buffer. A
-	 * transport reading a byte stream does not know the length and refuses
-	 * such a framing rather than never completing a frame.
+	 * True for @ref ludlc_framing_raw only. The transport passes the
+	 * announced length as the capacity to @ref ludlc_dec_prep, having
+	 * refused one longer than its buffer. A transport reading a byte
+	 * stream does not know the length and refuses such a framing rather
+	 * than never completing a frame.
 	 */
 	bool needs_wire_len;
 
@@ -254,6 +259,26 @@ extern const struct ludlc_framing ludlc_framing_hdlc;
 #if CONFIG_LUDLC_FRAMING_COBS
 extern const struct ludlc_framing ludlc_framing_cobs;
 #endif
+
+/**
+ * @brief The frame unchanged, for a transport that delimits it.
+ *
+ * Header, payload and checksum, with nothing added or escaped, so the
+ * transport must supply the frame length. Only a transport carrying one frame
+ * per transfer can run this, since a byte stream cannot resynchronise.
+ */
+#if CONFIG_LUDLC_FRAMING_RAW
+extern const struct ludlc_framing ludlc_framing_raw;
+#endif
+
+/** @brief Self-delimiting framings, default first, for a listing. */
+#define LUDLC_FRAMING_NAMES_DELIMITED	"hdlc cobs"
+
+/** @brief Framings whose length is known up front, default first. */
+#define LUDLC_FRAMING_NAMES_ANNOUNCED	"raw cobs"
+
+/** @brief Every name ludlc_framing_lookup() accepts, for a listing. */
+#define LUDLC_FRAMING_NAMES	LUDLC_FRAMING_NAMES_DELIMITED " raw"
 
 /* A lookup by name is only useful when there is more than one framing. */
 #if LUDLC_FRAMING_COUNT > 1
@@ -285,8 +310,10 @@ static inline const struct ludlc_framing *ludlc_framing_default(void)
 {
 #if CONFIG_LUDLC_FRAMING_HDLC
 	return &ludlc_framing_hdlc;
-#else
+#elif CONFIG_LUDLC_FRAMING_COBS
 	return &ludlc_framing_cobs;
+#else
+	return &ludlc_framing_raw;
 #endif
 }
 
@@ -325,10 +352,14 @@ const struct ludlc_framing *ludlc_framing_or_default(
 #define LUDLC_FRAMING_ONLY(op)	ludlc_hdlc_##op
 #define LUDLC_FRAMING_ONLY_NEW	ludlc_create_framing_hdlc
 #define LUDLC_FRAMING_ONLY_DEL	ludlc_destroy_framing_hdlc
-#else
+#elif CONFIG_LUDLC_FRAMING_COBS
 #define LUDLC_FRAMING_ONLY(op)	ludlc_cobs_##op
 #define LUDLC_FRAMING_ONLY_NEW	ludlc_create_framing_cobs
 #define LUDLC_FRAMING_ONLY_DEL	ludlc_destroy_framing_cobs
+#else
+#define LUDLC_FRAMING_ONLY(op)	ludlc_raw_##op
+#define LUDLC_FRAMING_ONLY_NEW	ludlc_create_framing_raw
+#define LUDLC_FRAMING_ONLY_DEL	ludlc_destroy_framing_raw
 #endif
 
 #define LUDLC_FS_OP(fs, op)	((void)(fs), LUDLC_FRAMING_ONLY(op))

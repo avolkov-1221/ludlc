@@ -67,8 +67,8 @@ a payload, the header and the checksum coming off it first.
 **Framing**
 
 The optional layer that puts a frame on the wire and says where it
-ends. Which one a link runs is agreed by both of its ends, as
-described in Appendix A.
+ends. Three are defined: `cobs`, `hdlc` and `raw`. Which one a link
+runs is agreed by both of its ends, as described in Appendix A.
 
 **SOF (Start of Frame)**
 
@@ -488,7 +488,9 @@ packet, which a caller could otherwise imitate.
 
 The following describes the framing layer implementations. This layer is
 **optional** and is intended for transports that lack framing, integrity
-checks, or both, such as a UART, which has neither.
+checks, or both: an octet stream such as a UART has neither, whilst a
+transport that carries each frame in a transfer of its own, such as SPI,
+delimits for itself and wants only the check.
 
 #### What a Frame Is
 
@@ -537,6 +539,35 @@ endianness of either peer. An algorithm that is defined the other way round
 (CRC-16/XMODEM against CRC-16/KERMIT) is expressed by swapping the value
 before it is handed over, which is also where a final XOR belongs (HDLC's
 FCS-16).
+
+#### Choosing a Framing
+
+Three framings are defined. What tells them apart is how a frame ends and what
+that costs:
+
+  * **`cobs`**: A frame ends at a chosen delimiter octet (default
+    `0x00`), that value never occurring inside it. Cost: two octets per
+    frame, plus one for every 254 octets of it. Carried by any
+    transport.
+  * **`hdlc`**: A frame ends at a marker, which also begins the next
+    frame. Cost: an octet to begin a frame, plus one for every reserved
+    value in it, which on unlucky data is every octet. Carried by an
+    octet stream.
+  * **`raw`**: A frame ends wherever the transport says it does. Cost:
+    nothing. Carried by a transport that delimits.
+
+A transport that hands over an octet stream has nothing to say about where one
+frame stops and the next begins, so it must run a framing that delimits
+itself: `hdlc`, which such a link runs unless it is told otherwise, or `cobs`,
+whose cost does not depend on the data.
+
+A transport that carries a frame in a transfer of its own has the opposite
+requirement. It states the length of a frame before sending it, so it needs a
+framing whose wire form can be measured before it is produced. `raw` is that
+framing, and is what such a link runs by default; `cobs` counts its own
+stuffing and can be carried as well, for a peer that would rather not speak two
+framings. `hdlc` cannot be carried at all, as escaping cannot be measured until
+it has been done.
 
 #### Stuffing and a Delimiter (`cobs`)
 
@@ -642,3 +673,15 @@ Two octets of every 256 are therefore doubled on average, and a frame of
 unlucky data doubles entirely. This is the price of a framing that need not
 know how long a frame is going to be, and the reason a transport that has to
 say so beforehand cannot carry it.
+
+#### The Frame as It Stands (`raw`)
+
+Nothing is added and nothing is escaped: the packet and its checksum go on the
+wire exactly as they are, and where the frame ends is whatever the transport
+says. There is no marker to look for and no octet value that a payload may not
+contain, which also means a receiver has nothing to resynchronise on. A frame
+lost or truncated is a frame the checksum rejects, and the next transfer
+starts afresh.
+
+This is the framing for a transport that delimits, and on such a link it is
+the default.

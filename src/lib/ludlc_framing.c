@@ -8,8 +8,8 @@
  * Copyright (C) 2025-2026 Andrey VOLKOV <andrey@volkov.fr> & LuDLC Contributors
  *
  * @details
- * Each framing describes itself in its own file: ludlc_hdlc.c and
- * ludlc_cobs.c. This file only holds the list a link is opened from, and
+ * Each framing describes itself in its own file: ludlc_hdlc.c, ludlc_cobs.c
+ * and ludlc_raw.c. This file only holds the list a link is opened from, and
  * a build with a single framing does not compile it.
  */
 
@@ -33,6 +33,9 @@ static const struct {
 } framing[] = {
 #if CONFIG_LUDLC_FRAMING_COBS
 	{"cobs", &ludlc_framing_cobs},
+#endif
+#if CONFIG_LUDLC_FRAMING_RAW
+	{"raw", &ludlc_framing_raw},
 #endif
 #if CONFIG_LUDLC_FRAMING_HDLC
 	{"hdlc", &ludlc_framing_hdlc},
