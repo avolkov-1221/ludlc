@@ -2,18 +2,18 @@
 /**
  * @file ludlc_proto.h
  *
- * @brief LuDLC protocol parameters, packet-related types, and core service hooks.
+ * @brief LuDLC protocol parameters, packet-related types, and core service
+ * hooks.
  *
- * This header holds compile-time protocol limits (window size, ping period,
- * payload bounds, channel IDs), typedefs for IDs and sizes, and the small
- * @ref ludlc_proto_cb table the engine uses for checksum and time—**not**
- * for serial framing or byte I/O (those live in the transport layer).
- *
+ * @copyright
  * Copyright (C) 2025-2026 Andrey VOLKOV <andrey@volkov.fr> & LuDLC Contributors
  *
- * This file is licensed under either the Apache License, Version 2.0,
- * or the GNU General Public License, version 2 or (at your option)
- * any later version.
+ * @details
+ * This header holds compile-time protocol limits (window size, ping period,
+ * payload bounds, channel IDs), typedefs for IDs and sizes, the small
+ * @ref ludlc_proto_cb table the engine uses for time, and the
+ * @ref ludlc_csum a transport runs. Serial framing, checksums and byte I/O
+ * live in the transport layer.
  */
 
 #ifndef __LUDLC_PROTO_H__
@@ -200,60 +200,71 @@ typedef uint32_t ludlc_channel_t;
 #endif
 
 /**
- * @def CONFIG_LUDLC_CONN_CSUM_CONFIG
- * @brief Enables per-connection checksum init/verify/host->wire settings
- * in @ref ludlc_proto_cb.
+ * @struct ludlc_csum
+ * @brief Checksum a link runs.
  *
- * Disabled by default to keep @ref ludlc_proto_cb minimal and preserve legacy
- * macro-only checksum behavior.
+ * The transport computes it, but both ends of a link must run the same one,
+ * so it is a property of the network and is named in the platform arguments
+ * the link is opened with. A transport that validates frames in hardware
+ * needs none.
+ *
+ * All the core reads from it is @c octets, the width being what a frame gives
+ * up to the checksum and therefore what separates a frame size from the
+ * payload that fits in it. Must outlive the connection opened on it.
  */
-#ifndef CONFIG_LUDLC_CONN_CSUM_CONFIG
-#define CONFIG_LUDLC_CONN_CSUM_CONFIG 0
-#endif
+struct ludlc_csum {
+	const char *name;
+	/**
+	 * @brief Running checksum over one octet. **Mandatory.**
+	 *
+	 * Called for each frame octet, before escaping on TX and after
+	 * unescaping on RX.
+	 *
+	 * @param csum Checksum so far.
+	 * @param data Octet to add.
+	 * @return Checksum including @p data.
+	 */
+	ludlc_csum_t (*csum)(ludlc_csum_t csum, uint8_t data);
+	/**
+	 * @brief Optional last transform before the checksum goes on the wire.
+	 *
+	 * A value transform, not an octet order: the framing always sends the
+	 * checksum least significant octet first. Holds a final xor (HDLC
+	 * FCS-16), or a swap for an algorithm that sends it the other way
+	 * (CRC-16/XMODEM against CRC-16/KERMIT).
+	 */
+	ludlc_csum_t (*to_wire)(ludlc_csum_t csum);
+	/** Seed each frame starts at. */
+	ludlc_csum_t init;
+	/**
+	 * @brief Residual expected over [payload][checksum].
+	 *
+	 * RX runs the checksum across the checksum octets too; an intact frame
+	 * always leaves this constant. Zero for a zero-seeded checksum sent as
+	 * computed, 0xf0b8 for HDLC FCS-16.
+	 */
+	ludlc_csum_t verify;
+	/**
+	 * @brief How many octets are sent on the wire, i.e. the
+	 * algorithm's width. **Mandatory.**
+	 *
+	 * @ref ludlc_csum_t is only the register to compute in and may be
+	 * wider: one build may carry 16 bits on one link and 32 on the next.
+	 */
+	uint8_t octets;
+};
 
 /**
  * @struct ludlc_proto_cb
- * @brief Services the LuDLC engine needs from below: running CRC and a monotonic clock.
+ * @brief Services the LuDLC engine needs from below: a monotonic clock.
  *
  * Pass a filled-in instance to @c ludlc_connection_init(). The core uses it for
- * packet integrity and protocol timing (microsecond timestamps).
- * **Framing and encoding are not part of this structure** - they are implemented by
- * the serial (or other) transport.
+ * protocol timing (microsecond timestamps). **Framing, encoding and the
+ * checksum are not part of this structure** - they are implemented by the
+ * serial (or other) transport.
  *
  */
 struct ludlc_proto_cb {
-	/**
-	 * @brief (Optional/Mandatory) Calculates the checksum of a single byte.
-	 *
-	 * This is a running checksum function. It's a
-	 * mandatory one if hardware has not integrated packet
-	 * validation IP (like typical UARTs)
-	 *
-	 * @param csum The current checksum value.
-	 * @param data The new byte to add to the checksum.
-	 * @return The updated checksum value.
-	 */
-	ludlc_csum_t (*csum_byte)(ludlc_csum_t csum, uint8_t data);
-#if CONFIG_LUDLC_CONN_CSUM_CONFIG
-	/**
-	 * @brief Initial checksum seed for this connection.
-	 *
-	 * Overrides @ref LUDLC_CSUM_INIT_VALUE for this connection.
-	 */
-	ludlc_csum_t csum_init_value;
-	/**
-	 * @brief Expected residual checksum after validating [payload][csum].
-	 *
-	 * Overrides @ref LUDLC_CSUM_VERIFY_VALUE for this connection.
-	 */
-	ludlc_csum_t csum_verify_value;
-	/**
-	 * @brief Optional host->wire checksum conversion for this connection.
-	 *
-	 * If NULL, @ref LUDLC_CSUM_HTON is used.
-	 */
-	ludlc_csum_t (*csum_to_wire)(ludlc_csum_t csum);
-#endif
 	/**
 	 * @brief Monotonic time in microseconds (e.g. @c CLOCK_MONOTONIC on POSIX).
 	 *

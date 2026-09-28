@@ -1,19 +1,16 @@
 // SPDX-License-Identifier: (Apache-2.0 OR GPL-2.0-or-later)
 /**
- * @file ludlc_platform.h
+ * @file zephyr/ludlc_platform.h
  *
  * @brief LuDLC platform abstraction layer for Zephyr.
  *
- * This file defines the platform-specific abstractions required by the LuDLC
- * library when running on the Zephyr RTOS. It includes definitions for atomics,
- * locks, checksums, memory allocation, and timers, mapping them to Zephyr's
- * native APIs.
- *
+ * @copyright
  * Copyright (C) 2025-2026 Andrey VOLKOV <andrey@volkov.fr> & LuDLC Contributors
  *
- * This file is licensed under either the Apache License, Version 2.0
- * or the GNU General Public License, version 2 or (at your option)
- * any later version.
+ * @details
+ * Defines the platform-specific abstractions the LuDLC library needs on the
+ * Zephyr RTOS: atomics, locks, memory allocation and timers, mapped onto
+ * Zephyr's native APIs. Checksums are not here; they belong to the transport.
  */
 
 #ifndef __LUDLC_PLATFORM_CONFIG_H__
@@ -80,12 +77,6 @@ ludlc_platform_test_and_set_bit(long nr, ludlc_platform_atomic_t *addr)
 #define LUDLC_LOCK(lk)			k_mutex_lock(lk, K_FOREVER)
 #define LUDLC_UNLOCK(lk)		k_mutex_unlock(lk)
 
-/* --- Checksums --- */
-/* Values for CRC-16/KERMIT (poly 0x1021) */
-#define LUDLC_CSUM_INIT_VALUE		0
-#define LUDLC_CSUM_VERIFY_VALUE		0
-#define LUDLC_CSUM_HTON(csum)		sys_cpu_to_le16(csum)
-
 /* --- Allocation --- */
 static inline void *ludlc_platform_alloc(size_t sz)
 {
@@ -120,7 +111,6 @@ static inline int ludlc_platform_start_timer(ludlc_platform_timer_t *timer,
 					     ludlc_timestamp_t period)
 {
 	if (timer) {
-		/* k_timer_start uses k_timeout_t structures (ms or us) */
 		k_timer_start(timer, K_USEC(delay),
 			      period ? K_USEC(period) : K_NO_WAIT);
 		return 0;

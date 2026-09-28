@@ -1,19 +1,17 @@
 // SPDX-License-Identifier: (Apache-2.0 OR GPL-2.0-or-later)
 /**
- * @file ludlc.c
+ * @file ludlc_demo.c
  *
  * @brief LuDLC demo executable main file.
  *
- * This application provides an interactive demo for the LuDLC serial
- * connection API, featuring a simple echo protocol. It demonstrates
- * connection setup, teardown, sending data, and handling asynchronous
- * receive and confirmation callbacks.
- *
+ * @copyright
  * Copyright (C) 2025-2026 Andrey VOLKOV <andrey@volkov.fr> & LuDLC Contributors
  *
- * This file is licensed under either the Apache License, Version 2.0,
- * or the GNU General Public License, version 2 or (at your option)
- * any later version.
+ * @details
+ * An interactive demo of the LuDLC serial connection API with a simple echo
+ * protocol: connection setup and teardown, sending data, and the asynchronous
+ * receive and confirmation callbacks. It also shows the settings a link is
+ * opened with: the line settings and the CRC-16/KERMIT checksum below.
  */
 
 #include <stdio.h>
@@ -103,9 +101,9 @@ static struct option long_options[] = {
  * item is found, removed from the queue, and freed.
  */
 struct wait_ack_litem {
-	TAILQ_ENTRY(wait_ack_litem) list; /**!< TAILQ linkage. */
-	size_t size;                      /**!< Size of the payload. */
-	uint8_t payload[];                /**!< Flexible array for payload data. */
+	TAILQ_ENTRY(wait_ack_litem) list; /**< TAILQ linkage. */
+	size_t size;                      /**< Size of the payload. */
+	uint8_t payload[];                /**< Flexible array for payload data. */
 };
 
 /** @brief TAILQ head for tracking packets awaiting acknowledgment. */
@@ -811,10 +809,7 @@ static const uint16_t crc16_kermit_table[] = {
 };
 
 /**
- * @brief Calculates the running CRC-16/KERMIT checksum for a single byte.
- *
- * This is a mandatory function for the `ludlc_proto_cb` if hardware
- * does not have integrated packet validation (like typical UARTs).
+ * @brief Running CRC-16/KERMIT over one octet for @ref ludlc_csum.
  *
  * @param crc The current CRC value.
  * @param data The new byte to incorporate into the CRC.
@@ -826,10 +821,21 @@ static ludlc_csum_t crc16_ccitt(ludlc_csum_t crc, const uint8_t data)
 }
 
 /**
+ * @brief Checksum this link runs: CRC-16/KERMIT, as LuDLC peers do.
+ *
+ * Seeded zero and sent as computed, so RX is left with zero over payload and
+ * checksum together. Two octets on the wire. Passed to the serial transport,
+ * not to the core: the checksum belongs to the link.
+ */
+static const struct ludlc_csum csum = {
+	.csum = crc16_ccitt,
+	.octets = 2,
+};
+
+/**
  * @brief The `ludlc_proto_cb` implementation for the POSIX serial transport.
  */
 static struct ludlc_proto_cb proto = {
-	.csum_byte = crc16_ccitt,
 	.get_timestamp = ludlc_default_get_timestamp,
 };
 
@@ -1045,6 +1051,7 @@ int main (int argc, char **argv)
 
 	ludlc_platform_args_t ser_args = {
 		.baudrate = 115200UL,
+		.csum = &csum,
 	};
 
 	ui_timestamp_init();

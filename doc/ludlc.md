@@ -43,7 +43,7 @@ transmit timely ACK/NAK information when no data is being sent.
 
 The flow control mechanism that allows a sender to transmit a
 configurable number of packets (the "window") before it must
-wait for an ACK. This prevents buffer overruns on the receiver.
+wait for an ACK. This prevents overruns of the receiver's link buffers.
 
 **TTL (Time-To-Live)**
 
@@ -92,9 +92,9 @@ within an outer protocol that adds an addressing layer.
   sequence numbers and acknowledgments (ACKs).
 * **Error Recovery**: Uses Negative Acknowledgments (NAK) and
   re-transmissions with a Time-To-Live (TTL).
-* **Flow Control**: Implements a sliding window protocol to prevent buffer
-  overruns and improve data throughput by cumulatively acknowledging
-  groups of packets.
+* **Flow Control**: Implements a sliding window protocol to prevent
+  overruns of the receiver's link buffers and improve data throughput by
+  cumulatively acknowledging groups of packets.
 * **Keep-Alives**: A ping/pong mechanism acts as a keep-alive and
   connection watchdog.
 * **Multiplexing**: Supports multiple logical channels over a single link.
@@ -203,7 +203,7 @@ When a node receives a control packet, it advances its own state.
 4.  **Connection Established**:
       * Node A (State 2) receives Node B's `id=2` packet. It moves to
         **State 3** (*Connected*).
-      * Node B (State 2) receives Node B's `id=2` packet. It moves to
+      * Node B (State 2) receives Node A's `id=2` packet. It moves to
         **State 3** (*Connected*).
 
 The connection is now established.
@@ -317,12 +317,24 @@ are blocked.
 
 **Acknowledgments (ACKs)**
 When a packet is received, the receiver's next outgoing packet (data or
-ping) will have its Acknowledgment Number set to the sequence number of
-the just-received packet.
+ping) carries the sequence number of the just-received packet in its
+Acknowledgment Number field.
 
-When the sender receives this acknowledgment, it "confirms" all packets
-in its queue up to and including that sequence number, freeing space in
-the sliding window.
+Upon receiving this ACK, the sender confirms all packets in its queue
+up to and including that sequence number, freeing space in the sliding
+window.
+
+An ACK indicates that the packet reached the peer's link layer and was
+passed to its channel, and nothing more. It does not guarantee that the
+receiving application has consumed the payload, and it is never delayed
+while that application is busy. A receiver that cannot accept a payload
+drops it instead of delaying the ACK, because a delayed ACK would stall
+the whole link, blocking every channel on it, and would eventually trip
+the peer's watchdog timer.
+
+End-to-end flow control therefore belongs to the channel that needs it,
+as only the channel knows how much its consumer can accept. The window
+belongs to the link and bounds only the packets in flight on it.
 
 **Negative Acknowledgments (NAKs) and Retries**
 
@@ -373,11 +385,23 @@ A single serial frame has the following structure:
 
   * **Escaped Checksum**: A checksum of the *original, un-escaped*
     payload, used to ensure data integrity. The specific algorithm
-    (e.g., CRC-8, CRC-16 etc) and its size are user-defined. The user
-    should choose an algorithm appropriate for their device's
-    architecture and requirements. The chosen algorithm (e.g.,
-    CRC-16/KERMIT vs. CRC-16/XMODEM) dictates the octet order
-    (endianness) used for transmission.
+    (e.g., CRC-8, CRC-16 etc) is user-defined, and so is its width:
+    the algorithm's own width is what goes on the wire, whatever the
+    width of the type a given build computes it in. The user should
+    choose an algorithm appropriate for their device's architecture
+    and requirements, and both ends of a link must choose the same one.
+
+    The checksum belongs to the transport, not to the protocol engine.
+    A link is told which one it runs through `struct ludlc_csum`: the
+    running function, its seed, the residual it must leave behind, an
+    optional final transform and its width in octets. A transport
+    validating frames in hardware carries no checksum at all.
+
+    The checksum is transmitted **least significant octet first**,
+    whatever the endianness of either peer. An algorithm that is
+    defined the other way round (CRC-16/XMODEM against CRC-16/KERMIT)
+    is expressed by swapping the value before it is handed over, which
+    is also where a final XOR belongs (HDLC's FCS-16).
 
   * **[EOF] (End of Frame)**: An optional octet identical to the SOF
     octet. It is **only** sent to explicitly terminate a packet if no

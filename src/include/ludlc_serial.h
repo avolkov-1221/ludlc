@@ -4,15 +4,8 @@
  *
  * @brief Public API definitions for the LuDLC serial transport.
  *
- * This file declares the functions related to creating, destroying,
- * and managing a LuDLC connection specifically over a serial (byte-stream)
- * transport. It includes the entry points for the TX/RX threads.
- *
+ * @copyright
  * Copyright (C) 2025-2026 Andrey VOLKOV <andrey@volkov.fr> & LuDLC Contributors
- *
- * This file is licensed under either the Apache License, Version 2.0,
- * or the GNU General Public License, version 2 or (at your option)
- * any later version.
  */
 
 #ifndef __LUDLC_SERIAL_H__
@@ -26,11 +19,11 @@
  * This function allocates resources, initializes the connection state,
  * and typically spawns the TX and RX threads for a serial transport.
  *
- * @param args Pointer to the platform-specific arguments (e.g., device name,
- * baud rate).
+ * @param args Platform arguments: the port, its line settings and the
+ * @ref ludlc_csum to run.
  * @param[out] conn A pointer to a `struct ludlc_connection*` that will be
  * updated to point to the newly created connection.
- * @param proto Pointer to protocol services (checksum and timestamp hooks).
+ * @param proto Pointer to protocol services (the timestamp hook).
  * @param cb Pointer to the user-facing event callbacks.
  * @return 0 on success, or a negative error code on failure.
  */
@@ -39,6 +32,15 @@ int ludlc_serial_connection_create(const ludlc_platform_args_t *args,
 		const struct ludlc_proto_cb *proto,
 		const struct ludlc_conn_cb *cb
 		);
+
+/**
+ * @brief Fill @p args with what this port opens a serial link with.
+ *
+ * A starting point for an application with no settings of its own: overwrite
+ * what it does not want and pass it to ludlc_serial_connection_create(). Not
+ * every port provides one.
+ */
+void ludlc_default_serial_platform_args(ludlc_platform_args_t *args);
 
 /**
  * @brief Destroys and cleans up a LuDLC serial connection.

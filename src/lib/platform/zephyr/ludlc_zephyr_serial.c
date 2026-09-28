@@ -8,9 +8,10 @@
  * Copyright (C) 2025-2026 Andrey VOLKOV <andrey@volkov.fr> & LuDLC Contributors
  *
  * @details
- * It handles UART communication, including interrupt-driven and asynchronous
- * modes, manages RX/TX threads, and integrates with Zephyr's kernel primitives
- * like events, FIFOs, and memory slabs.
+ * UART communication in interrupt-driven and asynchronous modes, the RX and TX
+ * threads, and the Zephyr primitives they use: events, FIFOs and memory slabs.
+ * The checksum the frames carry comes from the caller in
+ * `ludlc_platform_args_t`; this file provides only the default one.
  */
 
 #include <errno.h>
@@ -20,6 +21,7 @@
 #include <zephyr/kernel.h>
 #include <zephyr/device.h>
 #include <zephyr/sys/atomic.h>
+#include <zephyr/sys/crc.h>
 #include <zephyr/spinlock.h>
 #include <zephyr/net_buf.h>
 #include <zephyr/drivers/uart.h>
@@ -87,6 +89,9 @@ struct ludlc_serial_connection {
 	struct ring_buf		tx_rb;
 
 	struct ludlc_connection	conn;  /* Core LuDLC connection */
+
+	/* Checksum this link runs. Borrowed from the caller's args. */
+	const struct ludlc_csum *csum;
 };
 
 #ifdef CONFIG_LUDLC_STATIC_SERIAL_CONN
@@ -208,8 +213,7 @@ static void uart_irq_cb(const struct device *dev, void *user_data)
 		 */
 		if (!k_mem_slab_alloc(&sconn->rx_slab, (void **)&next_buf,
 				      K_NO_WAIT)) {
-			ludlc_serial_decoder_prep(&sconn->conn,
-						  &sconn->dec_state,
+			ludlc_serial_decoder_prep(&sconn->dec_state,
 						  next_buf->payload,
 						  sizeof(next_buf->payload));
 		}
@@ -287,8 +291,7 @@ static void rx_serial_thread(void *p1, void *p2, void *p3)
 		}
 
 		if (!atomic_ptr_get(&sconn->curr_rx_buf)) {
-			ludlc_serial_decoder_prep(
-				&sconn->conn, &sconn->dec_state,
+			ludlc_serial_decoder_prep(&sconn->dec_state,
 				rx_buf->payload,
 				sizeof(rx_buf->payload));
 
@@ -403,7 +406,7 @@ static void tx_serial_thread(void *p1, void *p2, void *p3)
 
 	LUDLC_LOG_DEBUG("Start the serial TX thread");
 
-	ludlc_serial_encoder_init(&enc_state);
+	ludlc_serial_encoder_init(&enc_state, sconn->csum);
 
 	while (sconn->conn.conn_state != LUDLC_STATE_TERMINATE) {
 		uint32_t evt;
@@ -442,7 +445,7 @@ static void tx_serial_thread(void *p1, void *p2, void *p3)
 				&enc_state.payload_size);
 
 			if (is_tx_empty < 0) {
-				ludlc_serial_encoder_init(&enc_state);
+				ludlc_serial_encoder_init(&enc_state, sconn->csum);
 				continue;
 			}
 
@@ -470,8 +473,7 @@ static void tx_serial_thread(void *p1, void *p2, void *p3)
 
 		/* Generate one octet from the encoder and queue it */
 		if (ring_buf_space_get(&sconn->tx_rb)) {
-			uint8_t byte = ludlc_serial_encode(&sconn->conn,
-							   &enc_state);
+			uint8_t byte = ludlc_serial_encode(&enc_state);
 			ring_buf_put(&sconn->tx_rb, &byte, 1);
 
 			if (ludlc_serial_encoder_idle(&enc_state)) {
@@ -537,9 +539,9 @@ void ludlc_serial_connection_destroy(struct ludlc_connection *conn)
  *
  * This function allocates and configures a `ludlc_serial_connection` structure,
  * initializes Zephyr kernel objects, creates RX/TX threads, and sets up the UART.
- * @param arg Platform-specific arguments, including the UART device.
+ * @param arg Platform arguments: the UART device and the checksum.
  * @param conn Output pointer to the newly created core `ludlc_connection`.
- * @param proto Pointer to protocol hooks (checksum and timestamp).
+ * @param proto Pointer to protocol hooks (the timestamp).
  * @param cb Callback structure for the LuDLC connection.
  * @return 0 on success, or a negative errno value on failure.
  */
@@ -557,6 +559,12 @@ int ludlc_serial_connection_create(const ludlc_platform_args_t *arg,
 		return -ENODEV;
 	}
 
+	/* The frames carry a checksum, so the caller must supply one. */
+	if (!arg->csum || !arg->csum->csum || !arg->csum->octets) {
+		LUDLC_LOG_ERROR("No usable checksum for the link");
+		return -EINVAL;
+	}
+
 	sconn = alloc_serial_connection();
 	if (!sconn) {
 		return -ENOMEM;
@@ -564,6 +572,7 @@ int ludlc_serial_connection_create(const ludlc_platform_args_t *arg,
 	memset(sconn, 0, sizeof(*sconn));
 
 	sconn->uart_dev = arg->dev;
+	sconn->csum = arg->csum;
 
 	k_fifo_init(&sconn->rx_fifo);
 	k_mem_slab_init(&sconn->rx_slab,
@@ -571,7 +580,7 @@ int ludlc_serial_connection_create(const ludlc_platform_args_t *arg,
 			RX_BUF_ALIGNED_SIZE,
 			NUM_RX_BUFFERS);
 
-	ludlc_serial_decoder_init(&sconn->dec_state);
+	ludlc_serial_decoder_init(&sconn->dec_state, arg->csum);
 
 	if (k_mem_slab_alloc(&sconn->rx_slab, (void **)&rx_buf, K_NO_WAIT)) {
 		ret = -ENOMEM;
@@ -608,12 +617,8 @@ int ludlc_serial_connection_create(const ludlc_platform_args_t *arg,
 		goto err;
 	}
 
-	/*
-	 * Seed decoder state only after connection init so checksum seed/verify
-	 * values are valid (conn->csum_init_value is set by init path).
-	 */
-	ludlc_serial_decoder_prep(&sconn->conn, &sconn->dec_state,
-				  rx_buf->payload, sizeof(rx_buf->payload));
+	ludlc_serial_decoder_prep(&sconn->dec_state, rx_buf->payload,
+				  sizeof(rx_buf->payload));
 
 	/* Create RX Thread */
 	sconn->rx_thread = k_thread_create(&sconn->rx_thread_data,
@@ -663,17 +668,33 @@ err:
 	return ret;
 }
 
+/*
+ * CRC-16/KERMIT, which the other LuDLC platforms send and a Linux host runs by
+ * default under this name.
+ */
+static ludlc_csum_t ludlc_crc16_ccitt_pr0_byte(ludlc_csum_t crc, uint8_t data)
+{
+	return crc16_ccitt((uint16_t)crc, &data, 1);
+}
+
+static const struct ludlc_csum ludlc_crc16_ccitt_pr0 = {
+	.name = "crc16-ccitt-pr0",
+	.csum = ludlc_crc16_ccitt_pr0_byte,
+	.octets = 2,
+};
+
 /**
  * @brief Provides default platform arguments for a serial connection.
  *
  * This function populates a `ludlc_platform_args_t` structure with default
- * values, typically pointing to `uart0`.
+ * values: `uart0` and CRC-16/KERMIT.
  * @param args Pointer to the `ludlc_platform_args_t` structure to populate.
  */
 void ludlc_default_serial_platform_args(ludlc_platform_args_t *args)
 {
 	static const ludlc_platform_args_t def_args = {
 		.dev = DEVICE_DT_GET(DT_NODELABEL(uart0)),
+		.csum = &ludlc_crc16_ccitt_pr0,
 	};
 
 	if (args) {

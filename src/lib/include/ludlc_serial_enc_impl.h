@@ -4,8 +4,9 @@
  *
  * @brief LuDLC serial (inlined) encoder/decoder implementation.
  *
- * This file provides the byte-stuffing and framing logic for sending
- * LuDLC packets over a serial byte stream.
+ * Byte stuffing and framing for LuDLC packets on a serial byte stream,
+ * checksum included. The checksum is the link's, so both state machines are
+ * given the one to run when they are initialized.
  *
  * Copyright (C) 2025-2026 Andrey VOLKOV <andrey@volkov.fr> & LuDLC Contributors
  *
@@ -50,12 +51,15 @@
  * @brief State machine structure for the serial decoder.
  */
 struct ludlc_sdec_state {
-	/**< Current size of the incoming packet. */
+	/** Checksum this link runs. Set by ludlc_serial_decoder_init(). */
+	const struct ludlc_csum	*csum_alg;
+
+	/** Current size of the incoming packet. */
 	ludlc_payload_size_t	size;
-	/**< Running checksum of the incoming packet. */
+	/** Running checksum of the incoming packet. */
 	ludlc_csum_t		csum;
 
-	/**< Current FSM state (see ludlc_serial_decode). */
+	/** Current FSM state (see ludlc_serial_decode). */
 	uint_fast8_t		state;
 
 	/** @brief Buffer to store the de-escaped incoming packet. */
@@ -69,21 +73,24 @@ struct ludlc_sdec_state {
  * @brief State machine structure for the serial encoder.
  */
 struct ludlc_senc_state {
-	/**< Pointer to the packet header to send. */
+	/** Checksum this link runs. Set by ludlc_serial_encoder_init(). */
+	const struct ludlc_csum	*csum_alg;
+
+	/** Pointer to the packet header to send. */
 	const void	*hdr;
-	/**< Pointer to the packet payload to send. */
+	/** Pointer to the packet payload to send. */
 	const void	*payload;
-	/**< Internal pointer to the current octet being sent. */
+	/** Internal pointer to the current octet being sent. */
 	const uint8_t	*ptr;
 
-	/**< Running checksum of the outgoing packet. */
+	/** Running checksum of the outgoing packet. */
 	ludlc_csum_t	csum;
 
-	/**< Total size of the header. */
+	/** Total size of the header. */
 	ludlc_payload_size_t	hdr_size;
-	/**< Total size of the payload. */
+	/** Total size of the payload. */
 	ludlc_payload_size_t	payload_size;
-	/**< Remaining octets in the current segment. */
+	/** Remaining octets in the current segment. */
 	ludlc_payload_size_t	sz;
 /**
  * @def ENC_SEND_HDR_F
@@ -95,30 +102,43 @@ struct ludlc_senc_state {
  * @brief Flag indicating an EOF (SOF) should be sent after the packet.
  */
 #define ENC_SEND_EOF_F	(1U<<1)
-	/**< Bitmask of encoder flags (ENC_...). */
+	/** Bitmask of encoder flags (ENC_...). */
 	uint8_t		flags;
 
-	/**< Current FSM state (see ludlc_serial_encode). */
+	/** Current FSM state (see ludlc_serial_encode). */
 	uint8_t	state;
-	/**< State to return to after sending an escaped octet. */
+	/** State to return to after sending an escaped octet. */
 	uint8_t	esc_state;
-	/**< The escaped octet (data ^ MASK) to be sent. */
+	/** The escaped octet (data ^ MASK) to be sent. */
 	uint8_t esc_data;
 };
 
 /**
- * @def LUDLC_MIN_PACKET_SZ
- * @brief Minimum valid packet size, which is a PING packet plus checksum.
+ * @brief Minimum valid packet size: a PING packet plus the checksum.
+ *
+ * The width comes from @p csum_alg, not from @ref ludlc_csum_t, which is only
+ * the register the checksum is computed in.
+ *
+ * @param csum_alg Checksum this link runs.
+ * @return Smallest acceptable frame size, in octets.
  */
-#define LUDLC_MIN_PACKET_SZ (sizeof(ludlc_ping_packet_t) + sizeof(ludlc_csum_t))
+static inline ludlc_payload_size_t
+ludlc_min_packet_sz(const struct ludlc_csum *csum_alg)
+{
+	return (ludlc_payload_size_t)(sizeof(ludlc_ping_packet_t) +
+				      csum_alg->octets);
+}
 
 /**
  * @brief Initializes (or resets) the serial decoder state machine.
  *
  * @param dec_state Pointer to the decoder state structure.
+ * @param csum_alg Checksum to verify with. Must outlive @p dec_state.
  */
-static inline void ludlc_serial_decoder_init(struct ludlc_sdec_state *dec_state)
+static inline void ludlc_serial_decoder_init(struct ludlc_sdec_state *dec_state,
+		const struct ludlc_csum *csum_alg)
 {
+	dec_state->csum_alg = csum_alg;
 	dec_state->state = 0;
 	dec_state->size  = 0;
 }
@@ -126,17 +146,15 @@ static inline void ludlc_serial_decoder_init(struct ludlc_sdec_state *dec_state)
 /**
  * @brief Reinitializes the serial decoder state machine after packet reception.
  *
- * @param conn Connection used for checksum seed configuration.
  * @param dec_state Pointer to the decoder state structure.
  * @param new_payload Pointer to the new packet payload buffer.
  * @param cap Capacity of @p new_payload in bytes.
  */
-static inline void ludlc_serial_decoder_prep(struct ludlc_connection *conn,
-		struct ludlc_sdec_state *dec_state,
+static inline void ludlc_serial_decoder_prep(struct ludlc_sdec_state *dec_state,
 		void *new_payload, ludlc_payload_size_t cap)
 {
 	dec_state->size = 0;
-	dec_state->csum = conn->csum_init_value;
+	dec_state->csum = dec_state->csum_alg->init;
 	dec_state->payload = new_payload;
 	dec_state->payload_cap = cap;
 }
@@ -147,7 +165,7 @@ ludlc_serial_decoder_store_byte(struct ludlc_connection *conn,
 {
 	if (dec_state->size < dec_state->payload_cap) {
 		dec_state->payload[dec_state->size++] = c;
-		dec_state->csum = conn->proto->csum_byte(dec_state->csum, c);
+		dec_state->csum = dec_state->csum_alg->csum(dec_state->csum, c);
 	} else {
 		/* Packet is too large (jabber) */
 		dec_state->size = 0;
@@ -196,13 +214,13 @@ static inline bool ludlc_serial_decode(struct ludlc_connection *conn,
 		/* This is a new packet, triggered by LUDLC_SOF. */
 		/* First, process the *previous* one. */
 		dec_state->state = dec_payload;
-		if (dec_state->size >= LUDLC_MIN_PACKET_SZ) {
+		if (dec_state->size >= ludlc_min_packet_sz(dec_state->csum_alg)) {
 			/* the CRC([data][crc]) must be a known constant,
 			 * or it's not a crc but something else
 			 */
-			if (dec_state->csum == conn->csum_verify_value) {
+			if (dec_state->csum == dec_state->csum_alg->verify) {
 				LUDLC_INC_STATS(conn, rx_packet);
-				dec_state->size -= sizeof(ludlc_csum_t);
+				dec_state->size -= dec_state->csum_alg->octets;
 				return true;
 			} else {
 				LUDLC_INC_STATS(conn, bad_csum);
@@ -212,8 +230,7 @@ static inline bool ludlc_serial_decode(struct ludlc_connection *conn,
 			LUDLC_INC_STATS(conn, dropped);
 		}
 
-		ludlc_serial_decoder_prep(conn,
-					  dec_state,
+		ludlc_serial_decoder_prep(dec_state,
 					  dec_state->payload,
 					  dec_state->payload_cap);
 		break;
@@ -245,12 +262,13 @@ static inline bool ludlc_serial_decode(struct ludlc_connection *conn,
  * next octet to send. It manages the state machine for sending SOF,
  * header, payload, checksum (with escaping), and an optional EOF.
  *
- * @param conn Pointer to the main LuDLC connection structure (for checksum).
+ * Needs no connection: the header and payload were handed over beforehand,
+ * and the checksum belongs to the link.
+ *
  * @param enc_state Pointer to the encoder state structure.
  * @return The next octet to be written to the serial interface.
  */
-static inline uint8_t ludlc_serial_encode(struct ludlc_connection *conn,
-		struct ludlc_senc_state *enc_state)
+static inline uint8_t ludlc_serial_encode(struct ludlc_senc_state *enc_state)
 {
 	/**
 	 * @enum ludlc_senc_fsm_state
@@ -272,7 +290,7 @@ static inline uint8_t ludlc_serial_encode(struct ludlc_connection *conn,
 			return LUDLC_SOF; /* Send idle SOFs if no data */
 		}
 
-		enc_state->csum = conn->csum_init_value;
+		enc_state->csum = enc_state->csum_alg->init;
 		enc_state->state = enc_payload;
 		enc_state->flags |= ENC_SEND_HDR_F;
 
@@ -284,7 +302,7 @@ static inline uint8_t ludlc_serial_encode(struct ludlc_connection *conn,
 	case enc_payload:
 		/* Sending header or payload data */
 		c = *enc_state->ptr++;
-		enc_state->csum = conn->proto->csum_byte(enc_state->csum, c);
+		enc_state->csum = enc_state->csum_alg->csum(enc_state->csum, c);
 
 		if (--enc_state->sz != 0)
 			break; /* More data in this segment */
@@ -300,17 +318,25 @@ static inline uint8_t ludlc_serial_encode(struct ludlc_connection *conn,
 		if (!enc_state->sz) {
 			/* Payload finished (or was zero), move to checksum */
 			enc_state->state = enc_csum;
-			enc_state->csum = conn->csum_to_wire ?
-				conn->csum_to_wire(enc_state->csum) :
-				LUDLC_CSUM_HTON(enc_state->csum);
-			enc_state->ptr = (const void*)&enc_state->csum;
-			enc_state->sz = sizeof(enc_state->csum);
+			if (enc_state->csum_alg->to_wire) {
+				enc_state->csum = enc_state->csum_alg
+						->to_wire(enc_state->csum);
+			}
+			enc_state->sz = enc_state->csum_alg->octets;
 		}
 		break;
 
 	case enc_csum:
-		/* Sending checksum bytes */
-		c = *enc_state->ptr++;
+		/*
+		 * Send the checksum least significant octet first, as many
+		 * octets as the algorithm is wide. Shifted out of the value
+		 * rather than read out of its storage, so that the wire looks
+		 * the same on a big-endian host and a partial width means what
+		 * it says.
+		 */
+		c = (uint8_t)(enc_state->csum >>
+			      (8U * (enc_state->csum_alg->octets -
+				     enc_state->sz)));
 		if (--enc_state->sz == 0) {
 			/* Checksum finished */
 			if (enc_state->flags & ENC_SEND_EOF_F) {
@@ -379,9 +405,12 @@ static inline void ludlc_serial_encoder_send_eof(
  * @brief Initializes (or resets) the serial encoder state machine.
  *
  * @param p_state Pointer to the encoder state structure.
+ * @param csum_alg Checksum to frame with. Must outlive @p p_state.
  */
-static inline void ludlc_serial_encoder_init(struct ludlc_senc_state *p_state)
+static inline void ludlc_serial_encoder_init(struct ludlc_senc_state *p_state,
+		const struct ludlc_csum *csum_alg)
 {
+	p_state->csum_alg = csum_alg;
 	p_state->state = 0;
 	p_state->flags = 0;
 	p_state->hdr_size = 0;

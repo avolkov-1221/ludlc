@@ -1,15 +1,17 @@
 // SPDX-License-Identifier: (Apache-2.0 OR GPL-2.0-or-later)
 /**
- * @file ludlc_echo.c
+ * @file ludlc_echo/ludlc_echo.c
  *
  * @brief Zephyr LuDLC echo counterpart sample.
  *
+ * @copyright
+ * Copyright (C) 2025-2026 Andrey VOLKOV <andrey@volkov.fr> & LuDLC Contributors
+ *
+ * @details
  * This sample mirrors the ECHO channel logic used by `ludlc_demo`:
  * - receives packets on the ECHO channel
  * - decrements payload[0] as a simple hop/TTL counter
  * - sends the packet back while payload[0] is non-zero
- *
- * Copyright (C) 2025-2026 Andrey VOLKOV <andrey@volkov.fr> & LuDLC Contributors
  */
 
 #include <zephyr/device.h>
@@ -45,8 +47,17 @@ static ludlc_csum_t ludlc_csum_byte(ludlc_csum_t crc, uint8_t data)
 	return crc16_ccitt(crc, &data, 1);
 }
 
+/*
+ * CRC-16/KERMIT: seed and residual zero, two octets on the wire, as LuDLC peers
+ * speak. Passed to the serial transport, not to the core: the checksum belongs
+ * to the link.
+ */
+static const struct ludlc_csum csum = {
+	.csum = ludlc_csum_byte,
+	.octets = 2,
+};
+
 static struct ludlc_proto_cb proto = {
-	.csum_byte = ludlc_csum_byte,
 	.get_timestamp = ludlc_default_get_timestamp,
 };
 
@@ -210,6 +221,7 @@ int main(void)
 	int ret;
 	static const ludlc_platform_args_t ser_arg = {
 		.dev = DEVICE_DT_GET(DT_NODELABEL(uart0)),
+		.csum = &csum,
 	};
 
 	LOG_INF("Starting Zephyr LuDLC echo");

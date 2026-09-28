@@ -4,14 +4,8 @@
  *
  * @brief LuDLC common base types.
  *
- * This file defines fundamental types and forward declarations used
- * throughout the LuDLC library.
- *
+ * @copyright
  * Copyright (C) 2025-2026 Andrey VOLKOV <andrey@volkov.fr> & LuDLC Contributors
- *
- * This file is licensed under either the Apache License, Version 2.0,
- * or the GNU General Public License, version 2 or (at your option)
- * any later version.
  */
 
 #ifndef __LUDLC_TYPES_H__
@@ -29,6 +23,14 @@
  */
 struct ludlc_connection;
 
+/*
+ * The checksum belongs to the transport: algorithm, seed, width and wire
+ * transform all come from the struct ludlc_csum a serial link was opened
+ * with, and two links in one system may differ. The type below is only the
+ * register they are computed in, so its width is that of the widest algorithm
+ * a build allows, not of any one link. A small target has reason to keep that
+ * register narrow, hence the build-wide setting.
+ */
 #ifndef CONFIG_LUDLC_CSUM_BITS
 #define CONFIG_LUDLC_CSUM_BITS 16
 #endif

@@ -1,23 +1,21 @@
 // SPDX-License-Identifier: (Apache-2.0 OR GPL-2.0-or-later)
 /**
- * @file ludlc_serial.c
+ * @file ludlc_posix_serial.c
  *
- * @brief LuDLC POSIX serial (UART) hardware implementation.
+ * @brief LuDLC POSIX serial (UART) transport implementation.
  *
- * This file provides the implementation for the serial transport
- * layer on a POSIX system. It handles:
- * - Opening and configuring TTY (UART) devices.
- * - Implementing the `ludlc_proto_cb` transport callbacks for read, write, etc.
- * - The CRC-16/KERMIT checksum implementation.
- * - Public API functions (`ludlc_serial_connection_create`,
- * `ludlc_serial_connection_destroy`) for managing the serial connection
- * lifecycle, including thread creation and cleanup.
- *
+ * @copyright
  * Copyright (C) 2025-2026 Andrey VOLKOV <andrey@volkov.fr> & LuDLC Contributors
  *
- * This file is licensed under either the Apache License, Version 2.0,
- * or the GNU General Public License, version 2 or (at your option)
- * any later version.
+ * @details
+ * The serial transport on a POSIX system:
+ * - opens and configures the TTY (UART) device;
+ * - runs the RX and TX threads that decode and encode the frames;
+ * - implements `ludlc_serial_connection_create()` and
+ *   `ludlc_serial_connection_destroy()`.
+ *
+ * The checksum the frames carry comes from the caller in
+ * `ludlc_platform_args_t`; this file provides only the default one.
  */
 
 #include <stdbool.h>
@@ -53,24 +51,22 @@
  * @struct ludlc_serial_connection
  * @brief POSIX serial-specific connection structure.
  *
- * This structure wraps the core `ludlc_connection` and adds
- * platform-specific data, such as thread IDs and file descriptors
- * for the UART and an internal event pipe.
+ * Wraps the core `ludlc_connection` with the thread IDs and the UART file
+ * descriptor.
  */
 struct ludlc_serial_connection {
-	/*!< Internal state flags (TX_THREAD_OK, RX_THREAD_OK). */
+	/** Internal state flags (TX_THREAD_OK, RX_THREAD_OK). */
 	unsigned int flags;
-	/*!< POSIX thread ID for the receiver. */
 	pthread_t rx_thread;
-	/*!< POSIX thread ID for the transmitter. */
 	pthread_t tx_thread;
-	/*!< File descriptor for the UART (TTY) device. */
 	int uart_fd;
 
-	/**< Platform-level TX buffer FIFO. */
 	LUDLC_DECLARE_RING_BUF(tx_fifo);
 
 	struct ludlc_connection conn;
+
+	/** Checksum this link runs. Borrowed from the caller's args. */
+	const struct ludlc_csum *csum;
 
 	/** @brief Platform-level transmit buffer. */
 	uint8_t tx_buf[TX_BUF_SIZE];
@@ -89,7 +85,7 @@ static unsigned long g_conn_busy_flags[LUDLC_NUM_CONN_WORDS];
 static struct ludlc_serial_connection g_conn[LUDLC_STATIC_CONN_NUM];
 
 /**
- * @brief Allocates a serial connection from the static pool.
+ * @brief Takes a serial connection from the static pool.
  * @return Pointer to a free connection, or NULL if the pool is full.
  */
 static inline struct ludlc_serial_connection *alloc_serial_connection(void)
@@ -373,10 +369,8 @@ static void set_blocking(int fd, int should_block)
 /**
  * @brief Reads data from the serial port.
  *
- * Implements the `rx_read` callback for `ludlc_proto_cb`.
- * This function uses `poll()` to wait for data on either the
- * UART file descriptor or the internal `event_fd` pipe. The pipe
- * is used by `ludlc_serial_connection_destroy` to unblock this
+ * Polls the UART descriptor and the RX wakeup pipe, which
+ * `ludlc_serial_connection_destroy()` writes to in order to unblock this
  * function during shutdown.
  *
  * @param sconn Pointer to the POSIX serial connection state.
@@ -396,7 +390,6 @@ ssize_t ludlc_serial_read(struct ludlc_serial_connection *sconn,
 
 	struct pollfd pfd[2];
 
-	/* Read end of the unblock pipe */
 	pfd[0].fd = sconn->conn.pconn.rx_pipe[0];
 	pfd[0].events = POLLIN;
 
@@ -415,9 +408,8 @@ ssize_t ludlc_serial_read(struct ludlc_serial_connection *sconn,
 		return -EAGAIN;
 	}
 
-	/* Any wakeup without UART payload is treated as transport error/unblock. */
+	/* Any wakeup without UART data is a transport error or an unblock. */
 	ret = -EPIPE;
-	/* Pipe data available -> external unblock */
 	if (pfd[0].revents & POLLIN) {
 		char tmp;
 		/* Drain pipe to coalesce wakeups and avoid stale events. */
@@ -425,7 +417,6 @@ ssize_t ludlc_serial_read(struct ludlc_serial_connection *sconn,
 			;
 	}
 
-	/* Check for UART data */
 	if (pfd[1].revents & POLLIN) {
 		ret = read(pfd[1].fd, buf, buf_size);
 
@@ -450,10 +441,7 @@ ssize_t ludlc_serial_read(struct ludlc_serial_connection *sconn,
  * When a complete, valid packet is decoded, `ludlc_serial_decode`
  * will internally call `ludlc_receive` to process it.
  *
- * The thread terminates when the connection state becomes
- * `LUDLC_STATE_TERMINATE`.
- *
- * @param arg A void pointer to the `struct ludlc_connection` object.
+ * @param arg A void pointer to the `struct ludlc_serial_connection`.
  * @return Always returns NULL.
  */
 static void *ludlc_rx_serial_thread(void *arg)
@@ -468,9 +456,9 @@ static void *ludlc_rx_serial_thread(void *arg)
 
 	LUDLC_LOG_DEBUG("Start serial RX thread");
 
-	ludlc_serial_decoder_init(&dec_state);
+	ludlc_serial_decoder_init(&dec_state, sconn->csum);
 
-	ludlc_serial_decoder_prep(conn, &dec_state, packet, sizeof(packet));
+	ludlc_serial_decoder_prep(&dec_state, packet, sizeof(packet));
 
 	while (conn->conn_state != LUDLC_STATE_TERMINATE) {
 		switch (state) {
@@ -480,8 +468,7 @@ static void *ludlc_rx_serial_thread(void *arg)
 				if (ret != -EAGAIN) {
 					/* Handle transport error/timeout in core. */
 					ludlc_handle_disconnect(conn);
-					ludlc_serial_decoder_prep(conn,
-							 &dec_state,
+					ludlc_serial_decoder_prep(&dec_state,
 							 packet,
 							 sizeof(packet));
 				}
@@ -521,8 +508,7 @@ static void *ludlc_rx_serial_thread(void *arg)
 						"drop the packet");
 				}
 
-				ludlc_serial_decoder_prep(conn,
-							&dec_state,
+				ludlc_serial_decoder_prep(&dec_state,
 							packet,
 							sizeof(packet));
 			}
@@ -540,13 +526,8 @@ out:
 /**
  * @brief Drains the transmit (TX) FIFO to the serial transport.
  *
- * This function is called by the TX thread after one or more bytes
- * have been added to the `tx_fifo`. It attempts to write all
- * pending bytes from the FIFO to the platform's `tx_write` callback.
- *
  * @param sconn Pointer to the POSIX serial connection state.
- * @return 0 on success (all bytes written or FIFO empty).
- * @return A negative error code if `tx_write` fails.
+ * @return Bytes written, 0 if nothing moved, or a negative errno.
  */
 static int send_tx_fifo(struct ludlc_serial_connection *sconn)
 {
@@ -604,7 +585,7 @@ static void *ludlc_tx_serial_thread(void *arg)
 
 	LUDLC_LOG_DEBUG("Start serial TX thread");
 
-	ludlc_serial_encoder_init(&enc_state);
+	ludlc_serial_encoder_init(&enc_state, sconn->csum);
 
 	/* Always poll for internal events (new packet, termination) */
 	pfd[0].fd = conn->pconn.tx_pipe[0];
@@ -615,12 +596,6 @@ static void *ludlc_tx_serial_thread(void *arg)
 	while (conn->conn_state != LUDLC_STATE_TERMINATE) {
 		int ret;
 
-		/* Wait until:
-		 * 1) We need to send a new packet (packet_done is true)
-		 * 2) We are forced to send (e.g., for an ACK/PING)
-		 * 3) The FIFO is not full
-		 * 4) We are told to terminate
-		 */
 		if (can_sleep &&
 		    !ludlc_platform_test_and_clear_bit(LUDLC_CONN_FORCE_TX_F,
 						      &conn->pconn.tx_events)) {
@@ -631,7 +606,6 @@ static void *ludlc_tx_serial_thread(void *arg)
 
 			if (ret < 0) {
 				if (errno == EINTR) {
-					/* Interrupted by signal, retry poll */
 					continue;
 				}
 
@@ -643,7 +617,6 @@ static void *ludlc_tx_serial_thread(void *arg)
 			if (pfd[0].revents & POLLIN) {
 				unsigned int tmp;
 
-				/* Drain the pipe buffer */
 				while (read(pfd[0].fd, &tmp, sizeof(tmp)) > 0)
 					;
 			}
@@ -655,7 +628,8 @@ static void *ludlc_tx_serial_thread(void *arg)
 			if (pfd[1].revents & POLLOUT) {
 				ret = send_tx_fifo(sconn);
 				if (ret < 0) {
-					ludlc_serial_encoder_init(&enc_state);
+					ludlc_serial_encoder_init(&enc_state,
+								  sconn->csum);
 					LUDLC_LOG_ERROR(
 						"Drop packet due to failed start_tx");
 					LUDLC_INC_STATS(&sconn->conn, dropped);
@@ -702,7 +676,7 @@ static void *ludlc_tx_serial_thread(void *arg)
 				&enc_state.payload_size);
 
 			if (is_tx_empty < 0) {
-				ludlc_serial_encoder_init(&enc_state);
+				ludlc_serial_encoder_init(&enc_state, sconn->csum);
 				LUDLC_LOG_ERROR(
 					"Failed to get packet to send: %d",
 					is_tx_empty);
@@ -733,8 +707,7 @@ static void *ludlc_tx_serial_thread(void *arg)
 
 		/* Generate one octet from the encoder and queue it */
 		if (!kfifo_is_full(&sconn->tx_fifo)) {
-			uint8_t byte = ludlc_serial_encode(&sconn->conn,
-					&enc_state);
+			uint8_t byte = ludlc_serial_encode(&enc_state);
 			kfifo_put(&sconn->tx_fifo, byte);
 
 			if (ludlc_serial_encoder_idle(&enc_state)) {
@@ -746,7 +719,7 @@ static void *ludlc_tx_serial_thread(void *arg)
 
 		ret = send_tx_fifo(sconn);
 		if (ret < 0) {
-			ludlc_serial_encoder_init(&enc_state);
+			ludlc_serial_encoder_init(&enc_state, sconn->csum);
 			LUDLC_LOG_ERROR("Drop packet due to failed start_tx");
 			LUDLC_INC_STATS(&sconn->conn, dropped);
 			can_sleep = true;
@@ -783,7 +756,6 @@ void ludlc_serial_connection_destroy(struct ludlc_connection *conn)
 	if (sconn->flags & TX_THREAD_OK) {
 		char msg = 'x';
 
-		/* Wake up TX thread */
 		write(conn->pconn.tx_pipe[1], &msg, 1);
 		pthread_join(sconn->tx_thread, NULL);
 	}
@@ -792,14 +764,12 @@ void ludlc_serial_connection_destroy(struct ludlc_connection *conn)
 	if (sconn->flags & RX_THREAD_OK) {
 		const char msg = 'x';
 
-		/* Wake up RX thread */
 		write(conn->pconn.rx_pipe[1], &msg, 1);
 		pthread_join(sconn->rx_thread, NULL);
 	}
 
 	sconn->flags = 0;
 
-	/* Clean up core connection state */
 	if (sconn->uart_fd >= 0) {
 		ludlc_connection_cleanup(conn);
 		close(sconn->uart_fd);
@@ -812,14 +782,13 @@ void ludlc_serial_connection_destroy(struct ludlc_connection *conn)
 /**
  * @brief Creates and initializes a new LuDLC serial connection.
  *
- * Allocates memory, opens and configures the TTY device, creates an
- * internal pipe for thread signaling, initializes the core connection,
- * and spawns the RX and TX threads.
+ * Opens and configures the TTY, initializes the core connection and starts
+ * the RX and TX threads.
  *
- * @param args Platform arguments (port name, baud rate).
+ * @param args Platform arguments: port name, baud rate and the checksum.
  * @param[out] conn On success, this pointer is updated to point to the
  * new core `ludlc_connection`.
- * @param proto Pointer to protocol hooks (checksum and timestamp).
+ * @param proto Pointer to protocol hooks (the timestamp).
  * @param cb User-facing event callbacks.
  * @return 0 on success.
  * @return -ENOMEM on allocation failure.
@@ -833,10 +802,18 @@ int ludlc_serial_connection_create(const ludlc_platform_args_t *args,
 	struct ludlc_serial_connection *sconn = NULL;
 	int ret;
 
+	if (!args || !conn)
+		return -EINVAL;
+
+	/* The frames carry a checksum, so the caller must supply one. */
+	if (!args->csum || !args->csum->csum || !args->csum->octets)
+		return -EINVAL;
+
 	sconn = alloc_serial_connection();
 	if (!sconn)
 		return -ENOMEM;
 
+	sconn->csum = args->csum;
 	sconn->uart_fd = -1;
 
 	/* Open the TTY device */
@@ -854,24 +831,20 @@ int ludlc_serial_connection_create(const ludlc_platform_args_t *args,
 		goto err;
 	}
 
-	/* Configure TTY settings */
 	ret = set_interface_attribs(sconn->uart_fd, args->baudrate, 0);
 	if (ret) {
 		goto err;
 	}
 
-	/* Start RX thread */
 	ret = pthread_create(&sconn->rx_thread, NULL,
 			ludlc_rx_serial_thread, sconn);
 	if (!ret) {
 		sconn->flags |= RX_THREAD_OK;
-		/* Start TX thread */
 		ret = pthread_create(&sconn->tx_thread, NULL,
 				ludlc_tx_serial_thread, sconn);
 		if (!ret) {
 			sconn->flags |= TX_THREAD_OK;
 			*conn = &sconn->conn;
-			/* Start LuDLC handshake through core connect API. */
 			ret = ludlc_connect(&sconn->conn);
 			if (!ret) {
 				return 0;
@@ -889,6 +862,27 @@ err:
 	return ret;
 }
 
+/*
+ * CRC-16/KERMIT, which the other LuDLC platforms send and a Linux host runs by
+ * default under this name. Computed bit by bit, a host opening few links.
+ */
+static ludlc_csum_t ludlc_crc16_ccitt_pr0_byte(ludlc_csum_t crc, uint8_t data)
+{
+	int i;
+
+	crc ^= data;
+	for (i = 0; i < 8; i++)
+		crc = (crc & 1U) ? (crc >> 1) ^ 0x8408U : crc >> 1;
+
+	return crc;
+}
+
+static const struct ludlc_csum ludlc_crc16_ccitt_pr0 = {
+	.name = "crc16-ccitt-pr0",
+	.csum = ludlc_crc16_ccitt_pr0_byte,
+	.octets = 2,
+};
+
 /**
  * @brief Fills a platform arguments structure with default serial settings.
  *
@@ -898,6 +892,7 @@ void ludlc_default_serial_platform_args(ludlc_platform_args_t *args)
 {
 	static ludlc_platform_args_t def_args = {
 		.baudrate = 115200U,
+		.csum = &ludlc_crc16_ccitt_pr0,
 	};
 
 	if(args)

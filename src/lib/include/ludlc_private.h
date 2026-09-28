@@ -1,18 +1,11 @@
-// SPDX-License-Identifier: (Apache-2.0 OR GPL-2.0-or-later)
+// SPDX-License-Identifier: (Apache-2.0 OR GPL-2.0-only)
 /**
  * @file ludlc_private.h
  *
  * @brief Internal definitions for the LuDLC protocol implementation.
  *
- * This header file contains private data structures, enumerations, and
- * macro definitions used internally by the LuDLC core logic. These are
- * not intended for use by the public API.
- *
+ * @copyright
  * Copyright (C) 2025-2026 Andrey VOLKOV <andrey@volkov.fr> & LuDLC Contributors
- *
- * This file is licensed under either the Apache License, Version 2.0,
- * or the GNU General Public License, version 2 or (at your option)
- * any later version.
  */
 
 #ifndef __LUDLC_PRIVATE_H__
@@ -32,15 +25,15 @@
  */
 enum ludlc_conn_state
 {
-	/**< Initial and final state, no connection. */
+	/** Initial and final state, no connection. */
 	LUDLC_STATE_DISCONNECTED = 0,
-	/**< Sent first handshake packet, awaiting reply. */
+	/** Sent first handshake packet, awaiting reply. */
 	LUDLC_STATE_WAIT_CONN_1  = 1,
-	/**< Received first reply, sent second, awaiting final. */
+	/** Received first reply, sent second, awaiting final. */
 	LUDLC_STATE_WAIT_CONN_2  = 2,
-	/**< Handshake complete, connection established. */
+	/** Handshake complete, connection established. */
 	LUDLC_STATE_CONNECTED    = 3,
-	/**< State to signal termination (not part of handshake). */
+	/** State to signal termination (not part of handshake). */
 	LUDLC_STATE_TERMINATE    = 0xff,
 };
 
@@ -86,11 +79,11 @@ struct ludlc_stats {
  * to fit within the `packet_queue_item` union.
  */
 struct packet_queue_item_status {
-	/**< 0 on success, or an error code (e.g., EPIPE, EREMOTEIO). */
+	/** 0 on success, or an error code (e.g., EPIPE, EREMOTEIO). */
 	ludlc_id_t result;
-	/**< Reserved for alignment, matches `ack_id`. */
+	/** Reserved for alignment, matches `ack_id`. */
 	ludlc_id_t reserved;
-	/**< The channel the packet was sent on. */
+	/** The channel the packet was sent on. */
 	ludlc_channel_t	 chan;
 };
 
@@ -99,17 +92,17 @@ struct packet_queue_item_status {
  * @brief Represents a packet in the transmit window (sliding window queue).
  */
 struct packet_queue_item {
-	/**< Pointer to the payload data buffer. */
+	/** Pointer to the payload data buffer. */
 	const void		*payload;
-	/**< Size of the payload data. */
+	/** Size of the payload data. */
 	ludlc_payload_size_t	size;
 	union {
-		/**< Header used for transmission. */
+		/** Header used for transmission. */
 		ludlc_packet_hdr_t 	hdr;
-		/**< Status used for confirmation. */
+		/** Status used for confirmation. */
 		struct packet_queue_item_status status;
 	};
-	/**< Time-To-Live (remaining retries). */
+	/** Time-To-Live (remaining retries). */
 	uint8_t			ttl;
 };
 
@@ -121,19 +114,19 @@ struct packet_queue_item {
  * required to manage one LuDLC link.
  */
 struct ludlc_connection {
-	/**< Platform transport callbacks. */
+	/** Platform transport callbacks. */
 	const struct ludlc_proto_cb	*proto;
-	/**< User event callbacks. */
+	/** User event callbacks. */
 	const struct ludlc_conn_cb	*cb;
-	/**< User context pointer for callbacks. */
+	/** User context pointer for callbacks. */
 	void				*user_ctx;
 
-	/**< Connection-wide mutex lock. */
+	/** Connection-wide mutex lock. */
 	LUDLC_DECLARE_LOCK(lock);
 
-	/**< Timer for sending keep-alive pings. */
+	/** Timer for sending keep-alive pings. */
 	ludlc_platform_timer_t	ping_timer;
-	/**< Watchdog timer for connection timeout. */
+	/** Watchdog timer for connection timeout. */
 	ludlc_platform_timer_t	wd_timer;
 
 /** @def LUDLC_CONN_SEND_NAK_F
@@ -145,35 +138,30 @@ struct ludlc_connection {
 /** @def LUDLC_CONN_DISC_AFTER_TX_F
  * @brief Request local disconnect once queued disconnect control packet drains. */
 #define LUDLC_CONN_DISC_AFTER_TX_F	2
-	/**< Atomic bitfield for connection flags. */
+	/** Atomic bitfield for connection flags. */
 	ludlc_platform_atomic_t	flags;
 
-	/**< Connection statistics. */
+	/** Connection statistics. */
 	LUDLC_DECLARE_STATS(stats);
-	/**< Connection-local checksum initial value (seed). */
-	ludlc_csum_t csum_init_value;
-	/**< Connection-local checksum residual expected on RX verify. */
-	ludlc_csum_t csum_verify_value;
-	/**< Optional connection-local host->wire checksum conversion hook. */
-	ludlc_csum_t (*csum_to_wire)(ludlc_csum_t csum);
 
-	/**< Pre-allocated header for control packets (PING, Handshake). */
+	/** Pre-allocated header for control packets (PING, Handshake). */
 	ludlc_packet_hdr_t ctrl_packet;
 	/** @brief The sliding window packet queue. */
 	struct packet_queue_item packets_q[CONFIG_LUDLC_WINDOW];
 
+	/** @brief The platform specific extension. */
 	struct ludlc_platform_connection pconn;
 
-	/**!< ID of the last packet enqueued by the user. */
+	/** ID of the last packet enqueued by the user. */
 	ludlc_id_t last_queued;
-	/**!< ID of the last packet actually sent on the wire. */
+	/** ID of the last packet actually sent on the wire. */
 	ludlc_id_t last_sent;
-	/**!< ID of the last packet acknowledged by the peer. */
+	/** ID of the last packet acknowledged by the peer. */
 	ludlc_id_t last_ack;
-	/**!< ID of the last valid, in-sequence packet received. */
+	/** ID of the last valid, in-sequence packet received. */
 	ludlc_id_t last_received;
 
-	/**!< Current connection FSM state (see @ref ludlc_conn_state). */
+	/** Current connection FSM state (see @ref ludlc_conn_state). */
 	uint8_t conn_state;
 };
 

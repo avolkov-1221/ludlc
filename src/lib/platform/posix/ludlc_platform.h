@@ -8,10 +8,9 @@
  * Copyright (C) 2025-2026 Andrey VOLKOV <andrey@volkov.fr> & LuDLC Contributors
  *
  * @details
- * This file provides the concrete implementation of the LuDLC platform
- * abstraction layer for POSIX-compliant systems.
- * It defines types and macros for locks, timers, atomics, and FIFOs
- * using pthreads, C11 atomics, and standard C libraries.
+ * The LuDLC platform abstraction layer for POSIX systems: types and macros for
+ * locks, timers, atomics and FIFOs, built on pthreads, C11 atomics and the
+ * standard C library. Checksums are not here; they belong to the transport.
  */
 
 #ifndef __LUDLC_CONFIG_H__
@@ -145,65 +144,6 @@ struct ludlc_platform_connection {
 	 */
 	 int rx_pipe[2];
 };
-
-/* Values for CRC-16/KERMIT (little-endian version of XMODEM).
- * Default algorithm for LuDLC.
- */
-/** @brief Initial value for the CRC-16/KERMIT checksum. */
-#define LUDLC_CSUM_INIT_VALUE		0
-/** @brief Expected final value for a valid CRC-16/KERMIT checksum. */
-#define LUDLC_CSUM_VERIFY_VALUE		0
-/**
- * @brief Maps host-order CRC to on-wire little-endian.
- *
- * Avoids non-portable endian.h (glibc). Uses @c __BYTE_ORDER__
- * when available, otherwise a union probe, then the same 16-bit swap as GCC
- * big-endian.
- */
-static inline ludlc_csum_t ludlc_platform_csum_to_le(ludlc_csum_t csum)
-{
-#if defined(__BYTE_ORDER__) && (__BYTE_ORDER__ == __ORDER_LITTLE_ENDIAN__)
-	 return csum;
-#elif defined(__BYTE_ORDER__) && (__BYTE_ORDER__ == __ORDER_BIG_ENDIAN__)
-	 switch (sizeof(ludlc_csum_t)) {
-	 case 1:
-		 return csum;
-	 case 2:
-		 return (ludlc_csum_t)__builtin_bswap16((uint16_t)csum);
-	 case 4:
-		 return (ludlc_csum_t)__builtin_bswap32((uint32_t)csum);
-	 case 8:
-		 return (ludlc_csum_t)__builtin_bswap64((uint64_t)csum);
-	 default:
-		 /* Unsupported CONFIG_LUDLC_CSUM_BITS width */
-		 return csum;
-	 }
- #else
-	 /* Fallback for unknown toolchains: tiny runtime probe */
-	 const uint16_t one = 1U;
-	 if (*((const uint8_t *)&one) == 1U)
-		 return csum;
-	 switch (sizeof(ludlc_csum_t)) {
-	 case 1:
-		 return csum;
-	 case 2:
-		 return (ludlc_csum_t)__builtin_bswap16((uint16_t)csum);
-	 case 4:
-		 return (ludlc_csum_t)__builtin_bswap32((uint32_t)csum);
-	 case 8:
-		 return (ludlc_csum_t)__builtin_bswap64((uint64_t)csum);
-	 default:
-		 return csum;
-	 }
-#endif
-}
-
-/**
- * @brief Converts checksum to on-wire order (little-endian for CRC-16/KERMIT).
- * @param csum The host-order checksum.
- * @return Value to place in the frame (little-endian).
- */
-#define LUDLC_CSUM_HTON(csum)		ludlc_platform_csum_to_le(csum)
 
 /**
  * @brief Declares a kfifo instance.
