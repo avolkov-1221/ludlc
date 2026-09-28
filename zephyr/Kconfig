@@ -196,6 +196,15 @@ config LUDLC_SERIAL_CONN
 	  its frames with the HDLC escaping unless the application asks for
 	  COBS instead.
 
+config LUDLC_SERIAL_SINGLE_THREAD
+	bool "Use single LuDLC serial IO thread"
+	default n
+	depends on LUDLC_SERIAL_CONN
+	help
+	  Serve both the RX and the TX path of a serial link from one
+	  thread, saving a thread and its stack. That thread gets the RX
+	  thread's stack size. If disabled, each path has its own thread.
+
 config LUDLC_STATIC_SERIAL_CONN
 	bool "Predefine LuDLC Serial connection as static array"
 	default n

@@ -36,7 +36,9 @@
 struct ludlc_platform_connection {
 #define LUDLC_CONN_FORCE_TX_F		BIT(0)
 #define LUDLC_CONN_TX_EXIT_EVT		BIT(1)
-#define LUDLC_PLATFORM_LAST_TX_EVENT	2
+/* The watchdog, for a TX thread that also serves the receive path. */
+#define LUDLC_CONN_IO_TOUT_EVT		BIT(2)
+#define LUDLC_PLATFORM_LAST_TX_EVENT	3
 
 	struct k_event		tx_events;
 

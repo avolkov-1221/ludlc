@@ -34,7 +34,12 @@
 #include <ludlc_logger.h>
 
 #define RX_THREAD_STACK_SIZE 1024
+#ifdef CONFIG_LUDLC_SERIAL_SINGLE_THREAD
+/* The one thread also runs the receive path, and needs its stack. */
+#define TX_THREAD_STACK_SIZE RX_THREAD_STACK_SIZE
+#else
 #define TX_THREAD_STACK_SIZE 512
+#endif
 
 #define RX_THREAD_PRIO 7
 #define TX_THREAD_PRIO 7
@@ -50,6 +55,13 @@
 
 #define TX_SPACE_AVAIL_EVT	BIT(LUDLC_PLATFORM_LAST_TX_EVENT)
 #define TX_EMPTY_EVT		BIT(LUDLC_PLATFORM_LAST_TX_EVENT + 1)
+/* RX_READY_EVT, posted to tx_events when no RX thread waits for it. */
+#define TX_RX_READY_EVT		BIT(LUDLC_PLATFORM_LAST_TX_EVENT + 2)
+
+/* What else wakes the TX thread when it serves the receive path too. */
+#define TX_RX_EVENTS							\
+	(IS_ENABLED(CONFIG_LUDLC_SERIAL_SINGLE_THREAD) ?		\
+	 (TX_RX_READY_EVT | LUDLC_CONN_IO_TOUT_EVT) : 0U)
 
 /** @brief How long the shutdown waits for the DISCONNECT to go out, in ms. */
 #define LUDLC_DISCONNECT_WAIT_MS	50U
@@ -68,7 +80,9 @@ struct rx_packet_item {
 	ROUND_UP(sizeof(struct rx_packet_item), sizeof(void *))
 
 struct ludlc_serial_connection {
+#ifndef CONFIG_LUDLC_SERIAL_SINGLE_THREAD
 	K_KERNEL_STACK_MEMBER(rx_thread_stack, RX_THREAD_STACK_SIZE);
+#endif
 	K_KERNEL_STACK_MEMBER(tx_thread_stack, TX_THREAD_STACK_SIZE);
 
 	uint8_t rx_slab_bufs[RX_BUF_ALIGNED_SIZE * NUM_RX_BUFFERS];
@@ -79,7 +93,9 @@ struct ludlc_serial_connection {
 
 	k_tid_t rx_thread;
 	k_tid_t tx_thread;
+#ifndef CONFIG_LUDLC_SERIAL_SINGLE_THREAD
 	struct k_thread rx_thread_data;
+#endif
 	struct k_thread tx_thread_data;
 
 	struct k_fifo		rx_fifo;
@@ -168,8 +184,8 @@ static void ludlc_serial_rx_arm(struct ludlc_serial_connection *sconn,
  * @brief Queue a completed frame and arm the next RX buffer for the decoder.
  *
  * Called from the UART IRQ, on the octet that completed @p rx_buf. Swaps the
- * slab buffer so decoding can continue while the RX thread calls
- * ludlc_receive().
+ * slab buffer so decoding can continue while ludlc_serial_rx() passes the frame
+ * to the core.
  */
 static void ludlc_serial_on_packet(struct ludlc_serial_connection *sconn,
 				   struct rx_packet_item *rx_buf, size_t size)
@@ -183,7 +199,10 @@ static void ludlc_serial_on_packet(struct ludlc_serial_connection *sconn,
 
 	atomic_ptr_set(&sconn->curr_rx_buf, next_buf);
 	k_fifo_put(&sconn->rx_fifo, rx_buf);
-	k_event_post(&sconn->conn.pconn.rx_event, RX_READY_EVT);
+	if (IS_ENABLED(CONFIG_LUDLC_SERIAL_SINGLE_THREAD))
+		k_event_post(&sconn->conn.pconn.tx_events, TX_RX_READY_EVT);
+	else
+		k_event_post(&sconn->conn.pconn.rx_event, RX_READY_EVT);
 
 	if (!next_buf) {
 		LUDLC_INC_STATS(&sconn->conn, overrun);
@@ -277,45 +296,20 @@ static void ludlc_serial_irq_cb(const struct device *dev, void *user_data)
 }
 
 /**
- * @brief RX serial thread entry point.
+ * @brief Pass the frames the UART IRQ completed to the core.
  *
- * Waits for packets on `rx_fifo`, passes them to `ludlc_receive()` and
- * re-enables UART RX once a buffer is free again.
- * @param p1 Pointer to the `ludlc_serial_connection` structure.
- * @param p2 Unused.
- * @param p3 Unused.
+ * Runs in the RX thread, or in the TX thread when there is no RX thread. Each
+ * buffer goes back to the IRQ, re-enabling UART RX, if the IRQ ran out of
+ * them, and to the slab otherwise.
+ * @param sconn Pointer to the `ludlc_serial_connection` structure.
  */
-static void ludlc_serial_rx_thread(void *p1, void *p2, void *p3)
+static void ludlc_serial_rx(struct ludlc_serial_connection *sconn)
 {
-	struct ludlc_serial_connection *sconn = p1;
+	struct rx_packet_item *rx_buf;
 
-	ARG_UNUSED(p2);
-	ARG_UNUSED(p3);
-
-	LUDLC_LOG_DEBUG("Start the serial RX thread");
-
-	while (sconn->conn.conn_state != LUDLC_STATE_TERMINATE) {
-		struct rx_packet_item *rx_buf;
+	while (sconn->conn.conn_state != LUDLC_STATE_TERMINATE &&
+	       (rx_buf = k_fifo_get(&sconn->rx_fifo, K_NO_WAIT)) != NULL) {
 		ludlc_timestamp_t ts;
-
-		rx_buf = k_fifo_get(&sconn->rx_fifo, K_NO_WAIT);
-		if (!rx_buf) {
-			uint32_t evt = k_event_wait_safe(
-						&sconn->conn.pconn.rx_event,
-						RX_READY_EVT | RX_EXIT_EVT |
-						LUDLC_CONN_RX_TOUT_EVT,
-						false, K_FOREVER);
-
-			if (evt & RX_EXIT_EVT) {
-				break;
-			}
-
-			if (evt & LUDLC_CONN_RX_TOUT_EVT) {
-				ludlc_handle_disconnect(&sconn->conn);
-			}
-
-			continue;
-		}
 
 		if (sconn->conn.cfg.get_timestamp(&ts) == 0) {
 			const ludlc_ping_packet_t *pid =
@@ -343,9 +337,49 @@ static void ludlc_serial_rx_thread(void *p1, void *p2, void *p3)
 			k_mem_slab_free(&sconn->rx_slab, rx_buf);
 		}
 	}
+}
+
+#ifndef CONFIG_LUDLC_SERIAL_SINGLE_THREAD
+/**
+ * @brief RX serial thread entry point.
+ *
+ * Passes the frames queued on `rx_fifo` to the core, and takes the link down
+ * when the watchdog fires.
+ * @param p1 Pointer to the `ludlc_serial_connection` structure.
+ * @param p2 Unused.
+ * @param p3 Unused.
+ */
+static void ludlc_serial_rx_thread(void *p1, void *p2, void *p3)
+{
+	struct ludlc_serial_connection *sconn = p1;
+
+	ARG_UNUSED(p2);
+	ARG_UNUSED(p3);
+
+	LUDLC_LOG_DEBUG("Start the serial RX thread");
+
+	while (sconn->conn.conn_state != LUDLC_STATE_TERMINATE) {
+		uint32_t evt;
+
+		ludlc_serial_rx(sconn);
+
+		evt = k_event_wait_safe(&sconn->conn.pconn.rx_event,
+					RX_READY_EVT | RX_EXIT_EVT |
+					LUDLC_CONN_RX_TOUT_EVT,
+					false, K_FOREVER);
+
+		if (evt & RX_EXIT_EVT) {
+			break;
+		}
+
+		if (evt & LUDLC_CONN_RX_TOUT_EVT) {
+			ludlc_handle_disconnect(&sconn->conn);
+		}
+	}
 
 	LUDLC_LOG_DEBUG("Exit from the serial RX thread");
 }
+#endif /* !CONFIG_LUDLC_SERIAL_SINGLE_THREAD */
 
 /**
  * @brief Initiates serial transmission.
@@ -455,6 +489,8 @@ static void ludlc_serial_enc_load(struct ludlc_serial_connection *sconn)
  * @brief TX serial thread entry point.
  *
  * Pumps the framing encoder into the TX ring and starts the UART transmitter.
+ * With CONFIG_LUDLC_SERIAL_SINGLE_THREAD it also serves the receive path in
+ * place of the RX thread.
  */
 static void ludlc_serial_tx_thread(void *p1, void *p2, void *p3)
 {
@@ -482,16 +518,28 @@ static void ludlc_serial_tx_thread(void *p1, void *p2, void *p3)
 			wait_mask = LUDLC_CONN_TX_EXIT_EVT | TX_SPACE_AVAIL_EVT;
 		}
 
-		if (wait_mask != 0U) {
+		/* Mid-frame with room in the ring there is nothing to wait
+		 * for, but the receive path, if served here, still gets its
+		 * turn.
+		 */
+		if (wait_mask != 0U || TX_RX_EVENTS != 0U) {
 			evt = k_event_wait_safe(&sconn->conn.pconn.tx_events,
-					wait_mask, false, K_FOREVER);
+					wait_mask | TX_RX_EVENTS, false,
+					wait_mask != 0U ? K_FOREVER : K_NO_WAIT);
 
 			if (evt & LUDLC_CONN_TX_EXIT_EVT) {
 				break;
 			}
 
-			if ((wait_mask & TX_SPACE_AVAIL_EVT) &&
-				(evt & TX_SPACE_AVAIL_EVT) == 0U) {
+			if (evt & LUDLC_CONN_IO_TOUT_EVT) {
+				ludlc_handle_disconnect(&sconn->conn);
+			}
+
+			if (evt & TX_RX_READY_EVT) {
+				ludlc_serial_rx(sconn);
+			}
+
+			if (wait_mask != 0U && (evt & wait_mask) == 0U) {
 				continue;
 			}
 		}
@@ -578,7 +626,7 @@ void ludlc_serial_connection_destroy(struct ludlc_connection *conn)
  * @brief Creates and initializes a new LuDLC serial connection.
  *
  * Allocates the connection, sets up the UART and starts the RX and TX
- * threads.
+ * threads, or the one thread with CONFIG_LUDLC_SERIAL_SINGLE_THREAD.
  * @param arg Platform arguments: the UART device, the checksum and the cfg to
  * open the link with.
  * @param conn Output pointer to the newly created core `ludlc_connection`.
@@ -684,6 +732,7 @@ int ludlc_serial_connection_create(const ludlc_platform_args_t *arg,
 	 */
 	ludlc_serial_rx_arm(sconn, rx_buf->payload);
 
+#ifndef CONFIG_LUDLC_SERIAL_SINGLE_THREAD
 	sconn->rx_thread = k_thread_create(&sconn->rx_thread_data,
 			sconn->rx_thread_stack,
 			sizeof(sconn->rx_thread_stack),
@@ -696,6 +745,7 @@ int ludlc_serial_connection_create(const ludlc_platform_args_t *arg,
 	}
 
 	k_thread_name_set(sconn->rx_thread, "LuDLC RX thread");
+#endif
 
 	sconn->tx_thread = k_thread_create(&sconn->tx_thread_data,
 			sconn->tx_thread_stack,
@@ -708,7 +758,11 @@ int ludlc_serial_connection_create(const ludlc_platform_args_t *arg,
 		goto err;
 	}
 
-	k_thread_name_set(sconn->tx_thread, "LuDLC TX thread");
+	if (IS_ENABLED(CONFIG_LUDLC_SERIAL_SINGLE_THREAD)) {
+		k_thread_name_set(sconn->tx_thread, "LuDLC IO thread");
+	} else {
+		k_thread_name_set(sconn->tx_thread, "LuDLC TX thread");
+	}
 
 	if (IS_ENABLED(CONFIG_UART_ASYNC_API) &&
 			ludlc_platform_test_bit(USE_ASYNC_API, &sconn->flags)) {
