@@ -49,12 +49,12 @@ static void posix_timer_handler(union sigval sv)
 	atomic_exchange(&timer->handler_running, true);
 
 	/*
-	 * Atomically check and clear the 'pending' flag.
-	 * If the flag was 'true' (meaning the timer expired *before*
-	 * a stop was called), we execute the callback.
-	 * If 'false' (stop was called first), we do nothing.
+	 * A stop clears the flag, so finding it clear means the callback must
+	 * not run. A periodic timer keeps it set, as it stays armed for its
+	 * next expiry.
 	 */
-	if (atomic_exchange(&timer->pending, false) && timer->function)
+	if (atomic_exchange(&timer->pending, atomic_load(&timer->periodic)) &&
+	    timer->function)
 		timer->function(timer->conn);
 
 	atomic_exchange(&timer->handler_running, false);
@@ -86,6 +86,7 @@ int ludlc_platform_init_timer(struct ludlc_connection *conn,
 	timer->function = cb;
 	timer->conn = conn;
 	timer->pending = false;
+	timer->periodic = false;
 	timer->handler_running = false;
 
 	sev.sigev_notify = SIGEV_THREAD;
@@ -151,7 +152,8 @@ int ludlc_platform_start_timer(ludlc_platform_timer_t *timer,
 	its.it_interval.tv_sec = period / 1000000ULL;
 	its.it_interval.tv_nsec = (period % 1000000ULL) * 1000ULL;
 
-	/* Set pending flag *before* arming the timer to avoid a race. */
+	/* Set both flags *before* arming the timer to avoid a race. */
+	atomic_store(&timer->periodic, period != 0);
 	timer->pending = true;
 
 	/* flags = 0: the timeout is relative. */

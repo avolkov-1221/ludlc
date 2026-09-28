@@ -1,19 +1,17 @@
 // SPDX-License-Identifier: (Apache-2.0 OR GPL-2.0-or-later)
 /**
- * @file ludlc_config.h
+ * @file posix/ludlc_platform.h
  *
- * @brief LuDLC POSIX platform related definitions
+ * @brief LuDLC POSIX platform related definitions.
  *
+ * @copyright
+ * Copyright (C) 2025-2026 Andrey VOLKOV <andrey@volkov.fr> & LuDLC Contributors
+ *
+ * @details
  * This file provides the concrete implementation of the LuDLC platform
  * abstraction layer for POSIX-compliant systems.
  * It defines types and macros for locks, timers, atomics, and FIFOs
  * using pthreads, C11 atomics, and standard C libraries.
- *
- * Copyright (C) 2025-2026 Andrey VOLKOV <andrey@volkov.fr> & LuDLC Contributors
- *
- * This file is licensed under either the Apache License, Version 2.0,
- * or the GNU General Public License, version 2 or (at your option)
- * any later version.
  */
 
 #ifndef __LUDLC_CONFIG_H__
@@ -38,7 +36,7 @@
 #define LUDLC_MIN(a, b) ((a) < (b) ? (a) : (b))
 #endif
 
-/* The KFIFO is needed for the LUDLC_ROUND_UP and LUDLC_MIN implementations */
+/* kfifo.h uses LUDLC_ROUND_UP and LUDLC_MIN, so it is included after them. */
 #include "kfifo.h"
 
 /**
@@ -140,11 +138,11 @@ struct ludlc_platform_connection {
 
 	int tx_pipe[2];
 
-/**
- * @brief Pipe FDs used to unblock the RX thread.
- * `event_fd[0]` is the read end (polled by RX).
- * `event_fd[1]` is the write end (written to by destroy/wd).
- */
+	/**
+	 * @brief Pipe FDs used to unblock the RX thread.
+	 * `rx_pipe[0]` is the read end (polled by RX), `rx_pipe[1]` the write
+	 * end (written by destroy and by the watchdog).
+	 */
 	 int rx_pipe[2];
 };
 
@@ -222,7 +220,7 @@ static inline ludlc_csum_t ludlc_platform_csum_to_le(ludlc_csum_t csum)
 #define LUDLC_RING_BUF_INIT(fifo, buf, sz) kfifo_init(fifo, buf, sz)
 
 /**
- * @brief (Inline) Allocates memory using standard `calloc`.
+ * @brief Allocates memory using standard `calloc`.
  * @param sz Size to allocate.
  * @return Pointer to allocated and zeroed memory, or NULL on failure.
  */
@@ -232,7 +230,7 @@ static inline void *ludlc_platform_alloc(size_t sz)
 }
 
 /**
- * @brief (Inline) Frees memory using standard `free`.
+ * @brief Frees memory using standard `free`.
  * @param ptr Pointer to the memory to free.
  */
 static inline void ludlc_platform_free(void *ptr)
@@ -254,21 +252,21 @@ typedef void (*ludlc_timer_cb_t)(ludlc_platform_timer_arg_t arg);
 /**
  * @brief The LuDLC POSIX platform timer structure.
  *
- * This structure wraps a POSIX timer (`timer_t`) and manages its
- * state, including the user callback and synchronization flags.
+ * Wraps a POSIX timer (`timer_t`) with the callback and the flags that track
+ * its state.
  */
 typedef struct {
-	/**< The underlying POSIX timer ID. */
 	timer_t posix_timer_id;
 
-	/**< LuDLC's callback function to call. */
 	ludlc_timer_cb_t function;
-	/**< User data (connection) for the callback. */
+	/** User data (connection) for the callback. */
 	struct ludlc_connection *conn;
 
-	/**< True if the timer is armed (running). */
+	/** True if the timer is armed (running). */
 	atomic_bool pending;
-	/**< True if the timer handler is currently executing. */
+	/** True if the timer was given a period, so it re-arms itself. */
+	atomic_bool periodic;
+	/** True if the timer handler is currently executing. */
 	atomic_bool handler_running;
 
 } ludlc_platform_timer_t;
@@ -280,7 +278,7 @@ static inline struct ludlc_connection *ludlc_timer_arg_to_conn(
 }
 
 /**
- * @brief (Inline) Atomically tests a bit in an atomic variable.
+ * @brief Atomically tests a bit.
  * @param nr The bit number (0-based) to test.
  * @param addr Pointer to the atomic variable.
  * @return true if the bit was set, false otherwise.
@@ -292,7 +290,7 @@ static inline bool ludlc_platform_test_bit(long nr,
 }
 
 /**
- * @brief (Inline) Atomically sets a bit in an atomic variable.
+ * @brief Atomically sets a bit.
  * @param nr The bit number (0-based) to set.
  * @param addr Pointer to the atomic variable.
  */
@@ -303,7 +301,7 @@ static inline void ludlc_platform_set_bit(long nr,
 }
 
 /**
- * @brief (Inline) Atomically clears a bit in an atomic variable.
+ * @brief Atomically clears a bit.
  * @param nr The bit number (0-based) to clear.
  * @param addr Pointer to the atomic variable.
  */
@@ -314,7 +312,7 @@ static inline void ludlc_platform_clear_bit(long nr,
 }
 
 /**
- * @brief (Inline) Atomically tests and clears a bit.
+ * @brief Atomically tests and clears a bit.
  * @param nr The bit number (0-based) to test and clear.
  * @param addr Pointer to the atomic variable.
  * @return true if the bit was set before being cleared, false otherwise.
@@ -327,7 +325,7 @@ static inline bool ludlc_platform_test_and_clear_bit(long nr,
 }
 
 /**
- * @brief (Inline) Atomically tests and sets a bit.
+ * @brief Atomically tests and sets a bit.
  * @param nr The bit number (0-based) to test and set.
  * @param addr Pointer to the atomic variable.
  * @return true if the bit was set before the operation, false otherwise.
