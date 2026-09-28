@@ -59,8 +59,57 @@ cmake -B build -DLUDLC_PLATFORM_DIR=/path/to/my_port
 `TARGET_PLATFORM_<NAME>` is set in upper case so that a port can test for
 itself. Pass `-DTARGET_PLATFORM=` as well to use a different name.
 
+## A make port
+
+Name the framings and the port's sources, then include `ludlc-port.mk`:
+
+```make
+LUDLC_DIR := ../../ludlc
+LUDLC_PORT_DIR := $(CURDIR)/ludlc_port
+
+CONFIG_LUDLC_FRAMING_HDLC := 1
+CONFIG_LUDLC_FRAMING_COBS := 0
+CONFIG_LUDLC_FRAMING_RAW  := 0
+
+LUDLC_PORT_SRCS := \
+	$(LUDLC_PORT_DIR)/my_platform.c \
+	$(LUDLC_PORT_DIR)/my_serial.c
+
+include $(LUDLC_DIR)/src/lib/ludlc-port.mk
+
+SRCS += $(LUDLC_SRCS)
+CFLAGS += $(LUDLC_INCLUDES)
+```
+
+`LUDLC_SRCS` is the core plus the port, and `LUDLC_INCLUDES` the three include
+paths, the port's own first.
+
+A port kept in another project compiles the core where the checkout is. Build
+the port's sources as the project builds its own, and give the core sources an
+object rule of their own, so that a generic one does not write objects into
+the checkout:
+
+```make
+SRCS += $(LUDLC_PORT_SRCS)
+LUDLC_OBJS := $(patsubst $(LUDLC_DIR)/%.c,$(O)/ludlc/%.o,$(LUDLC_CORE_SRCS))
+
+$(O)/ludlc/%.o: $(LUDLC_DIR)/%.c
+	mkdir -p $(dir $@)
+	$(CC) -c $(CFLAGS) -o $@ $<
+```
+
+Set the framings before the include. A codec has no `#ifdef` on its own
+config, so a framing is left out of the image by the include dropping its file
+from `LUDLC_SRCS`. Pass the same values to the compiler as
+`-DCONFIG_LUDLC_FRAMING_*`, which is what the headers read. At least one
+framing must be on.
+
+Take the core sources from `ludlc-port.mk` rather than list them. That keeps
+the port building when the core gains or loses a file.
+
 ## Configuration
 
 A port configures the build with `-DCONFIG_LUDLC_*`. The defaults, and the
-type widths they select, are in `ludlc_proto.h`. Both ends of a link must
-agree on the payload ceiling and the window, so those cannot be chosen freely.
+type widths they select, are in `ludlc_proto.h` and `ludlc_framing.h`. Both
+ends of a link must agree on the payload ceiling, the window and the framing,
+so those cannot be chosen freely.
