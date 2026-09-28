@@ -137,6 +137,38 @@ int ludlc_enqueue_data(struct ludlc_connection *conn,
 		const void *buf, ludlc_payload_size_t size, uint8_t ttl);
 
 /**
+ * @brief Sends an unnumbered (U) packet, ahead of everything else.
+ *
+ * For events that cannot wait behind ordinary traffic, such as a power
+ * failure. The packet carries no sequence number and takes no place in the
+ * window, so it goes out in the next frame whatever the window is doing:
+ * during a re-transmission after a NAK, or while the window is full and
+ * @ref ludlc_enqueue_data is returning -EAGAIN.
+ *
+ * Skipping the window also loses its guarantees: the packet is not
+ * acknowledged and never re-transmitted, so `on_confirm` reports it once it
+ * has been sent, not once the peer has received it. Use
+ * @ref ludlc_enqueue_data for data that must arrive.
+ *
+ * @param conn The connection to send data on.
+ * @param dst_chan The destination channel for the packet.
+ * @param buf Pointer to the payload data buffer. As for
+ * @ref ludlc_enqueue_data, the buffer is referenced rather than copied and
+ * must stay valid until the packet is confirmed.
+ * @param size The size of the payload, up to
+ * @ref CONFIG_LUDLC_MAX_PAYLOAD_SIZE.
+ * @return 0 on success.
+ * @return -EINVAL if @p buf is NULL, or if @p size is 0 or too large.
+ * @return -ENOTCONN if the connection is not established. Such a packet is
+ * sent immediately or not at all, so it does not wait for a link.
+ * @return -EAGAIN if the previous unnumbered packet has not been sent yet.
+ * Only one is held at a time.
+ */
+int ludlc_send_urgent_data(struct ludlc_connection *conn,
+		ludlc_channel_t dst_chan,
+		const void *buf, ludlc_payload_size_t size);
+
+/**
  * @brief Sends a graceful disconnect control request to the peer.
  *
  * This helper sends an empty header as disconnect notification

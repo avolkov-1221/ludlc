@@ -113,8 +113,9 @@ static inline void ludlc_call_on_disconnect(struct ludlc_connection *conn)
 }
 
 #ifdef CONFIG_LUDLC_MT
+/* One slot per window packet, plus one for the unnumbered packet. */
 #define LUDLC_DECLARE_CONFIRMED_QUEUE(q_name) \
-	struct packet_queue_item q_name[CONFIG_LUDLC_WINDOW]
+	struct packet_queue_item q_name[CONFIG_LUDLC_WINDOW + 1]
 /**
  * @brief (MT) Adds a confirmed packet to a temporary queue for later processing.
  *
@@ -210,9 +211,9 @@ static inline void ludlc_confirm_unlocked(struct ludlc_connection *conn,
 /**
  * @brief Internal handler for disconnect case.
  *
- * Stops all timers, sets the state to DISCONNECTED, and fails all
- * outstanding packets in the transmit queue by calling
- * @ref ludlc_on_confirm_lock with an EPIPE error.
+ * Stops all timers, sets the state to DISCONNECTED, and fails every
+ * outstanding packet with EPIPE. That covers the transmit queue and the
+ * unnumbered packet, if one is still waiting to be sent.
  *
  * @note This function must be called with the connection lock held.
  *
@@ -233,8 +234,20 @@ static void on_disconnect_lock(struct ludlc_connection *conn,
 
 	conn->conn_state = LUDLC_STATE_DISCONNECTED;
 
-	/* Keep the lifecycle bit and clear the runtime protocol flags, which
-	 * means setting the active-low ones rather than clearing them.
+	/* The unnumbered packet is not part of the window, so it is not among
+	 * those failed below, but its buffer must be returned all the same.
+	 */
+	if (!ludlc_platform_test_bit(LUDLC_CONN_U_IDLE_F, &conn->flags) ||
+			!ludlc_platform_test_bit(LUDLC_CONN_U_DONE_F,
+				&conn->flags)) {
+		conn->u_packet.status.result = EPIPE;
+		ludlc_on_confirm_lock(conn, &conn->u_packet, cq, confirmed_num);
+	}
+
+	/* Keep the lifecycle bit and clear the runtime protocol flags. That
+	 * frees the unnumbered packet slot confirmed above, which means setting
+	 * the active-low flags rather than clearing them. The idle ones go
+	 * first, so a reader between the two sees the slot free.
 	 */
 	ludlc_platform_set_mask(LUDLC_CONN_IDLE_MASK, &conn->flags);
 	ludlc_platform_clear_mask(LUDLC_CONN_SWEEP_CLEAR_MASK, &conn->flags);
@@ -323,6 +336,67 @@ int ludlc_enqueue_data(struct ludlc_connection *conn,
 		ret = 0;
 	} else {
 		ret = -EAGAIN;
+	}
+	LUDLC_UNLOCK(&conn->lock);
+
+	if (!ret)
+		ludlc_platform_request_tx(conn); /* Signal TX task */
+
+	return ret;
+}
+
+/**
+ * @brief Sends an unnumbered (U) packet, ahead of everything else.
+ *
+ * The packet takes no sequence number and no place in the window, so it goes
+ * out in the next frame regardless of the window state: during a
+ * re-transmission after a NAK, or while the window is full.
+ *
+ * It is not acknowledged and never re-transmitted, so the confirmation
+ * means the packet was sent, not that the peer received it. The buffer
+ * belongs to the caller until then, as for @ref ludlc_enqueue_data. Only
+ * one packet is held at a time.
+ *
+ * @param conn Pointer to the connection structure.
+ * @param dst_chan The destination channel for the packet.
+ * @param buf Pointer to the payload data buffer, which must stay valid
+ * until the packet is confirmed.
+ * @param size The size of the payload data in bytes.
+ * @return 0 on success.
+ * @return -EINVAL if @p buf is NULL, or @p size is 0 or above
+ * @ref CONFIG_LUDLC_MAX_PAYLOAD_SIZE.
+ * @return -ENOTCONN if the connection is not established. An unnumbered
+ * packet is sent immediately or not at all, so it does not wait for the link
+ * to come up.
+ * @return -EAGAIN if the previous unnumbered packet has not been sent yet.
+ */
+int ludlc_send_urgent_data(struct ludlc_connection *conn,
+		ludlc_channel_t dst_chan,
+		const void *buf, ludlc_payload_size_t size)
+{
+	int ret;
+
+	if (!conn || !buf || !size ||
+	    size > CONFIG_LUDLC_MAX_PAYLOAD_SIZE) {
+		return -EINVAL;
+	}
+
+	LUDLC_LOCK(&conn->lock);
+	if (conn->conn_state != LUDLC_STATE_CONNECTED) {
+		ret = -ENOTCONN;
+	} else if (!ludlc_platform_test_bit(LUDLC_CONN_U_IDLE_F,
+				&conn->flags) ||
+			!ludlc_platform_test_bit(LUDLC_CONN_U_DONE_F,
+				&conn->flags)) {
+		ret = -EAGAIN;
+	} else {
+		conn->u_packet.hdr.chan = dst_chan;
+		conn->u_packet.payload = buf;
+		conn->u_packet.size = size;
+
+		ludlc_platform_clear_bit(LUDLC_CONN_U_IDLE_F, &conn->flags);
+
+		ret = 0;
 	}
 	LUDLC_UNLOCK(&conn->lock);
 
@@ -641,6 +715,14 @@ static int rx_handle_packet(
 		ret |= HANDLE_RX_REQUEST_TX_F | HANDLE_RX_ACCEPT_F;
 	}
 
+	if (ludlc_is_unnumbered_data(packet->hdr.id.tx_id, pkt_sz)) {
+		/* Outside the sequence, so accept the payload regardless of
+		 * the ID check above and leave last_received unchanged.
+		 * There is nothing to ACK.
+		 */
+		ret |= HANDLE_RX_ACCEPT_F;
+	}
+
 	/* 2. now process ack_id for our side */
 	/* Get the number of packets are waiting for acknowledge */
 	num_wait = (conn->last_sent - conn->last_ack) & LUDLC_ID_MASK;
@@ -782,6 +864,8 @@ int ludlc_get_packet_to_send(struct ludlc_connection *conn,
 		const void **payload,
 		ludlc_payload_size_t *pay_sz)
 {
+	struct packet_queue_item u_sent;
+	bool u_done = false;
 	uint8_t ack, id, q_idx;
 	int ret = 1; /* Assume this is the last packet by default */
 
@@ -789,6 +873,18 @@ int ludlc_get_packet_to_send(struct ludlc_connection *conn,
 		return -EINVAL;
 
 	LUDLC_LOCK(&conn->lock);
+
+	/* The previous frame has been sent by now, so the transport has
+	 * finished with the unnumbered packet and its buffer can be returned
+	 * to the caller. Copy the item first: the slot is free from here on,
+	 * and the confirmation is made below, outside the lock.
+	 */
+	if (!ludlc_platform_test_and_set_bit(LUDLC_CONN_U_DONE_F,
+			&conn->flags)) {
+		conn->u_packet.status.result = 0;
+		u_sent = conn->u_packet;
+		u_done = true;
+	}
 
 	switch (conn->conn_state) {
 	default:/* LUDLC_STATE_DISCONNECTED, LUDLC_STATE_WAIT_CONN_1, etc. */
@@ -820,6 +916,34 @@ int ludlc_get_packet_to_send(struct ludlc_connection *conn,
 
 		/* Next data packet sequence */
 		id = (conn->last_sent + 1) & LUDLC_ID_MASK;
+
+		if (!ludlc_platform_test_and_set_bit(LUDLC_CONN_U_IDLE_F,
+				&conn->flags)) {
+			/* An unnumbered packet is sent before anything else,
+			 * including a re-transmission, as it uses none of
+			 * the window's IDs. Like a PING, it carries the ID
+			 * to be sent next, so the peer can still detect a
+			 * gap.
+			 */
+			ludlc_platform_clear_bit(LUDLC_CONN_U_DONE_F,
+					&conn->flags);
+
+			conn->u_packet.hdr.id.tx_id = id | LUDLC_PING_FLAG;
+			conn->u_packet.hdr.id.ack_id = ack;
+
+			*hdr = &conn->u_packet.hdr;
+			*hdr_sz = sizeof(conn->u_packet.hdr);
+
+			*payload = conn->u_packet.payload;
+			*pay_sz = conn->u_packet.size;
+
+			if (conn->last_sent != conn->last_queued) {
+				/* The window still has packets waiting */
+				ret = 0;
+			}
+
+			break;
+		}
 
 		if (conn->last_sent == conn->last_queued) {
 			/* Nothing to send, so send PING instead. */
@@ -858,6 +982,9 @@ int ludlc_get_packet_to_send(struct ludlc_connection *conn,
 	}
 
 	LUDLC_UNLOCK(&conn->lock);
+
+	if (u_done)
+		ludlc_call_on_confirm(conn, &u_sent);
 
 	return ret;
 }

@@ -130,10 +130,7 @@ struct ludlc_connection {
 /** @def LUDLC_CONN_NO_NAK_F
  * @brief Clear when the peer is to be told a packet went missing.
  *
- * Active low, so that taking it is one @ref ludlc_platform_test_and_set_bit.
- * Not every target has an instruction that tests and clears in one go, and a
- * test plus a clear is two operations. Starts set; see
- * @ref LUDLC_CONN_IDLE_MASK. */
+ * Active low, as @ref LUDLC_CONN_U_IDLE_F explains. */
 #define LUDLC_CONN_NO_NAK_F		0
 /** @def LUDLC_CONN_INITED_F
  * @brief Atomic flag bit indicating the connection is inited. */
@@ -141,6 +138,21 @@ struct ludlc_connection {
 /** @def LUDLC_CONN_DISC_AFTER_TX_F
  * @brief Request local disconnect once queued disconnect control packet drains. */
 #define LUDLC_CONN_DISC_AFTER_TX_F	2
+/** @def LUDLC_CONN_U_IDLE_F
+ * @brief Clear while an unnumbered packet waits to be sent.
+ *
+ * Active low, so that taking it is one @ref ludlc_platform_test_and_set_bit.
+ * Not every target has an instruction that tests and clears in one go, and a
+ * test plus a clear is two operations. Starts set; see
+ * @ref LUDLC_CONN_IDLE_MASK. */
+#define LUDLC_CONN_U_IDLE_F		3
+/** @def LUDLC_CONN_U_DONE_F
+ * @brief Clear while the transport is still reading the unnumbered packet.
+ *
+ * The transport reads the caller's buffer after the lock is released, so
+ * the slot stays in use until the next frame is requested. The previous
+ * frame has been sent by then, and the buffer can be returned. */
+#define LUDLC_CONN_U_DONE_F		4
 
 	/** @brief The flags above, read and written under @c lock.
 	 *
@@ -166,6 +178,12 @@ struct ludlc_connection {
 	ludlc_packet_hdr_t ctrl_packet;
 	/** @brief The sliding window packet queue. */
 	struct packet_queue_item packets_q[CONFIG_LUDLC_WINDOW];
+
+	/** @brief The pending unnumbered packet, see the flags above.
+	 *
+	 * A single item rather than a queue, because it uses no window slot.
+	 * Its payload is the caller's buffer, as for a queued packet. */
+	struct packet_queue_item	u_packet;
 
 	/** @brief The platform specific extension. */
 	struct ludlc_platform_connection pconn;
@@ -252,7 +270,9 @@ void ludlc_handle_disconnect(struct ludlc_connection *conn);
  * Zeroed memory reads as all of them pending, so init and the disconnect
  * sweep set them. */
 #define LUDLC_CONN_IDLE_MASK						\
-	((ludlc_platform_atomic_t)(1U << LUDLC_CONN_NO_NAK_F))
+	((ludlc_platform_atomic_t)((1U << LUDLC_CONN_NO_NAK_F) |	\
+				   (1U << LUDLC_CONN_U_IDLE_F) |	\
+				   (1U << LUDLC_CONN_U_DONE_F)))
 
 /** @brief Flags the disconnect sweep keeps when it clears the runtime ones. */
 #define LUDLC_CONN_SWEEP_KEEP_MASK	(1U << LUDLC_CONN_INITED_F)
