@@ -279,6 +279,8 @@ static void on_disconnect_lock(struct ludlc_connection *conn,
  * @param ttl Transmission retry budget. A value of 0 is normalized to 1
  * (single send attempt). Values above @ref LUDLC_MAX_TTL are clamped.
  * @return 0 on success.
+ * @return -EINVAL if @p buf is NULL and @p size is not, or if @p size is
+ * above @ref CONFIG_LUDLC_MAX_PAYLOAD_SIZE.
  * @return -EAGAIN if the transmit queue is full.
  */
 int ludlc_enqueue_data(struct ludlc_connection *conn,
@@ -288,6 +290,13 @@ int ludlc_enqueue_data(struct ludlc_connection *conn,
 	int ret;
 
 	if (!buf && size) {
+		return -EINVAL;
+	}
+
+	/* A larger payload would be sent and then dropped by the receiver,
+	 * where it would look like a packet that never arrived.
+	 */
+	if (size > CONFIG_LUDLC_MAX_PAYLOAD_SIZE) {
 		return -EINVAL;
 	}
 

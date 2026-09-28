@@ -97,6 +97,16 @@ enum __build_assert_enum_ludlc_id_t__ {
 #endif
 
 /**
+ * @def CONFIG_LUDLC_MAX_PAYLOAD_SIZE
+ * @brief Defines the maximum packet's payload size in bytes.
+ *
+ * Defaults to 32 bytes.
+ */
+#ifndef CONFIG_LUDLC_MAX_PAYLOAD_SIZE
+#define CONFIG_LUDLC_MAX_PAYLOAD_SIZE	32U
+#endif
+
+/**
  * @def CONFIG_LUDLC_PAYLOAD_BITS
  * @brief Defines the bit-width used to store payload sizes.
  *
@@ -105,6 +115,7 @@ enum __build_assert_enum_ludlc_id_t__ {
 #ifndef CONFIG_LUDLC_PAYLOAD_BITS
 #define CONFIG_LUDLC_PAYLOAD_BITS 8
 #endif
+
 /**
  * @typedef ludlc_payload_size_t
  * @brief Type definition for storing the size of a packet's payload.
@@ -129,23 +140,60 @@ typedef uint32_t ludlc_payload_size_t;
 #endif
 
 /**
- * @def CONFIG_LUDLC_MAX_PAYLOAD_SIZE
- * @brief Defines the maximum packet's payload size in bytes.
- *
- * Defaults to 32 bytes.
+ * @def LUDLC_PACKET_SIZE
+ * @brief Packet size for a link carrying @p pay_sz octets of payload.
  */
-#ifndef CONFIG_LUDLC_MAX_PAYLOAD_SIZE
-#define CONFIG_LUDLC_MAX_PAYLOAD_SIZE	32U
-#endif
+#define LUDLC_PACKET_SIZE(pay_sz)	((pay_sz) + sizeof(ludlc_packet_t))
+
 /**
  * @def LUDLC_MAX_PACKET_SIZE
- * @brief The total maximum size of a LuDLC packet in memory.
- *
- * This includes the maximum payload size plus the size of the
- * `ludlc_packet_t` structure (which includes the header).
+ * @brief The largest packet this build allows.
  */
-#define LUDLC_MAX_PACKET_SIZE                                                  \
-	(CONFIG_LUDLC_MAX_PAYLOAD_SIZE + sizeof(ludlc_packet_t))
+#define LUDLC_MAX_PACKET_SIZE						\
+	LUDLC_PACKET_SIZE(CONFIG_LUDLC_MAX_PAYLOAD_SIZE)
+
+/**
+ * @def LUDLC_MAX_CSUM_SIZE
+ * @brief The widest checksum a link may put on the wire, in octets.
+ *
+ * Each link declares its own width. The checksum is computed in a
+ * @ref ludlc_csum_t, so it can be no wider than that, and a transport
+ * refuses a link asking for more.
+ */
+#define LUDLC_MAX_CSUM_SIZE	sizeof(ludlc_csum_t)
+
+/**
+ * @def LUDLC_FRAME_SIZE
+ * @brief Frame size for a link of @p pay_sz octets and a checksum
+ * @p csum_octets wide.
+ *
+ * The checksum octets are counted with the packet, the receiver running the
+ * checksum over them as well.
+ */
+#define LUDLC_FRAME_SIZE(pay_sz, csum_octets)				\
+	(LUDLC_PACKET_SIZE(pay_sz) + (csum_octets))
+
+/**
+ * @def LUDLC_MAX_FRAME_SIZE
+ * @brief The largest frame this build allows on a checksum @p csum_oct
+ * octets wide.
+ *
+ * The payload ceiling is the build's and the framing around it the link's, so
+ * a link on a narrow checksum - or on none - carries a shorter frame for the
+ * same payload rather than more payload.
+ */
+#define LUDLC_MAX_FRAME_SIZE(csum_oct)					\
+	LUDLC_FRAME_SIZE(CONFIG_LUDLC_MAX_PAYLOAD_SIZE, csum_oct)
+
+/**
+ * @def LUDLC_FRAME_BUF_SIZE
+ * @brief What a buffer holding any frame this build allows has to be.
+ *
+ * Sized for the widest checksum, because a buffer is sized at build time and
+ * a checksum is named when a link is opened. A link on a narrower one, or on
+ * none, uses less of it.
+ */
+#define LUDLC_FRAME_BUF_SIZE	LUDLC_MAX_FRAME_SIZE(LUDLC_MAX_CSUM_SIZE)
 
 /**
  * @def CONFIG_LUDLC_CHANNEL_BITS

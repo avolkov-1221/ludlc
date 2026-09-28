@@ -121,12 +121,15 @@ void ludlc_connection_cleanup(struct ludlc_connection *conn);
  * @param conn The connection to send data on.
  * @param dst_chan The destination channel for the packet.
  * @param buf Pointer to the payload data buffer.
- * @param size The size of the payload data in bytes.
+ * @param size The size of the payload, up to
+ * @ref CONFIG_LUDLC_MAX_PAYLOAD_SIZE.
  * @param ttl If greater than zero and less than MAX_TTL, the stack uses the
  * default retry mechanism, and the packet will be resent up to ttl times.
  * If 0, then this is a “one-shot” packet and will be sent just once.
  * If ttl is MAX_TTL, then the packet will be resent indefinitely.
  * @return 0 on success.
+ * @return -EINVAL if @p buf is NULL and @p size is not, or if @p size is too
+ * large.
  * @return -EAGAIN if the transmit queue (window) is full.
  */
 int ludlc_enqueue_data(struct ludlc_connection *conn,

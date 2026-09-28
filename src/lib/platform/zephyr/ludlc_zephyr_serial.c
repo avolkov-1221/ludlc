@@ -59,7 +59,8 @@
 struct rx_packet_item {
 	void *fifo_reserved;
 	ludlc_payload_size_t size;
-	uint8_t payload[LUDLC_MAX_PACKET_SIZE];
+	/* The frame being decoded: a packet and its checksum. */
+	uint8_t payload[LUDLC_FRAME_BUF_SIZE];
 };
 
 #define RX_BUF_ALIGNED_SIZE	\
@@ -558,8 +559,11 @@ int ludlc_serial_connection_create(const ludlc_platform_args_t *arg,
 		return -ENODEV;
 	}
 
-	/* The frames carry a checksum, so the caller must supply one. */
-	if (!arg->csum || !arg->csum->csum || !arg->csum->octets) {
+	/* The frames carry a checksum, so the caller must supply one, and it
+	 * must fit the register it is computed in.
+	 */
+	if (!arg->csum || !arg->csum->csum ||
+	    !arg->csum->octets || arg->csum->octets > LUDLC_MAX_CSUM_SIZE) {
 		LUDLC_LOG_ERROR("No usable checksum for the link");
 		return -EINVAL;
 	}

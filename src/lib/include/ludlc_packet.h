@@ -1,18 +1,11 @@
-// SPDX-License-Identifier: (Apache-2.0 OR GPL-2.0-or-later)
+// SPDX-License-Identifier: (Apache-2.0 OR GPL-2.0-only)
 /**
  * @file ludlc_packet.h
  *
  * @brief LuDLC protocol packet definitions.
  *
- * This file defines the structure of LuDLC packets, including the headers
- * for data and ping packets, as well as flags and masks used for
- * sequence numbers and flow control.
- *
+ * @copyright
  * Copyright (C) 2025-2026 Andrey VOLKOV <andrey@volkov.fr> & LuDLC Contributors
- *
- * This file is licensed under either the Apache License, Version 2.0,
- * or the GNU General Public License, version 2 or (at your option)
- * any later version.
  */
 
 #ifndef __LUDLC_PACKET_H__
@@ -29,10 +22,10 @@
  * acknowledgment numbers.
  */
 typedef struct ludlc_ping_packet {
-	/**!< Transmit ID. Contains the sender's sequence number.
+	/** Transmit ID. Contains the sender's sequence number.
 	 * The highest bit may be set for @ref LUDLC_PING_FLAG. */
 	ludlc_id_t tx_id;
-	/**!< Acknowledgment ID. Contains the last received ID from the peer.
+	/** Acknowledgment ID. Contains the last received ID from the peer.
 	 * The highest bit may be set for @ref LUDLC_NAK_FLAG. */
 	ludlc_id_t ack_id;
 } ludlc_ping_packet_t;
@@ -45,9 +38,9 @@ typedef struct ludlc_ping_packet {
  * and adds the destination channel for the payload data.
  */
 typedef struct ludlc_packet_hdr {
-	/**< Sequence and acknowledgment numbers. */
+	/** Sequence and acknowledgment numbers. */
 	struct ludlc_ping_packet id;
-	/**!< Channel for the payload. */
+	/** Channel for the payload. */
 	ludlc_channel_t 	 chan;
 } ludlc_packet_hdr_t;
 
@@ -58,14 +51,34 @@ typedef struct ludlc_packet_hdr {
  * This structure is used to represent a complete packet, with the header
  * followed by a flexible array member for the payload data.
  *
- * @note This is often used for casting a received data buffer.
+ * @note This is used for casting a received data buffer.
  */
 typedef struct ludlc_packet {
-	/**< The packet header. */
+	/** The packet header. */
 	ludlc_packet_hdr_t	hdr;
-	/**< The payload data. */
+	/** The payload data. */
 	uint8_t 		payload[ /*data_len */ ];
 } ludlc_packet_t;
+
+/*
+ * A packet is sized in ludlc_payload_size_t throughout the core - see
+ * ludlc_receive() - so the payload must leave room in that type for the
+ * header in front of it. Either widen CONFIG_LUDLC_PAYLOAD_BITS or reduce
+ * the payload by sizeof(ludlc_packet_t). Checked here because that sizeof is
+ * not available to the preprocessor.
+ */
+#if defined(BUILD_ASSERT)
+BUILD_ASSERT(LUDLC_MAX_PACKET_SIZE <= (ludlc_payload_size_t)-1,
+	     "CONFIG_LUDLC_MAX_PAYLOAD_SIZE leaves no room for the header");
+#else
+/* The same without static_assert, where the enum name is the only clue the
+ * compiler prints.
+ */
+enum __CONFIG_LUDLC_MAX_PAYLOAD_SIZE_leaves_no_room_for_the_header__ {
+	__CONFIG_LUDLC_MAX_PAYLOAD_SIZE_leaves_no_room_for_the_header__ =
+		1 / !!(LUDLC_MAX_PACKET_SIZE <= (ludlc_payload_size_t)-1)
+};
+#endif
 
 /**
  * @def LUDLC_MAX_TX_ID

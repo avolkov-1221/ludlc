@@ -450,7 +450,8 @@ static void *ludlc_rx_serial_thread(void *arg)
 	struct ludlc_connection *conn = &sconn->conn;
 	struct ludlc_sdec_state dec_state;
 	uint8_t buf[16];
-	uint8_t packet[LUDLC_MAX_PACKET_SIZE];
+	/* The frame being decoded: a packet and its checksum. */
+	uint8_t packet[LUDLC_FRAME_BUF_SIZE];
 	ssize_t ret, cnt;
 
 	LUDLC_LOG_DEBUG("Start serial RX thread");
@@ -803,8 +804,11 @@ int ludlc_serial_connection_create(const ludlc_platform_args_t *args,
 	if (!args || !conn)
 		return -EINVAL;
 
-	/* The frames carry a checksum, so the caller must supply one. */
-	if (!args->csum || !args->csum->csum || !args->csum->octets)
+	/* The frames carry a checksum, so the caller must supply one, and it
+	 * must fit the register it is computed in.
+	 */
+	if (!args->csum || !args->csum->csum ||
+	    !args->csum->octets || args->csum->octets > LUDLC_MAX_CSUM_SIZE)
 		return -EINVAL;
 
 	sconn = alloc_serial_connection();

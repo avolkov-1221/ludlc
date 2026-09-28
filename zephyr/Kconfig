@@ -53,13 +53,13 @@ config LUDLC_MAX_PAYLOAD_SIZE
 	int "Maximum payload size (bytes)"
 	range 1 255 if LUDLC_PAYLOAD_BITS = 8
 	range 1 65535 if LUDLC_PAYLOAD_BITS = 16
-	range 1 2147483647 if LUDLC_PAYLOAD_BITS = 32
+	range 1 4294967295 if LUDLC_PAYLOAD_BITS = 32
 	default 32
 	help
-	  Maximum packet payload size.
+	  Maximum packet payload size (unsigned).
 	  The effective upper limit follows LUDLC_PAYLOAD_BITS:
 	  255 for 8-bit payload length, 65535 for 16-bit, and
-	  2147483647 for 32-bit.
+	  4294967295 for 32-bit.
 
 config LUDLC_CHANNEL_BITS
 	int "Channel ID width (bits)"
