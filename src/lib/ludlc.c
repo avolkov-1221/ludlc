@@ -406,14 +406,12 @@ static int rx_handle_handshake(
 	/* Check for unexpected ping or non-control packets. */
 	if (is_ping(id) ||
 		packet->hdr.chan != CONFIG_LUDLC_CONTROL_CHANNEL) {
-		/* If our LuDLC FSM in WAIT_CONN_2 state of the handshake, then
-		 * other side correctly transferred to the CONNECTED one and
-		 * start sending us normal packets, so we can do the same */
+		/* In WAIT_CONN_2 the peer has already moved to CONNECTED and
+		 * is sending normal packets, so this side follows.
+		 */
 		if (conn->conn_state == LUDLC_STATE_WAIT_CONN_2) {
 			conn->conn_state = LUDLC_STATE_CONNECTED;
-			LUDLC_INC_STATS(conn, on_conn);
-			/* and demands to continue handle the packet's header
-			 * as a normal one */
+			/* Carry on parsing the header as a normal packet. */
 			return ret | HANDLE_RX_CONTINUE_F | HANDLE_RX_CONNECTED_F;
 		}
 		LUDLC_LOG_DEBUG(
@@ -437,7 +435,6 @@ static int rx_handle_handshake(
 
 			/* This is the expected next handshake step */
 			if (++conn->conn_state == LUDLC_STATE_CONNECTED) {
-				LUDLC_INC_STATS(conn, on_conn);
 				ret |= HANDLE_RX_CONNECTED_F;
 			}
 		} else if ((id + 1) != conn->conn_state) {
