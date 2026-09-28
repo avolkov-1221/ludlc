@@ -14,7 +14,16 @@
 # In an out-of-tree (make M=) build the LuDLC Kconfig symbols are not part of
 # the kernel .config, so define them here. Flip a value to n to drop the
 # corresponding module from the build.
+#
+# A transport needs the bus it speaks, which our Kconfig says with `depends on`
+# and nothing reads out of tree. Worse, the argument union in
+# ludlc_platform_args.h has an arm per bus behind the same condition, so
+# building a transport for a bus the target kernel left out does not fail on
+# the missing bus but on a struct member that is not there - which says nothing
+# about what is wrong. Default each transport to what the kernel can carry, and
+# let a value given on the command line override it.
 CONFIG_LUDLC_CORE       ?= m
+CONFIG_LUDLC_SERDEV     ?= $(if $(CONFIG_SERIAL_DEV_BUS),m,n)
 
 # The checksum a link runs when neither the crc= module parameter, firmware nor
 # configfs names one. Both ends of a link must agree on it, so change it only
@@ -61,8 +70,9 @@ ludlc_core-y := $(addprefix ../../,$(LUDLC_CORE_NAMES:.c=.o))	\
 		ludlc_csum.o
 
 # configfs front-end: only on kernels that provide configfs. The bus device
-# nodes (ludlc_cfg.o) belong to the link rather than to whatever carries it.
-ludlc_core-$(CONFIG_CONFIGFS_FS) += ludlc_cfg.o
+# nodes (ludlc_cfg.o) and the port directory every transport shares
+# (ludlc_cfg_port.o) belong to the link rather than to whatever carries it.
+ludlc_core-$(CONFIG_CONFIGFS_FS) += ludlc_cfg.o ludlc_cfg_port.o
 
 obj-$(CONFIG_LUDLC_CORE) += ludlc_core.o
 
@@ -94,4 +104,22 @@ endif
 endif
 endif
 
+# The defaults above already leave out a transport whose bus the kernel does
+# not have. Getting here means one was asked for on the command line anyway,
+# and the compiler's account of that is a missing struct member, so say it
+# here instead.
+ifneq ($(filter m y,$(CONFIG_LUDLC_SERDEV)),)
+ifeq ($(CONFIG_SERIAL_DEV_BUS),)
+$(error LuDLC serdev transport needs \
+	CONFIG_SERIAL_DEV_BUS (y or m) in the target kernel)
 endif
+endif
+
+endif
+
+# Serial transport: the serdev driver (ludlc_serdev_drv.o) plus its optional
+# configfs front-end, built only on kernels that provide configfs.
+ludlc_serdev-y := ludlc_serdev_drv.o
+ludlc_serdev-$(CONFIG_CONFIGFS_FS) += ludlc_serdev_cfg.o
+
+obj-$(CONFIG_LUDLC_SERDEV) += ludlc_serdev.o

@@ -267,6 +267,162 @@ void ludlc_cfg_devices_group_attach(struct ludlc_cfg_devices *devs,
 				    struct ludlc_connection *conn);
 
 void ludlc_cfg_devices_group_detach(struct ludlc_cfg_devices *devs);
+
+struct ludlc_cfg_port;
+
+/**
+ * @struct ludlc_cfg_port_ops
+ * @brief What a port directory needs of the transport whose port it describes.
+ *
+ * The checksum, the framing and the frame size are the same on every wire, and
+ * so is what a port directory does with them. These callbacks are the parts
+ * that are not: which devices the directory may name, what their firmware
+ * says, and how a link on them is opened and closed.
+ */
+struct ludlc_cfg_port_ops {
+	/**
+	 * @brief The device called @p name among those this transport drives.
+	 *
+	 * @return The device with a reference held, which this layer drops
+	 * with put_device(), or NULL if the transport drives no such device.
+	 */
+	struct device *(*dev_find)(const char *name);
+
+	/** @brief The transport's defaults for @p dev, firmware included. */
+	void (*default_args)(struct device *dev, ludlc_platform_args_t *args);
+
+	/**
+	 * @brief Apply the bus attributes the user wrote to @p args.
+	 *
+	 * Optional: for a bus whose ports have settings of their own, beyond
+	 * the ones every link has. Called with @p port->lock held.
+	 */
+	void (*override)(const struct ludlc_cfg_port *port,
+			 ludlc_platform_args_t *args);
+
+	/** @brief Open a link on @p dev, or -EBUSY if one is already up. */
+	int (*link_up)(struct device *dev, const ludlc_platform_args_t *args,
+		       struct ludlc_connection **conn);
+
+	/** @brief Take down the link on @p dev, if it has one. */
+	void (*link_down)(struct device *dev);
+
+	/** @brief The link running on @p dev, or NULL while it is down. */
+	struct ludlc_connection *(*get_conn)(struct device *dev);
+
+	/**
+	 * @brief Can a link on this bus carry @p framing?
+	 *
+	 * The "framing" attribute refuses what a transport would refuse at
+	 * open, and leaves it out of the list it offers.
+	 */
+	bool (*framing_ok)(const struct ludlc_framing *framing);
+};
+
+/**
+ * @struct ludlc_cfg_port
+ * @brief One configfs directory, describing the link on one transport port.
+ *
+ * A transport registers a subsystem of these and gets the tree every LuDLC
+ * port has: the checksum, the framing and the frame size a link opened from
+ * here will run, a "live" switch that opens it, and the "ludlc" subgroup
+ * holding the bus devices it carries. What the transport adds are the
+ * settings of its own wire - see @ref ludlc_cfg_port_ops.
+ */
+struct ludlc_cfg_port {
+	struct config_group group;
+
+	/** Default subgroup "ludlc": the LuDLC bus nodes below this port. */
+	struct ludlc_cfg_devices devices;
+
+	const struct ludlc_cfg_port_ops *ops;
+
+	/** The subsystem this directory was created in. */
+	struct configfs_subsystem *subsys;
+
+	/**
+	 * @brief The device this directory is named after, with a reference
+	 * held, or NULL while no transport is bound to it.
+	 *
+	 * Only a bound port can be brought up from here.
+	 */
+	struct device *dev;
+
+	/** Serializes @c flags, @c args, @c dev and the devices group. */
+	struct mutex lock;
+
+	/**
+	 * @brief Which of @c args the user actually wrote, and so which ones
+	 * override firmware, plus whether the link was opened from here.
+	 *
+	 * Written under @c lock, and so non-atomically; a show() may read a
+	 * bit without the lock and get a value that has since changed, which
+	 * is all a single read of this directory can offer anyway.
+	 */
+	unsigned long flags;
+
+	ludlc_platform_args_t args;
+};
+
+/*
+ * The bits this layer keeps in ludlc_cfg_port.flags. A transport numbers the
+ * ones for its own attributes from LUDLC_CFG_PORT_F_BUS up.
+ */
+#define LUDLC_CFG_PORT_F_LIVE		0
+#define LUDLC_CFG_PORT_F_FRAMING_SET	1
+#define LUDLC_CFG_PORT_F_PAYLOAD_SET	2
+#define LUDLC_CFG_PORT_F_CSUM_SET	3
+#define LUDLC_CFG_PORT_F_BUS		8
+
+static inline
+struct ludlc_cfg_port *to_ludlc_cfg_port(struct config_item *item)
+{
+	return container_of(to_config_group(item), struct ludlc_cfg_port,
+			    group);
+}
+
+/*
+ * The attributes every port has, whatever carries it. A transport splices
+ * these into the array of its own port type, which is what ties them to the
+ * module the type belongs to.
+ */
+extern struct configfs_attribute ludlc_cfg_port_attr_csum;
+extern struct configfs_attribute ludlc_cfg_port_attr_csum_available;
+extern struct configfs_attribute ludlc_cfg_port_attr_framing;
+extern struct configfs_attribute ludlc_cfg_port_attr_framing_available;
+extern struct configfs_attribute ludlc_cfg_port_attr_max_payload;
+extern struct configfs_attribute ludlc_cfg_port_attr_max_payload_available;
+extern struct configfs_attribute ludlc_cfg_port_attr_live;
+
+#define LUDLC_CFG_PORT_ATTRS				\
+	&ludlc_cfg_port_attr_csum,			\
+	&ludlc_cfg_port_attr_csum_available,		\
+	&ludlc_cfg_port_attr_framing,			\
+	&ludlc_cfg_port_attr_framing_available,		\
+	&ludlc_cfg_port_attr_max_payload,		\
+	&ludlc_cfg_port_attr_max_payload_available,	\
+	&ludlc_cfg_port_attr_live
+
+/** @brief Frees a port and its devices; for a port type's ct_item_ops. */
+extern struct configfs_item_operations ludlc_cfg_port_item_ops;
+
+struct config_group *ludlc_cfg_port_make(struct config_group *group,
+					 const char *name,
+					 const struct ludlc_cfg_port_ops *ops,
+					 const struct config_item_type *type);
+
+bool ludlc_cfg_port_apply(struct configfs_subsystem *subsys,
+			  struct device *dev, ludlc_platform_args_t *args);
+
+void ludlc_cfg_port_bind(struct configfs_subsystem *subsys, struct device *dev,
+			 struct ludlc_connection *conn);
+
+void ludlc_cfg_port_unbind(struct configfs_subsystem *subsys,
+			   struct device *dev);
+
+int ludlc_cfg_port_subsys_register(struct configfs_subsystem *subsys);
+
+void ludlc_cfg_port_subsys_unregister(struct configfs_subsystem *subsys);
 #endif
 
 #endif /* __LUDLC_BUS_H__ */

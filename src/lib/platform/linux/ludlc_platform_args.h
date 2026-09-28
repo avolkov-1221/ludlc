@@ -2,15 +2,17 @@
 /**
  * @file linux/ludlc_platform_args.h
  *
- * @brief LuDLC Linux platform arguments: the checksum, the framing and the
- * settings a link runs on.
+ * @brief LuDLC Linux platform arguments: the checksum a link runs, and the
+ * port it is built on.
  *
  * @copyright
  * Copyright (C) 2025-2026 Andrey VOLKOV <andrey@volkov.fr> & LuDLC Contributors
  *
  * @details
- * A transport gathers these from firmware (DT/ACPI) before calling its
- * connection_create().
+ * A transport gathers these from firmware (DT/ACPI) and configfs before
+ * calling its connection_create(). The checksum sits outside the union because
+ * both ends of a link must agree on it whatever carries the frames, so it
+ * describes the link rather than the port; everything below it is the port.
  */
 
 #ifndef _LUDLC_PLATFORM_ARGS_H_
@@ -18,6 +20,10 @@
 
 #include <linux/types.h>
 #include <linux/string.h>
+
+#if IS_ENABLED(CONFIG_SERIAL_DEV_BUS)
+#include <linux/serdev.h>
+#endif
 
 #include <ludlc_proto.h>
 
@@ -35,6 +41,8 @@ typedef struct ludlc_platform_args {
 	 * as long as the link uses it. A caller that looked up a name with
 	 * ludlc_crc_find() holds a reference until then and drops it with
 	 * ludlc_args_csum_put(). The system default is ludlc_csum_default().
+	 * It sits outside the union because a link runs one checksum whatever
+	 * carries it.
 	 */
 	const struct ludlc_csum *csum;
 
@@ -55,6 +63,17 @@ typedef struct ludlc_platform_args {
 	 * period and default TTL. Zero @c max_payload asks for the build max.
 	 */
 	struct ludlc_conn_cfg cfg;
+
+	union {
+#if IS_ENABLED(CONFIG_SERIAL_DEV_BUS)
+		struct {
+			struct serdev_device *dev;
+			u32 baudrate;
+			bool flow_control;
+			enum serdev_parity parity;
+		} serdev;
+#endif
+	};
 } ludlc_platform_args_t;
 
 /**

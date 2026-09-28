@@ -1,0 +1,125 @@
+# SPDX-License-Identifier: (GPL-2.0-only OR BSD-2-Clause)
+#
+# @file ludlc,serdev.yaml
+#
+# @brief Devicetree binding of a LuDLC transport on a serdev port.
+#
+# @copyright
+# Copyright (C) 2025-2026 Andrey VOLKOV <andrey@volkov.fr> & LuDLC Contributors
+
+%YAML 1.2
+---
+$id: http://devicetree.org/schemas/serial/ludlc,serdev.yaml#
+$schema: http://devicetree.org/meta-schemas/core.yaml#
+
+title: LuDLC link over a UART
+
+maintainers:
+  - Andrey VOLKOV <andrey@volkov.fr>
+
+description: |
+  A coprocessor beside the application processor usually serves several
+  unrelated functions - LEDs, a watchdog, an ADC - over the one serial line
+  between the two. LuDLC (Lightweight Micro Devices Link Control) makes that
+  line reliable and splits it into logical channels, so a driver for one
+  function binds to a channel the way it would bind to any other bus.
+
+  This node is the link, described as a client of the UART that carries it.
+  Its children are the channels: one node per function the coprocessor
+  serves, named by the "reg" property and matched by its own compatible.
+
+  Both ends of a link have to agree on the framing, the checksum and the
+  largest frame, none of which a UART descriptor has room for. A board whose
+  coprocessor differs from the driver's defaults says so here. A setting this
+  kernel cannot honour is warned about and ignored, leaving the link on its
+  default: one that comes up misconfigured is easier to diagnose from the far
+  end than one that does not come up at all.
+
+properties:
+  compatible:
+    const: ludlc,serdev
+
+  ludlc,framing:
+    $ref: /schemas/types.yaml#/definitions/string
+    enum: [cobs, hdlc]
+    description:
+      How a frame is delimited on the wire. Both ends must agree, and a
+      framing that leaves a frame's end unmarked cannot be used here.
+
+  ludlc,csum:
+    $ref: /schemas/types.yaml#/definitions/string
+    enum: [none, crc16-ccitt-pr0, crc16-pr0, crc16-x25-pr1, crc32-ccitt-pr0]
+    description:
+      The frame checksum, named for the algorithm and the bit order it is
+      computed in, or none for frames that carry no checksum. Both ends must
+      agree.
+
+  ludlc,max-payload:
+    $ref: /schemas/types.yaml#/definitions/uint32
+    minimum: 1
+    description:
+      The largest payload the link carries, in octets. The transport adds the
+      header and the checksum to get the frame. It is the peer's limit that
+      matters, the smaller of the two ends deciding. A value this kernel was
+      not built to hold is ignored.
+
+  "#address-cells":
+    const: 1
+
+  "#size-cells":
+    const: 0
+
+patternProperties:
+  "@[0-9a-f]+$":
+    type: object
+    description:
+      A device on the link, speaking for one or more of its channels.
+
+    properties:
+      reg:
+        minItems: 1
+        maxItems: 16
+        description:
+          The channels this device answers on. Most have one; a driver that
+          has to speak for a group of them lists several.
+
+    required:
+      - compatible
+      - reg
+
+    additionalProperties: true
+
+required:
+  - compatible
+  - "#address-cells"
+  - "#size-cells"
+
+allOf:
+  - $ref: /schemas/serial/serial-peripheral-props.yaml#
+
+unevaluatedProperties: false
+
+examples:
+  - |
+    serial {
+        coprocessor {
+            compatible = "ludlc,serdev";
+            current-speed = <921600>;
+            ludlc,framing = "hdlc";
+            ludlc,csum = "crc16-x25-pr1";
+            ludlc,max-payload = <32>;
+
+            #address-cells = <1>;
+            #size-cells = <0>;
+
+            led-controller@1 {
+                compatible = "vendor,coproc-leds";
+                reg = <1>;
+            };
+
+            watchdog@2 {
+                compatible = "vendor,coproc-wdt";
+                reg = <2>;
+            };
+        };
+    };

@@ -85,3 +85,19 @@ config LUDLC_CRC_DFLT_NONE
 endchoice
 
 endif
+
+config LUDLC_SERDEV
+	tristate "LuDLC serdev transport"
+	depends on LUDLC_CORE && SERIAL_DEV_BUS
+	help
+	  Serial transport implementation for LuDLC using the Linux serdev
+	  subsystem.
+
+	  A link here delimits its frames either in the manner of HDLC, which
+	  suits a byte stream that may start anywhere, or with COBS, which
+	  costs a fixed octet per frame rather than one per reserved octet in
+	  it. Both ends must agree, so a link takes its framing from the
+	  "framing" module parameter, a "ludlc,framing" firmware property or a
+	  configfs write, and falls back on the escaping.
+
+	  Say M here to build it as a module, ludlc_serdev.
