@@ -57,10 +57,6 @@ static const struct ludlc_csum csum = {
 	.octets = 2,
 };
 
-static struct ludlc_proto_cb proto = {
-	.get_timestamp = ludlc_default_get_timestamp,
-};
-
 static int send_echo_resp(struct ludlc_connection *conn, const uint8_t *data,
 			  ludlc_payload_size_t size)
 {
@@ -227,8 +223,7 @@ int main(void)
 	LOG_INF("Starting Zephyr LuDLC echo");
 	LOG_INF("Using UART device: %s", ser_arg.dev->name);
 
-	ret = ludlc_serial_connection_create(&ser_arg, &conn, &proto,
-					     &demo_callbacks);
+	ret = ludlc_serial_connection_create(&ser_arg, &conn, &demo_callbacks);
 	if (ret || !conn) {
 		LOG_ERR("Failed to create LuDLC connection: %d", ret);
 		return 0;

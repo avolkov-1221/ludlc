@@ -114,8 +114,6 @@ struct packet_queue_item {
  * required to manage one LuDLC link.
  */
 struct ludlc_connection {
-	/** Platform transport callbacks. */
-	const struct ludlc_proto_cb	*proto;
 	/** User event callbacks. */
 	const struct ludlc_conn_cb	*cb;
 	/** User context pointer for callbacks. */
@@ -140,6 +138,16 @@ struct ludlc_connection {
 #define LUDLC_CONN_DISC_AFTER_TX_F	2
 	/** Atomic bitfield for connection flags. */
 	ludlc_platform_atomic_t	flags;
+
+	/**
+	 * @brief The link's clock, its own copy.
+	 *
+	 * Filled at init from the caller's cfg, or from
+	 * @ref ludlc_conn_cfg_default, never borrowed: the caller's cfg may be
+	 * a compound literal that is out of scope by the time a packet is
+	 * received.
+	 */
+	struct ludlc_conn_cfg		cfg;
 
 	/** Connection statistics. */
 	LUDLC_DECLARE_STATS(stats);
@@ -206,7 +214,7 @@ static inline bool ludlc_is_disconnect_after_tx_packet(
  */
 int ludlc_receive(struct ludlc_connection *conn,
 			ludlc_packet_t *packet, size_t pkt_sz,
-			ludlc_timestamp_t tstamp_usec);
+			ludlc_timestamp_t tstamp);
 
 /**
  * @brief Retrieves the next packet to be sent by the transport layer.

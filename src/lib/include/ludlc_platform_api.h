@@ -1,8 +1,11 @@
-// SPDX-License-Identifier: (Apache-2.0 OR GPL-2.0-or-later)
+// SPDX-License-Identifier: (Apache-2.0 OR GPL-2.0-only)
 /**
  * @file ludlc_platform_api.h
  *
  * @brief LuDLC platform abstraction layer API.
+ *
+ * @copyright
+ * Copyright (C) 2025-2026 Andrey VOLKOV <andrey@volkov.fr> & LuDLC Contributors
  *
  * @details
  * Declarations for functions the **core** (`ludlc.c`) calls into the platform
@@ -13,13 +16,6 @@
  * Implementations may instead provide inlines by defining the corresponding
  * @c LUDLC_PLATFORM_*_INLINED macros and omitting some of these symbols from
  * the link.
- *
- * @copyright
- * Copyright (C) 2025-2026 Andrey VOLKOV <andrey@volkov.fr> & LuDLC Contributors
- *
- * This file is licensed under either the Apache License, Version 2.0,
- * or the GNU General Public License, version 2 or (at your option)
- * any later version.
  */
 
 #ifndef __LUDLC_PLATFORM_API_H__
@@ -27,6 +23,26 @@
 
 #include <ludlc_types.h>
 #include <ludlc_platform.h>
+
+/**
+ * @def LUDLC_TIMER_US_T
+ * @brief Integer type a timer delay is passed to the platform in.
+ *
+ * Microseconds, and an @c unsigned int unless a port overrides it. A target
+ * whose @c int cannot hold the delays the core computes - the watchdog is
+ * three keepalive periods, so a one-second ping needs three million - defines
+ * this in its @c ludlc_platform.h before this header, widening the two
+ * parameters below for that port only.
+ */
+#ifndef LUDLC_TIMER_US_T
+#define LUDLC_TIMER_US_T	unsigned int
+#endif
+
+/**
+ * @typedef ludlc_timer_us_t
+ * @brief @ref LUDLC_TIMER_US_T, as a type.
+ */
+typedef LUDLC_TIMER_US_T ludlc_timer_us_t;
 
 /**
  * @defgroup ludlc_platform_api LuDLC platform API (functions)
@@ -65,10 +81,11 @@ int ludlc_platform_init_timer(struct ludlc_connection *conn,
  *
  * @note Stopping or restarting the timer from within the expiry callback is
  *       platform-specific; the core uses separate ping and watchdog timers.
+ * @note The delay type is the port's; see @ref LUDLC_TIMER_US_T.
  */
 int ludlc_platform_start_timer(ludlc_platform_timer_t *timer,
-				ludlc_timestamp_t delay,
-				ludlc_timestamp_t period);
+				const ludlc_timer_us_t delay,
+				const ludlc_timer_us_t period);
 
 /**
  * @brief Disarm a timer so it will not fire until started again.
@@ -110,29 +127,29 @@ struct ludlc_connection *ludlc_timer_arg_to_conn(ludlc_platform_timer_arg_t arg)
 /**
  * @brief Wake the transmit path so the next frame can be sent soon.
  *
- * Sets an internal “force TX” indication and, on threaded transports, unblocks
- * the TX worker (e.g. pipe/event write). Used when the core has something to
- * send (handshake, data, ACK/PING) or must run the transmitter without new data
- * (e.g. keep-alive).
+ * Marks the connection as having something to send and, on threaded
+ * transports, unblocks the TX worker. Used for a handshake, data or an
+ * ACK/PING, and to run the transmitter with no new data for a keepalive.
  *
  * @param[in,out] conn Active connection.
  *
- * @note Callable from timer callbacks and other threads; must be async-signal-safe
- *       only if your port invokes it from signal handlers (usually avoid that).
+ * @note Callable from timer callbacks and other threads. A port that calls it
+ *       from a signal handler must make its own implementation
+ *       async-signal-safe.
  */
 void ludlc_platform_request_tx(struct ludlc_connection *conn);
 
 /**
  * @brief Hook for link watchdog expiry (optional transport wake-up).
  *
- * Invoked from the connection watchdog timer path when the peer has been silent
- * too long. The platform may unblock a blocking @c read/poll path or schedule
- * work so the stack can observe @c LUDLC_CONN_TIMEOUT_F.
+ * Called from the watchdog timer path when the peer has been silent too long.
+ * The platform may unblock a blocking read or poll, or schedule work, so that
+ * the transport notices and takes the link down.
  *
  * @param[in,out] conn Connection whose watchdog fired.
  *
- * @note Not all ports need this; a minimal stub is valid if timeout is polled
- *       elsewhere.
+ * @note Not all ports need this; a stub is valid where the timeout is
+ *       noticed elsewhere.
  */
 void ludlc_platform_conn_timeout(struct ludlc_connection *conn);
 

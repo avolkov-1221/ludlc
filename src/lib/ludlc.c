@@ -686,7 +686,7 @@ static int rx_handle_packet(
  * @param conn Pointer to the connection structure.
  * @param packet Pointer to the buffer containing the received packet.
  * @param pkt_sz The total size of the received packet in bytes.
- * @param tstamp A timestamp of when the packet was received.
+ * @param tstamp Monotonic timestamp when the packet was received.
  * @return 0 on success.
  */
 int ludlc_receive(struct ludlc_connection *conn,
@@ -982,37 +982,43 @@ void ludlc_connection_cleanup(struct ludlc_connection *conn)
  *
  * Prepares a `ludlc_connection` structure for use. This includes
  * zeroing the memory, storing user contexts and callbacks, initializing
- * timers, and setting up the TX FIFO.
+ * timers, and binding the protocol cfg.
  *
  * @param conn Pointer to the connection structure to initialize.
- * @param proto_cb Pointer to the platform/transport callbacks (e.g.,
- * tx_write, rx_read).
+ * @param cfg What to open the link with: its clock, or NULL for
+ * @ref ludlc_conn_cfg_default. Copied here, so a compound literal will do;
+ * only the clock pointer is kept and must outlive the connection.
  * @param cb Pointer to the user-facing event callbacks (e.g., on_connect,
  * on_recv).
  * @param user_ctx A user-defined context pointer that will be passed back
  * in all callbacks.
  *
  * @return 0 on success.
- * @return -EINVAL if `conn` or `proto_cb` are NULL, or if mandatory
- * `proto_cb` functions are missing.
+ * @return -EINVAL if `conn` is NULL.
  */
 int ludlc_connection_init(struct ludlc_connection *conn,
-		const struct ludlc_proto_cb *proto_cb,
+		const struct ludlc_conn_cfg *cfg,
 		const struct ludlc_conn_cb *cb,
 		void *user_ctx)
 {
 	int ret;
 
-	if (!conn || !proto_cb)
+	if (!conn)
 		return -EINVAL;
 
-	/* The "get_timestamp" callback is obligatory */
-	if (!proto_cb->get_timestamp)
-		return -EINVAL;
+	if (!cfg)
+		cfg = &ludlc_conn_cfg_default;
 
 	memset(conn, 0, sizeof(*conn));
 
-	conn->proto = proto_cb;
+	/*
+	 * A setting the caller left at zero takes the build default.
+	 * Resolved here, once, rather than at every read afterwards.
+	 */
+	conn->cfg.get_timestamp =
+		cfg->get_timestamp ? cfg->get_timestamp
+			   : ludlc_default_get_timestamp;
+
 	conn->cb = cb;
 	conn->user_ctx = user_ctx;
 	conn->ctrl_packet.chan = CONFIG_LUDLC_CONTROL_CHANNEL;
@@ -1038,3 +1044,5 @@ int ludlc_connection_init(struct ludlc_connection *conn,
 
 	return ret;
 }
+
+const struct ludlc_conn_cfg ludlc_conn_cfg_default = LUDLC_CONN_CFG_DEFAULT;

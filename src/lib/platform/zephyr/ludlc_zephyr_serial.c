@@ -273,7 +273,7 @@ static void rx_serial_thread(void *p1, void *p2, void *p3)
 			continue;
 		}
 
-		if (sconn->conn.proto->get_timestamp(&ts) == 0) {
+		if (sconn->conn.cfg.get_timestamp(&ts) == 0) {
 			const ludlc_ping_packet_t *pid =
 				(const ludlc_ping_packet_t *)rx_buf->payload;
 			LUDLC_LOG_TRACE("<< id=0x%02x ack=0x%02x len=%u "
@@ -539,15 +539,14 @@ void ludlc_serial_connection_destroy(struct ludlc_connection *conn)
  *
  * This function allocates and configures a `ludlc_serial_connection` structure,
  * initializes Zephyr kernel objects, creates RX/TX threads, and sets up the UART.
- * @param arg Platform arguments: the UART device and the checksum.
+ * @param arg Platform arguments: the UART device, the checksum and the cfg to
+ * open the link with.
  * @param conn Output pointer to the newly created core `ludlc_connection`.
- * @param proto Pointer to protocol hooks (the timestamp).
  * @param cb Callback structure for the LuDLC connection.
  * @return 0 on success, or a negative errno value on failure.
  */
 int ludlc_serial_connection_create(const ludlc_platform_args_t *arg,
 		   struct ludlc_connection **conn,
-		   const struct ludlc_proto_cb *proto,
 		   const struct ludlc_conn_cb *cb)
 {
 	struct ludlc_serial_connection *sconn = NULL;
@@ -612,7 +611,8 @@ int ludlc_serial_connection_create(const ludlc_platform_args_t *arg,
 	}
 
 	/* Initialize the core connection, passing sconn->conn as the user_arg */
-	ret = ludlc_connection_init(&sconn->conn, proto, cb, &sconn->conn);
+	ret = ludlc_connection_init(&sconn->conn, ludlc_args_conn_cfg(arg), cb,
+				    &sconn->conn);
 	if (ret) {
 		goto err;
 	}

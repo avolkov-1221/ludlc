@@ -1,19 +1,11 @@
-// SPDX-License-Identifier: (Apache-2.0 OR GPL-2.0-or-later)
+// SPDX-License-Identifier: (Apache-2.0 OR GPL-2.0-only)
 /**
  * @file ludlc.h
  *
  * @brief LuDLC public API definitions.
  *
- * This file defines the main public API for creating, managing, and
- * interacting with a LuDLC connection. It includes the user-facing
- * callback structures and the primary functions for initializing,
- * destroying, and sending data over a connection.
- *
+ * @copyright
  * Copyright (C) 2025-2026 Andrey VOLKOV <andrey@volkov.fr> & LuDLC Contributors
- *
- * This file is licensed under either the Apache License, Version 2.0,
- * or the GNU General Public License, version 2 or (at your option)
- * any later version.
  */
 
 #ifndef __LUDLC_H__
@@ -55,8 +47,8 @@ struct ludlc_conn_cb {
 	 * @param chan The channel on which the data was received.
 	 * @param data Pointer to the received payload data buffer.
 	 * @param data_size The size of the received payload in bytes.
-	 * @param tstamp The timestamp (in microseconds) when the packet
-	 * was received by the transport.
+	 * @param tstamp Monotonic timestamp when the transport received the
+	 * packet. Unit is whatever @ref ludlc_get_timestamp_t returns.
 	 * @param user_arg The user-defined context pointer.
 	 */
 	void (*on_recv)(struct ludlc_connection *conn,
@@ -91,31 +83,6 @@ struct ludlc_conn_cb {
 };
 
 /**
- * @brief Allocates and initializes a new LuDLC connection state.
- *
- * This function dynamically allocates memory for a `ludlc_connection`
- * structure and then calls `ludlc_connection_init` on it.
- *
- * @param proto_cb Pointer to the platform/transport callbacks.
- * @param cb Pointer to the user event callbacks.
- * @param user_ctx A user-defined context pointer passed to all callbacks.
- * @return A pointer to the newly created connection, or NULL on failure.
- */
-struct ludlc_connection *ludlc_create_connection(
-		const struct ludlc_proto_cb *proto_cb,
-		const struct ludlc_conn_cb *cb,
-		void *user_ctx);
-/**
- * @brief De-initializes and frees a LuDLC connection.
- *
- * This function calls `ludlc_connection_cleanup` and then frees the
- * memory associated with the connection.
- *
- * @param conn The connection to destroy.
- */
-void ludlc_destroy_connection(struct ludlc_connection *conn);
-
-/**
  * @brief Initializes a pre-allocated LuDLC connection structure.
  *
  * This is primarily used as a part of specialized connection
@@ -123,14 +90,16 @@ void ludlc_destroy_connection(struct ludlc_connection *conn);
  *
  * @param conn Pointer to the pre-allocated connection structure to
  * initialize.
- * @param proto_cb Pointer to the platform/transport callbacks.
+ * @param cfg The link's clock, or NULL for @ref ludlc_conn_cfg_default.
+ * Copied at init, so it need not outlive the call, but the clock it names
+ * must, being kept.
  * @param cb Pointer to the user event callbacks.
  * @param user_ctx A user-defined context pointer passed to all callbacks.
  * @return 0 on success, or a negative error code on failure.
  */
- int ludlc_connection_init(
+int ludlc_connection_init(
 		struct ludlc_connection *conn,
-		const struct ludlc_proto_cb *proto_cb,
+		const struct ludlc_conn_cfg *cfg,
 		const struct ludlc_conn_cb *cb,
 		void *user_ctx);
 /**
@@ -180,10 +149,14 @@ int ludlc_send_disconnect(struct ludlc_connection *conn);
 /**
  * @brief Starts or restarts LuDLC handshake to establish a link.
  *
- * This function can be used after connection creation and after a transport
- * drop to trigger (re)connection. If the protocol state is mid-session, the
- * core is reset to a clean disconnected state first, pending TX packets are
- * failed via regular confirm callbacks, and handshake is started again.
+ * May be called after connection creation and after a transport drop to
+ * trigger (re)connection. If the protocol state is mid-session, the core is
+ * reset to a clean disconnected state first, pending TX packets are failed
+ * via the regular confirm callbacks, and the handshake starts again.
+ *
+ * Dropping a session this way does not call `on_disconnect`, as the caller
+ * asked for it. A caller that pairs the two callbacks should account for the
+ * `on_connect` that follows.
  *
  * @param conn The connection to (re)connect.
  * @return 0 on success.

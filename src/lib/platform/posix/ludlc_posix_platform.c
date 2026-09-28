@@ -102,11 +102,13 @@ int ludlc_platform_init_timer(struct ludlc_connection *conn,
 }
 
 /**
- * @brief Implements @c ludlc_proto_cb::get_timestamp (POSIX).
+ * @brief Default @ref ludlc_get_timestamp_t for POSIX.
  *
- * Uses @c CLOCK_MONOTONIC; writes microseconds to @a out_ts.
+ * Uses @c CLOCK_MONOTONIC_RAW; returns nanoseconds. Any monotonic unit with
+ * enough resolution to tell sequential packets apart is valid for a custom
+ * callback.
  *
- * @param[out] out_ts Receives elapsed time in microseconds.
+ * @param[out] out_ts Receives elapsed monotonic time in nanoseconds.
  * @return 0 on success, \c -EINVAL if @a out_ts is NULL, or \c -errno
  * from @c clock_gettime.
  */
@@ -118,11 +120,12 @@ int ludlc_default_get_timestamp(ludlc_timestamp_t *out_ts)
 		return -EINVAL;
 	}
 
-	if (clock_gettime(CLOCK_MONOTONIC, &ts) == -1) {
+	if (clock_gettime(CLOCK_MONOTONIC_RAW, &ts) == -1) {
 		return -errno;
 	}
 
-	*out_ts = ts.tv_sec * 1000000U + (ludlc_timestamp_t)(ts.tv_nsec / 1000);
+	*out_ts = (ludlc_timestamp_t)
+			((uint64_t)ts.tv_sec * 1000000000ULL + ts.tv_nsec);
 	return 0;
 }
 
@@ -138,8 +141,8 @@ int ludlc_default_get_timestamp(ludlc_timestamp_t *out_ts)
  * @return A negative error code from `timer_settime` on failure.
  */
 int ludlc_platform_start_timer(ludlc_platform_timer_t *timer,
-				ludlc_timestamp_t delay,
-				ludlc_timestamp_t period)
+				const unsigned int delay,
+				const unsigned int period)
 {
 	struct itimerspec its = {0};
 

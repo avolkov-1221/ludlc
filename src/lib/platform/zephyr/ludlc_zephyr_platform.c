@@ -4,16 +4,13 @@
  *
  * @brief LuDLC platform abstraction layer for Zephyr.
  *
- * This file defines the platform-specific abstractions required by the LuDLC
- * library when running on the Zephyr RTOS. It includes definitions for timers,
- * locks, checksums, memory allocation, and timers, mapping them to Zephyr's
- * native APIs.
- *
+ * @copyright
  * Copyright (C) 2025-2026 Andrey VOLKOV <andrey@volkov.fr> & LuDLC Contributors
  *
- * This file is licensed under either the Apache License, Version 2.0
- * or the GNU General Public License, version 2 or (at your option)
- * any later version.
+ * @details
+ * The platform-specific parts the LuDLC core needs on the Zephyr RTOS:
+ * timers, timestamps and the per-connection wakeups, mapped onto Zephyr's
+ * native APIs.
  */
 
 #define LUDLC_LOG_REGISTER	1
@@ -40,11 +37,12 @@ int ludlc_platform_init_timer(struct ludlc_connection *conn,
 }
 
 /**
- * @brief Retrieves the current system timestamp in microseconds.
+ * @brief Default @ref ludlc_get_timestamp_t for Zephyr.
  *
- * This function is part of the LuDLC protocol callback structure.
+ * Returns current cycle counter value. Any monotonic unit with enough
+ * resolution to tell sequential packets apart is valid for a custom callback.
  *
- * @param[out] ts Receives current monotonic timestamp in microseconds.
+ * @param[out] ts Receives current monotonic time in cycles.
  * @retval 0 on success.
  * @retval -EINVAL if @p ts is NULL.
  */
@@ -55,9 +53,9 @@ int ludlc_default_get_timestamp(ludlc_timestamp_t *ts)
 		return -EINVAL;
 
 	if (!IS_ENABLED(CONFIG_TIMER_HAS_64BIT_CYCLE_COUNTER)) {
-		*ts = (ludlc_timestamp_t)k_cyc_to_us_floor64(k_cycle_get_32());
+		*ts = (ludlc_timestamp_t)k_cycle_get_32();
 	} else {
-		*ts = (ludlc_timestamp_t)k_cyc_to_us_floor64(k_cycle_get_64());
+		*ts = (ludlc_timestamp_t)k_cycle_get_64();
 	}
 
 	return 0;
@@ -66,9 +64,8 @@ int ludlc_default_get_timestamp(ludlc_timestamp_t *ts)
 /**
  * @brief Requests an immediate transmission.
  *
- * This function signals the LuDLC transmit task/thread (if any) to wake
- * up and attempt to send a packet. It sets a flag to force transmission
- * even if no new data has been queued (e.g., to send a PING with ACK).
+ * Wakes the TX thread and forces a send even when no new data has been
+ * queued, for example to carry a PING with an ACK.
  *
  * @param conn Pointer to the connection structure.
  */

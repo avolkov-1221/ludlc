@@ -434,9 +434,8 @@ ssize_t ludlc_serial_read(struct ludlc_serial_connection *sconn,
 /**
  * @brief Main thread function for the serial receiver (RX).
  *
- * This thread continuously reads bytes from the underlying transport
- * (via `conn->proto->rx_read`) and feeds them into the serial
- * decoder state machine (`ludlc_serial_decode`).
+ * This thread continuously reads bytes from the TTY and feeds them into the
+ * serial decoder state machine (`ludlc_serial_decode`).
  *
  * When a complete, valid packet is decoded, `ludlc_serial_decode`
  * will internally call `ludlc_receive` to process it.
@@ -485,7 +484,7 @@ static void *ludlc_rx_serial_thread(void *arg)
 			if (ludlc_serial_decode(conn, &dec_state, buf[cnt])) {
 				ludlc_timestamp_t ts;
 
-				if (conn->proto->get_timestamp(&ts) == 0) {
+				if (conn->cfg.get_timestamp(&ts) == 0) {
 					ludlc_packet_t *pkt =
 						(ludlc_packet_t *)packet;
 					if((pkt->hdr.id.tx_id &
@@ -785,10 +784,10 @@ void ludlc_serial_connection_destroy(struct ludlc_connection *conn)
  * Opens and configures the TTY, initializes the core connection and starts
  * the RX and TX threads.
  *
- * @param args Platform arguments: port name, baud rate and the checksum.
+ * @param args Platform arguments: port name, baud rate, the checksum and the
+ * cfg to open the link with.
  * @param[out] conn On success, this pointer is updated to point to the
  * new core `ludlc_connection`.
- * @param proto Pointer to protocol hooks (the timestamp).
  * @param cb User-facing event callbacks.
  * @return 0 on success.
  * @return -ENOMEM on allocation failure.
@@ -796,7 +795,6 @@ void ludlc_serial_connection_destroy(struct ludlc_connection *conn)
  */
 int ludlc_serial_connection_create(const ludlc_platform_args_t *args,
 		struct ludlc_connection **conn,
-		const struct ludlc_proto_cb *proto,
 		const struct ludlc_conn_cb *cb)
 {
 	struct ludlc_serial_connection *sconn = NULL;
@@ -826,7 +824,8 @@ int ludlc_serial_connection_create(const ludlc_platform_args_t *args,
 	LUDLC_RING_BUF_INIT(&sconn->tx_fifo, sconn->tx_buf, TX_BUF_SIZE);
 
 	/* Initialize the core LuDLC connection */
-	ret = ludlc_connection_init(&sconn->conn, proto, cb, sconn);
+	ret = ludlc_connection_init(&sconn->conn, ludlc_args_conn_cfg(args), cb,
+				    sconn);
 	if (ret) {
 		goto err;
 	}

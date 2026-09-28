@@ -118,11 +118,7 @@
 		LUDLC_WQ_UNLOCK(wq);		\
 	} while (0)
 
-/**
- * @brief LuDLC timestamp type for POSIX.
- * @details Defined as uint64_t, typically representing microseconds.
- */
-typedef uint64_t 			ludlc_timestamp_t;
+/* ludlc_timestamp_t comes from ludlc_types.h. */
 
 /**
  * @brief Platform atomic type, mapping to C11 `atomic_uint`.

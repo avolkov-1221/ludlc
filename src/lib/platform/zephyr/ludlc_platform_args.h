@@ -12,13 +12,16 @@
  * A caller fills them in, or starts from
  * ludlc_default_serial_platform_args(), and passes them to
  * ludlc_serial_connection_create(). The checksum is borrowed and must
- * outlive the connection.
+ * outlive the connection; the connection settings are copied when it is
+ * created.
  */
 
 #ifndef __LUDLC_PLATFORM_ARGS_H__
 #define __LUDLC_PLATFORM_ARGS_H__
 
 #include <zephyr/device.h>
+#include <ludlc_proto.h>
+
 struct ludlc_csum;
 
 typedef struct ludlc_platform_args {
@@ -31,6 +34,24 @@ typedef struct ludlc_platform_args {
 	 */
 	const struct ludlc_csum *csum;
 
+	/**
+	 * @brief What to open the link with: its clock.
+	 *
+	 * Copied into the connection at create.
+	 */
+	struct ludlc_conn_cfg cfg;
 } ludlc_platform_args_t;
+
+/**
+ * @brief The cfg @p args carries, or the defaults when @p args is NULL.
+ *
+ * Returned as given. The checksum is not part of it: the transport holds
+ * that.
+ */
+static inline const struct ludlc_conn_cfg *
+ludlc_args_conn_cfg(const ludlc_platform_args_t *args)
+{
+	return args ? &args->cfg : &ludlc_conn_cfg_default;
+}
 
 #endif /* __LUDLC_PLATFORM_ARGS_H__ */

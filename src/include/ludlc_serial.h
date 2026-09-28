@@ -19,17 +19,17 @@
  * This function allocates resources, initializes the connection state,
  * and typically spawns the TX and RX threads for a serial transport.
  *
- * @param args Platform arguments: the port, its line settings and the
- * @ref ludlc_csum to run.
+ * @param args Platform arguments: the port, its line settings, the
+ * @ref ludlc_csum to run and the @ref ludlc_conn_cfg to open the link
+ * with, clock included.
  * @param[out] conn A pointer to a `struct ludlc_connection*` that will be
  * updated to point to the newly created connection.
- * @param proto Pointer to protocol services (the timestamp hook).
  * @param cb Pointer to the user-facing event callbacks.
  * @return 0 on success, or a negative error code on failure.
  */
-int ludlc_serial_connection_create(const ludlc_platform_args_t *args,
+int ludlc_serial_connection_create(
+		const ludlc_platform_args_t *args,
 		struct ludlc_connection **conn,
-		const struct ludlc_proto_cb *proto,
 		const struct ludlc_conn_cb *cb
 		);
 

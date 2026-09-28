@@ -107,8 +107,8 @@ static inline struct ludlc_connection *ludlc_timer_arg_to_conn(
 }
 
 static inline int ludlc_platform_start_timer(ludlc_platform_timer_t *timer,
-					     ludlc_timestamp_t delay,
-					     ludlc_timestamp_t period)
+					     const unsigned int delay,
+					     const unsigned int period)
 {
 	if (timer) {
 		k_timer_start(timer, K_USEC(delay),

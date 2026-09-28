@@ -833,13 +833,6 @@ static const struct ludlc_csum csum = {
 };
 
 /**
- * @brief The `ludlc_proto_cb` implementation for the POSIX serial transport.
- */
-static struct ludlc_proto_cb proto = {
-	.get_timestamp = ludlc_default_get_timestamp,
-};
-
-/**
  * @brief Signal handler for SIGINT (Ctrl+C).
  *
  * Sets the global stop flag to request a graceful shutdown.
@@ -1149,8 +1142,7 @@ int main (int argc, char **argv)
 		}
 		ui_logf("creating connection...");
 
-		ret = ludlc_serial_connection_create(&ser_args, &conn,
-							&proto, &cb);
+		ret = ludlc_serial_connection_create(&ser_args, &conn, &cb);
 		if ( !ret ) {
 			/* Run interactive menu until user exits or Ctrl+C. */
 			(void)menu_handler(conn);

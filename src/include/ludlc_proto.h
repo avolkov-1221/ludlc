@@ -9,11 +9,10 @@
  * Copyright (C) 2025-2026 Andrey VOLKOV <andrey@volkov.fr> & LuDLC Contributors
  *
  * @details
- * This header holds compile-time protocol limits (window size, ping period,
- * payload bounds, channel IDs), typedefs for IDs and sizes, the small
- * @ref ludlc_proto_cb table the engine uses for time, and the
- * @ref ludlc_csum a transport runs. Serial framing, checksums and byte I/O
- * live in the transport layer.
+ * Compile-time protocol limits (window size, ping period, payload bounds,
+ * channel IDs), ID/size typedefs, and the monotonic timestamp callback the
+ * core keeps on each connection. Serial framing, checksums and byte I/O live
+ * in the transport layer.
  */
 
 #ifndef __LUDLC_PROTO_H__
@@ -200,6 +199,29 @@ typedef uint32_t ludlc_channel_t;
 #endif
 
 /**
+ * @typedef ludlc_get_timestamp_t
+ * @brief Monotonic timestamp callback kept on each connection.
+ *
+ * Any time unit is fine so long as the clock is monotonic and its resolution
+ * can tell two sequential packets apart. Must not jump backward when the wall
+ * clock is adjusted. Kept for the life of the connection.
+ *
+ * @param[out] ts Filled with the current time on success; left unchanged on
+ * failure.
+ * @return 0 on success, or a negative value (e.g. \c -EINVAL if \a ts is NULL,
+ * or \c -errno from the platform clock API).
+ */
+typedef int (*ludlc_get_timestamp_t)(ludlc_timestamp_t *ts);
+
+/**
+ * @brief Default monotonic timestamp.
+ *
+ * Returns timestamp from a monotonic clock. Any units are equally valid
+ * for a custom callback; see @ref ludlc_get_timestamp_t.
+ */
+int ludlc_default_get_timestamp(ludlc_timestamp_t *out_ts);
+
+/**
  * @struct ludlc_csum
  * @brief Checksum a link runs.
  *
@@ -255,34 +277,37 @@ struct ludlc_csum {
 };
 
 /**
- * @struct ludlc_proto_cb
- * @brief Services the LuDLC engine needs from below: a monotonic clock.
+ * @struct ludlc_conn_cfg
+ * @brief Everything a link is opened with.
  *
- * Pass a filled-in instance to @c ludlc_connection_init(). The core uses it for
- * protocol timing (microsecond timestamps). **Framing, encoding and the
- * checksum are not part of this structure** - they are implemented by the
- * serial (or other) transport.
+ * Read at @ref ludlc_connection_init and copied, never borrowed, so a
+ * compound literal will do. A field left at zero takes the build's default;
+ * @ref LUDLC_CONN_CFG_DEFAULT spells those defaults out.
  *
+ * The checksum is not here. It belongs to the transport.
  */
-struct ludlc_proto_cb {
+struct ludlc_conn_cfg {
 	/**
-	 * @brief Monotonic time in microseconds (e.g. @c CLOCK_MONOTONIC on POSIX).
+	 * @brief The clock this link timestamps packets with.
 	 *
-	 * **Mandatory.** Used for RTT-oriented logic and timers; must not jump
-	 * backward when the wall clock is adjusted.
-	 *
-	 * @param[out] ts Filled with the current time on success; left
-	 * unchanged on failure.
-	 * @return 0 on success, or a negative value (e.g. \c -EINVAL
-	 * if \a ts is NULL, or \c -errno from the platform clock API).
+	 * NULL for @ref ludlc_default_get_timestamp, the platform's own
+	 * monotonic clock. A callback of one's own must outlive the
+	 * connection, which keeps it.
 	 */
-	int (*get_timestamp)(ludlc_timestamp_t *ts);
+	ludlc_get_timestamp_t get_timestamp;
 };
 
 /**
- * @brief Default @c get_timestamp for POSIX builds (monotonic, microseconds).
- * @see ludlc_proto_cb::get_timestamp
+ * @def LUDLC_CONN_CFG_DEFAULT
+ * @brief Initializer from the CONFIG_* defaults.
+ *
+ * A zero clock asks for the platform's own.
  */
-int ludlc_default_get_timestamp(ludlc_timestamp_t *out_ts);
+#define LUDLC_CONN_CFG_DEFAULT {					\
+	.get_timestamp = NULL,						\
+}
+
+/** @brief Shared instance of @ref LUDLC_CONN_CFG_DEFAULT. */
+extern const struct ludlc_conn_cfg ludlc_conn_cfg_default;
 
 #endif /* __LUDLC_PROTO_H__ */

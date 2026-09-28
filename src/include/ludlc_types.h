@@ -18,8 +18,8 @@
  * @brief Opaque structure representing a single LuDLC connection.
  *
  * This structure holds the complete internal state of a connection.
- * It is initialized by `ludlc_create_connection` or `ludlc_connection_init`
- * and passed to all API functions.
+ * It is initialized by `ludlc_connection_init`, or by a transport helper
+ * such as `ludlc_serial_connection_create`, and passed to all API functions.
  */
 struct ludlc_connection;
 
@@ -47,6 +47,10 @@ typedef uint64_t ludlc_csum_t;
 #endif
 
 /* --- Timestamps --- */
+/*
+ * Packet timestamps are monotonic values from ludlc_get_timestamp_t: any unit
+ * is fine so long as consecutive packets can be told apart.
+ */
 #ifndef CONFIG_LUDLC_TIMESTAMP_BITS
 #define CONFIG_LUDLC_TIMESTAMP_BITS 64
 #endif
