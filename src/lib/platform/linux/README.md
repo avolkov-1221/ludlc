@@ -35,7 +35,10 @@ In DT, a link is a node on the bus that carries it:
 [`ludlc,spi.yaml`](ludlc,spi.yaml) on SPI. Both refer to
 [`ludlc,link-common.yaml`](ludlc,link-common.yaml) for what every link has
 whatever carries it: the framing, the checksum, the payload size, the channel
-tag, and the devices below the link.
+tag, and the devices below the link. A Zephyr peer's binding includes the same
+link properties from
+[`ludlc,link-common.yaml`](../../../../zephyr/dts/bindings/ludlc/ludlc,link-common.yaml)
+in the Zephyr format, so both ends can say the same thing about their link.
 
 ## Device model
 

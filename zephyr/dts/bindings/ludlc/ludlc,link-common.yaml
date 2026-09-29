@@ -1,0 +1,65 @@
+# SPDX-License-Identifier: (Apache-2.0 OR GPL-2.0-or-later)
+#
+# @file ludlc,link-common.yaml
+#
+# @brief Devicetree binding of the properties both ends of a LuDLC link must
+# agree on.
+#
+# @copyright
+# Copyright (C) 2025-2026 Andrey VOLKOV <andrey@volkov.fr> & LuDLC Contributors
+
+description: |
+  The properties of a LuDLC link whatever carries it, for the binding of a node
+  describing one end of a link to include:
+
+    include: ludlc,link-common.yaml
+
+  Both ends of a link have to agree on all of them, so the other end describes
+  them with the same names and values. A Linux end reads them through the
+  binding of the same name in src/lib/platform/linux/, which is in the
+  dt-schema format and cannot be included here; the two files change together.
+
+  Only keys every recent Zephyr release accepts are used, since an included
+  file is merged into the binding that includes it. The ranges are therefore
+  given in the descriptions, and the core checks them when the link opens.
+
+properties:
+  ludlc,framing:
+    type: string
+    enum:
+      - "cobs"
+      - "hdlc"
+      - "raw"
+    description: |
+      How a frame is delimited on the wire. Both ends must agree, and each
+      transport takes only the framings its wire can carry: hdlc and cobs on
+      a UART, raw and cobs on SPI.
+
+  ludlc,csum:
+    type: string
+    enum:
+      - "none"
+      - "crc16-ccitt-pr0"
+      - "crc16-pr0"
+      - "crc16-x25-pr1"
+      - "crc32-ccitt-pr0"
+    description: |
+      The frame checksum, named for the algorithm and the bit order it is
+      computed in, or none for frames that carry no checksum. Both ends must
+      agree.
+
+  ludlc,max-payload:
+    type: int
+    description: |
+      The largest payload the link carries, in octets, at least 1. The
+      transport adds the header and the checksum to get the frame. It is the
+      peer's limit that matters, the smaller of the two ends deciding.
+
+  ludlc,channel-tag-bits:
+    type: int
+    default: 0
+    description: |
+      How many top bits of the channel field carry a tag for the application
+      rather than select a channel. A link with 32 channels on an 8-bit field
+      can spare 3. The tag must leave at least one bit to the channel, and
+      room for the control channel below it. Both ends must agree.

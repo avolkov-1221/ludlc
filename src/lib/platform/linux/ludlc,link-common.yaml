@@ -38,6 +38,11 @@ description: |
   leaving the link on its default: one that comes up misconfigured is easier
   to diagnose from the far end than one that does not come up at all.
 
+  A Zephyr peer describes its end with the same four properties, names and
+  values, through the Zephyr binding of the same name in the LuDLC tree,
+  zephyr/dts/bindings/ludlc/. The two formats cannot share a file, so the two
+  files change together.
+
 select: false
 
 properties:
