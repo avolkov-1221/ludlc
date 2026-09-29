@@ -30,11 +30,19 @@ if(CONFIG_LUDLC_SPI_CONN)
 	)
 endif(CONFIG_LUDLC_SPI_CONN)
 
+# The checksums belong to the link, whichever transport carries it.
+if(CONFIG_LUDLC_SERIAL_CONN OR CONFIG_LUDLC_SPI_CONN)
+	set(CSUM_SRC
+		${CMAKE_CURRENT_SOURCE_DIR}/ludlc_zephyr_csum.c
+	)
+endif()
+
 # Propagate variables up to the parent(s)
 set(PLATFORM_SRC
 	${COMMON}
 	${SERIAL_SRC}
 	${SPI_SRC}
+	${CSUM_SRC}
 	CACHE INTERNAL "zephyr sources"
 )
 

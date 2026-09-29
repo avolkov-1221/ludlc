@@ -90,6 +90,31 @@ typedef struct ludlc_platform_args {
 } ludlc_platform_args_t;
 
 /**
+ * @name The checksums this port provides
+ *
+ * Under the names the Linux port gives them, for @c csum above. Both ends of
+ * a link must run the same one; CRC-16/KERMIT is what they run unless told
+ * otherwise. The 32-bit one needs a CONFIG_LUDLC_CSUM_BITS of 32 or more.
+ * @{
+ */
+
+/** @brief CRC-16/KERMIT: the reflected 0x1021, seeded with zero. */
+extern const struct ludlc_csum ludlc_crc16_ccitt_pr0;
+
+/** @brief HDLC FCS-16, as X.25 and PPP send it. */
+extern const struct ludlc_csum ludlc_crc16_x25_pr1;
+
+/** @brief CRC-16/ARC: the reflected 0x8005, seeded with zero. */
+extern const struct ludlc_csum ludlc_crc16_pr0;
+
+#if CONFIG_LUDLC_CSUM_BITS >= 32
+/** @brief The reflected CRC-32, seeded with zero and not complemented. */
+extern const struct ludlc_csum ludlc_crc32_ccitt_pr0;
+#endif
+
+/** @} */
+
+/**
  * @brief The cfg @p args carries, or the defaults when @p args is NULL.
  *
  * Returned as given. The checksum is not part of it: the transport holds

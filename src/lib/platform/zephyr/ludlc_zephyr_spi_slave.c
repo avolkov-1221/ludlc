@@ -25,7 +25,6 @@
 
 #include <zephyr/kernel.h>
 #include <zephyr/device.h>
-#include <zephyr/sys/crc.h>
 #include <zephyr/sys/util.h>
 #include <zephyr/sys/time_units.h>
 #include <zephyr/drivers/gpio.h>
@@ -619,21 +618,6 @@ err_free:
 
 	return ret;
 }
-
-/*
- * CRC-16/KERMIT, which the other LuDLC platforms send and a Linux controller
- * runs by default under this name.
- */
-static ludlc_csum_t ludlc_crc16_ccitt_pr0_byte(ludlc_csum_t crc, uint8_t data)
-{
-	return crc16_ccitt((uint16_t)crc, &data, 1);
-}
-
-static const struct ludlc_csum ludlc_crc16_ccitt_pr0 = {
-	.name = "crc16-ccitt-pr0",
-	.csum = ludlc_crc16_ccitt_pr0_byte,
-	.octets = 2,
-};
 
 void ludlc_default_spi_slave_platform_args(ludlc_platform_args_t *args)
 {

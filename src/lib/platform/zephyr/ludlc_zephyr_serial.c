@@ -11,7 +11,7 @@
  * UART communication in interrupt-driven and asynchronous modes, the RX and TX
  * threads, and the Zephyr primitives they use: events, FIFOs and memory slabs.
  * The checksum the framing runs comes from the caller in
- * `ludlc_platform_args_t`; this file provides only the default one.
+ * `ludlc_platform_args_t`, from those in ludlc_zephyr_csum.c or its own.
  */
 
 #include <errno.h>
@@ -21,7 +21,6 @@
 #include <zephyr/kernel.h>
 #include <zephyr/device.h>
 #include <zephyr/sys/atomic.h>
-#include <zephyr/sys/crc.h>
 #include <zephyr/spinlock.h>
 #include <zephyr/net_buf.h>
 #include <zephyr/drivers/uart.h>
@@ -785,22 +784,10 @@ err:
 	return ret;
 }
 
-/*
- * CRC-16/KERMIT, which the other LuDLC platforms send and a Linux host runs by
- * default under this name.
+/**
+ * @brief The board's uart0, this build's default framing, and CRC-16/KERMIT,
+ * which the other LuDLC platforms send and a Linux host runs by default.
  */
-static ludlc_csum_t ludlc_crc16_ccitt_pr0_byte(ludlc_csum_t crc, uint8_t data)
-{
-	return crc16_ccitt((uint16_t)crc, &data, 1);
-}
-
-static const struct ludlc_csum ludlc_crc16_ccitt_pr0 = {
-	.name = "crc16-ccitt-pr0",
-	.csum = ludlc_crc16_ccitt_pr0_byte,
-	.octets = 2,
-};
-
-/** @brief The board's uart0, and this build's default framing and checksum. */
 void ludlc_default_serial_platform_args(ludlc_platform_args_t *args)
 {
 	static const ludlc_platform_args_t def_args = {
