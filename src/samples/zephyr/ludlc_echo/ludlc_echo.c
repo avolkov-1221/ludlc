@@ -18,18 +18,16 @@
 #include <zephyr/kernel.h>
 #include <zephyr/logging/log.h>
 #include <zephyr/sys/atomic.h>
-#include <zephyr/sys/crc.h>
 
 #include <errno.h>
 #include <stdint.h>
 #include <string.h>
 
 #include <ludlc.h>
+#include <ludlc_dt.h>
 #include <ludlc_serial.h>
 
 #if defined(CONFIG_LUDLC_ECHO_SPI)
-#include <zephyr/drivers/gpio.h>
-
 #include <ludlc_spi_slave.h>
 #endif
 
@@ -46,21 +44,6 @@ enum {
 #if CONFIG_LUDLC_ECHO_PERIODIC_TX
 	PERIODIC_TX_BUSY_F,
 #endif
-};
-
-static ludlc_csum_t ludlc_csum_byte(ludlc_csum_t crc, uint8_t data)
-{
-	return crc16_ccitt(crc, &data, 1);
-}
-
-/*
- * CRC-16/KERMIT: seed and residual zero, two octets on the wire, as LuDLC peers
- * speak. Passed to the serial transport, not to the core: the checksum belongs
- * to the link.
- */
-static const struct ludlc_csum csum = {
-	.csum = ludlc_csum_byte,
-	.octets = 2,
 };
 
 static int send_echo_resp(struct ludlc_connection *conn, const uint8_t *data,
@@ -219,22 +202,17 @@ static struct ludlc_conn_cb demo_callbacks = {
 
 #if defined(CONFIG_LUDLC_ECHO_SPI)
 
-#if DT_NODE_HAS_PROP(DT_PATH(zephyr_user), ludlc_data_ready_gpios)
-#define ECHO_DATA_READY							\
-	GPIO_DT_SPEC_GET(DT_PATH(zephyr_user), ludlc_data_ready_gpios)
-#else
-/* No line on this board, so the controller polls instead of being told. */
-#define ECHO_DATA_READY		{ 0 }
-#endif
+/* The link the board overlay describes on its SPI controller. */
+#define ECHO_LINK	DT_COMPAT_GET_ANY_STATUS_OKAY(ludlc_spi_peripheral)
+
+BUILD_ASSERT(DT_NODE_EXISTS(ECHO_LINK),
+	     "describe the link with a ludlc,spi-peripheral node");
 
 /** @brief Bring the link up on the SPI peripheral the board describes. */
 static int echo_link_up(struct ludlc_connection **conn)
 {
-	static const ludlc_platform_args_t arg = {
-		.dev = DEVICE_DT_GET(DT_NODELABEL(spi1)),
-		.csum = &csum,
-		.spi.data_ready = ECHO_DATA_READY,
-	};
+	static const ludlc_platform_args_t arg =
+		LUDLC_SPI_PERIPHERAL_ARGS_DT(ECHO_LINK);
 
 	LOG_INF("Using SPI device: %s, data-ready: %s", arg.dev->name,
 		arg.spi.data_ready.port ? arg.spi.data_ready.port->name
@@ -243,13 +221,17 @@ static int echo_link_up(struct ludlc_connection **conn)
 	return ludlc_spi_slave_connection_create(&arg, conn, &demo_callbacks);
 }
 #else
-/** @brief Bring the link up on uart0. */
+
+/* The link the board overlay describes on its UART. */
+#define ECHO_LINK	DT_COMPAT_GET_ANY_STATUS_OKAY(ludlc_uart)
+
+BUILD_ASSERT(DT_NODE_EXISTS(ECHO_LINK),
+	     "describe the link with a ludlc,uart node");
+
+/** @brief Bring the link up on the UART the board describes. */
 static int echo_link_up(struct ludlc_connection **conn)
 {
-	static const ludlc_platform_args_t arg = {
-		.dev = DEVICE_DT_GET(DT_NODELABEL(uart0)),
-		.csum = &csum,
-	};
+	static const ludlc_platform_args_t arg = LUDLC_UART_ARGS_DT(ECHO_LINK);
 
 	LOG_INF("Using UART device: %s", arg.dev->name);
 

@@ -1,7 +1,15 @@
-/*
+/* SPDX-License-Identifier: (Apache-2.0 OR GPL-2.0-or-later) */
+/**
+ * @file native_sim.overlay
+ *
+ * @brief Devicetree overlay for the echo sample on native_sim.
+ *
+ * @copyright
  * Copyright (C) 2025-2026 Andrey VOLKOV <andrey@volkov.fr> & LuDLC Contributors
  *
- * SPDX-License-Identifier: (Apache-2.0 OR GPL-2.0-or-later)
+ * @details
+ * It puts the link on a native TTY UART, /dev/ttyV0 at 115200 baud, framed and
+ * checked as the host's: HDLC framing and CRC-16/KERMIT.
  */
 
 / {
@@ -10,5 +18,12 @@
 		compatible = "zephyr,native-tty-uart";
 		current-speed = <115200>;
 		serial-port = "/dev/ttyV0";
+
+		/* The link the sample opens, framed and checked as the host's. */
+		ludlc-link {
+			compatible = "ludlc,uart";
+			ludlc,framing = "hdlc";
+			ludlc,csum = "crc16-ccitt-pr0";
+		};
 	};
 };

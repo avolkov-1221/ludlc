@@ -20,6 +20,12 @@ instead, with this board as the peripheral and a Linux host running
 ``ludlc_spi_master`` as the controller; see `Over SPI`_ below. Which transport
 is used is the only difference between the two - the sample logic is the same.
 
+Either way the board overlay describes the link with a ``ludlc,uart`` or a
+``ludlc,spi-peripheral`` node, which the sample opens with
+``LUDLC_UART_ARGS_DT()`` or ``LUDLC_SPI_PERIPHERAL_ARGS_DT()`` from
+``ludlc_dt.h``. The node also says what both ends must agree on: the framing,
+the checksum, the payload size and the channel tag.
+
 Both configurations are marked ``build_only`` in ``sample.yaml``.
 
 Requirements
@@ -54,7 +60,8 @@ Over SPI
 
 ``boards/nucleo_g0b1re.conf`` moves the link off the UART and onto ``spi1``,
 which frees ``usart2`` - the ST-LINK's virtual COM port - to carry the log.
-``boards/nucleo_g0b1re.overlay`` names the GPIO the data-ready line uses and
+``boards/nucleo_g0b1re.overlay`` describes the link on ``spi1``, with the chip
+select it answers on, the checksum and the GPIO the data-ready line uses, and
 documents the wiring; both files are the place to start when porting this to
 another board.
 

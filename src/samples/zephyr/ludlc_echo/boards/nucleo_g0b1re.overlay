@@ -11,8 +11,9 @@
  * @details
  * spi1 comes enabled with hardware NSS from the board devicetree, on the pins
  * the Arduino header calls D10 to D13, so nothing here has to say so again.
- * What is left is the data-ready line, which is this board's rather than the
- * SoC's: the peripheral raises it to tell the controller it has a frame
+ * What is left is the link on it: the chip select it answers on, the checksum
+ * both ends run, and the data-ready line, which is this board's rather than
+ * the SoC's: the peripheral raises it to tell the controller it has a frame
  * waiting, and any spare GPIO will do.
  *
  * Wiring to a Linux host running ludlc_spi_master:
@@ -24,13 +25,17 @@
  *   D9  PC7  ready -> controller interrupt line (interrupts-extended)
  *                     ground, common to both
  *
- * Drop the ludlc-data-ready-gpios property to run without the line. The link
- * still works: the controller falls back to polling, and a frame this end
- * raises waits for the next poll rather than being fetched.
+ * Drop the data-ready-gpios property to run without the line. The link still
+ * works: the controller falls back to polling, and a frame this end raises
+ * waits for the next poll rather than being fetched.
  */
 
-/ {
-	zephyr,user {
-		ludlc-data-ready-gpios = <&gpioc 7 GPIO_ACTIVE_HIGH>;
+&spi1 {
+	ludlc-link@0 {
+		compatible = "ludlc,spi-peripheral";
+		reg = <0>;
+		spi-max-frequency = <DT_FREQ_M(8)>;
+		data-ready-gpios = <&gpioc 7 GPIO_ACTIVE_HIGH>;
+		ludlc,csum = "crc16-ccitt-pr0";
 	};
 };
