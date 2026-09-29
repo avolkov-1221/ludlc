@@ -336,7 +336,8 @@ void ludlc_watchdog_rearm(struct ludlc_connection *conn);
  * nothing to read: each expands to the CONFIG_* constant it was built with,
  * so a window mask becomes an immediate and the connection stores no settings
  * at all. With @ref CONFIG_LUDLC_MULTI_CONN the same expressions become one
- * load from the link's own copy.
+ * load from the link's own copy, save the tag's where every link runs the
+ * same one.
  *
  * Each takes the connection, evaluates it once, and ignores it where the
  * answer is a constant, which is what the cast to void is for.
@@ -373,7 +374,44 @@ void ludlc_watchdog_rearm(struct ludlc_connection *conn);
 
 /** @brief Watchdog period for this link: three keepalive periods. */
 #define ludlc_conn_wd_time(conn)	(3UL * ludlc_conn_ping_time(conn))
+
+#if LUDLC_CHAN_TAG_PER_LINK
+/** @brief Top bits of the channel field that carry this link's tag. */
+#define ludlc_conn_chan_tag_bits(conn)	((unsigned int)(conn)->cfg.chan_tag_bits)
+#else /* every link runs the build's tag */
+#define ludlc_conn_chan_tag_bits(conn)					\
+	((void)(conn), (unsigned int)CONFIG_LUDLC_CHAN_TAG_BITS)
+#endif
+
+/**
+ * @brief The channel field bits below a tag @p bits wide, which select the
+ * channel.
+ *
+ * @p bits must be below @ref CONFIG_LUDLC_CHANNEL_BITS, since shifting by the
+ * whole width of the field is undefined; @ref ludlc_chan_tag_bits_ok checks
+ * that first.
+ */
+#define LUDLC_CHAN_ID_MASK(bits)					\
+	((ludlc_channel_t)((ludlc_channel_t)~(ludlc_channel_t)0 >> (bits)))
+
+/** @brief The channel field bits that select the channel on this link. */
+#define ludlc_conn_chan_id_mask(conn)					\
+	LUDLC_CHAN_ID_MASK(ludlc_conn_chan_tag_bits(conn))
 /** @} */
+
+/**
+ * @brief Whether a link can run a tag @p bits wide.
+ *
+ * The tag must leave the channel at least one bit, and room below it for
+ * @ref CONFIG_LUDLC_CONTROL_CHANNEL, which a tagged link still uses for its
+ * handshake.
+ */
+static inline bool ludlc_chan_tag_bits_ok(unsigned int bits)
+{
+	return bits < CONFIG_LUDLC_CHANNEL_BITS &&
+	       (CONFIG_LUDLC_CONTROL_CHANNEL & LUDLC_CHAN_ID_MASK(bits)) ==
+			CONFIG_LUDLC_CONTROL_CHANNEL;
+}
 
 /**
  * @name Reporting confirmations

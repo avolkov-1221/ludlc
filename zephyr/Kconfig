@@ -52,11 +52,13 @@ config LUDLC_MULTI_CONN
 	default n
 	help
 	  When disabled, every link runs LUDLC_CONN_CFG_DEFAULT (the CONFIG_*
-	  values for window, payload size, ping period and default TTL).
+	  values for window, payload size, ping period and default TTL) and
+	  the channel tag LUDLC_CHAN_TAG_BITS.
 
 	  When enabled, each link carries a ludlc_conn_cfg in the platform
-	  args: window (up to LUDLC_WINDOW), max_payload, ping_time and
-	  default_ttl may differ per connection.
+	  args: window (up to LUDLC_WINDOW), max_payload, ping_time,
+	  default_ttl and, without LUDLC_COMMON_CHAN_TAG, chan_tag_bits may
+	  differ per connection.
 
 config LUDLC_ID_BITS
 	int "Packet ID width (bits)"
@@ -114,6 +116,28 @@ config LUDLC_CONTROL_CHANNEL
 	default 0
 	help
 	  Reserved channel used for handshake/control packets.
+
+config LUDLC_COMMON_CHAN_TAG
+	bool "Same channel tag on every link"
+	depends on LUDLC_MULTI_CONN
+	help
+	  Split the channel field of every link at LUDLC_CHAN_TAG_BITS,
+	  rather than as the ludlc_conn_cfg of each link says. The width is
+	  then a constant, and ludlc_conn_cfg has no chan_tag_bits. A build
+	  without LUDLC_MULTI_CONN always works this way.
+
+config LUDLC_CHAN_TAG_BITS
+	int "Channel tag width (bits)"
+	range 0 7 if LUDLC_CHANNEL_BITS = 8
+	range 0 15 if LUDLC_CHANNEL_BITS = 16
+	range 0 31
+	default 0
+	depends on !LUDLC_MULTI_CONN || LUDLC_COMMON_CHAN_TAG
+	help
+	  Top bits of the channel field that carry a tag for the
+	  application on every link. The bits below the tag select the
+	  channel, and must still hold LUDLC_CONTROL_CHANNEL. Zero gives the
+	  whole field to the channel. Both ends of a link must agree on it.
 
 config LUDLC_DEFAULT_TTL
 	int "Default transmit retry budget (TTL)"

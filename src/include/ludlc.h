@@ -44,11 +44,14 @@ struct ludlc_conn_cb {
 	 * @brief Called when a new data packet is received.
 	 *
 	 * @param conn The connection that received the data.
-	 * @param chan The channel on which the data was received.
+	 * @param chan The channel field of the packet: the channel on which
+	 * 	       the data was received, with its tag on a link that has
+	 *             one. Check @ref ludlc_chan_id() and @ref ludlc_chan_tag()
 	 * @param data Pointer to the received payload data buffer.
 	 * @param data_size The size of the received payload in bytes.
 	 * @param tstamp Monotonic timestamp when the transport received the
-	 * packet. Unit is whatever @ref ludlc_get_timestamp_t returns.
+	 *               packet. Unit is whatever @ref ludlc_get_timestamp_t
+	 *               returns.
 	 * @param user_arg The user-defined context pointer.
 	 */
 	void (*on_recv)(struct ludlc_connection *conn,
@@ -69,7 +72,8 @@ struct ludlc_conn_cb {
 	 * @param conn The connection handling the packet.
 	 * @param error 0 on successful acknowledgment, or a negative
 	 * error code (e.g., -EPIPE, -EREMOTEIO) on failure.
-	 * @param chan The channel on which the packet was sent.
+	 * @param chan The channel field the packet was sent with, its tag
+	 * included.
 	 * @param data Pointer to the payload data that was sent.
 	 * @param data_size The size of the payload data.
 	 * @param user_arg The user-defined context pointer.
@@ -100,7 +104,7 @@ struct ludlc_conn_cb {
  * @param user_ctx A user-defined context pointer passed to all callbacks.
  * @return 0 on success.
  * @return -EINVAL if @p conn is NULL, or if @p cfg names a checksum, a frame,
- * a window or a TTL this build cannot hold.
+ * a window, a TTL or a tag this build cannot hold.
  * @return -ENOMEM if the queue the window needs could not be allocated. A
  * build with a single connection embeds that queue in the connection and
  * never returns this.
@@ -132,13 +136,52 @@ ludlc_payload_size_t ludlc_conn_max_payload(
 		const struct ludlc_connection *conn);
 
 /**
+ * @name The tag in the channel field
+ *
+ * A link with a tag splits the channel field of every packet in two: the bits
+ * below the tag select the channel, and the tag belongs to the application.
+ * Each link sets the width of its tag in its @ref ludlc_conn_cfg, unless the
+ * build runs @ref CONFIG_LUDLC_CHAN_TAG_BITS on every link, as it does with
+ * one connection or with @ref CONFIG_LUDLC_COMMON_CHAN_TAG.
+ *
+ * @ref ludlc_enqueue_data and @ref ludlc_send_urgent_data take the whole
+ * field, and @c on_recv and @c on_confirm pass it back as it was sent, so a
+ * tag reaches the peer and comes back with the confirmation. On a link with
+ * no tag, and for a NULL @p conn, the helpers below return the channel
+ * unchanged and a zero tag.
+ *
+ * The control channel carries no tag. A caller cannot send on it with one,
+ * and a packet that arrives with one is dropped.
+ * @{
+ */
+
+/**
+ * @brief The channel field for channel @p id with @p tag on @p conn.
+ *
+ * Bits of @p id or @p tag that do not fit their part are dropped.
+ */
+ludlc_channel_t ludlc_chan_make(const struct ludlc_connection *conn,
+		ludlc_channel_t id, ludlc_channel_t tag);
+
+/** @brief The channel @p chan selects on @p conn, without its tag. */
+ludlc_channel_t ludlc_chan_id(const struct ludlc_connection *conn,
+		ludlc_channel_t chan);
+
+/** @brief The tag @p chan carries on @p conn. */
+ludlc_channel_t ludlc_chan_tag(const struct ludlc_connection *conn,
+		ludlc_channel_t chan);
+
+/** @} */
+
+/**
  * @brief Enqueues a data packet for transmission.
  *
  * Adds a data payload to the transmit queue. The core logic will
  * automatically handle packetization, acknowledgment, and retries.
  *
  * @param conn The connection to send data on.
- * @param dst_chan The destination channel for the packet.
+ * @param dst_chan The destination channel for the packet, with its tag on a
+ * link that has one. See @ref ludlc_chan_make.
  * @param buf Pointer to the payload data buffer.
  * @param size The size of the payload, up to what this link carries. See
  * @ref ludlc_conn_max_payload.
@@ -148,8 +191,8 @@ ludlc_payload_size_t ludlc_conn_max_payload(
  * of 0 means a single attempt. Values above @ref LUDLC_MAX_TTL are clamped.
  * @return 0 on success.
  * @return -EINVAL if @p buf is NULL and @p size is not, if @p size is too
- * large, or if @p dst_chan is @ref CONFIG_LUDLC_CONTROL_CHANNEL, which is
- * reserved for the core.
+ * large, or if @p dst_chan selects @ref CONFIG_LUDLC_CONTROL_CHANNEL, with a
+ * tag or without, that channel being reserved for the core.
  * @return -EAGAIN if the transmit queue (window) is full.
  */
 int ludlc_enqueue_data(struct ludlc_connection *conn,
@@ -171,7 +214,8 @@ int ludlc_enqueue_data(struct ludlc_connection *conn,
  * @ref ludlc_enqueue_data for data that must arrive.
  *
  * @param conn The connection to send data on.
- * @param dst_chan The destination channel for the packet.
+ * @param dst_chan The destination channel for the packet, with its tag on a
+ * link that has one. See @ref ludlc_chan_make.
  * @param buf Pointer to the payload data buffer. As for
  * @ref ludlc_enqueue_data, the buffer is referenced rather than copied and
  * must stay valid until the packet is confirmed.
@@ -179,8 +223,8 @@ int ludlc_enqueue_data(struct ludlc_connection *conn,
  * @ref ludlc_conn_max_payload.
  * @return 0 on success.
  * @return -EINVAL if @p buf is NULL, if @p size is 0 or too large, or if
- * @p dst_chan is @ref CONFIG_LUDLC_CONTROL_CHANNEL, which is reserved for
- * the core.
+ * @p dst_chan selects @ref CONFIG_LUDLC_CONTROL_CHANNEL, with a tag or
+ * without, that channel being reserved for the core.
  * @return -ENOTCONN if the connection is not established. Such a packet is
  * sent immediately or not at all, so it does not wait for a link.
  * @return -EAGAIN if the previous unnumbered packet has not been sent yet.

@@ -121,3 +121,11 @@ provides `LUDLC_PLATFORM_CSUM_OCTETS` and three hooks for each direction,
 `ludlc_platform_csum_rx_init()`, `_rx()` and `_rx_ok()` for receive. Each
 direction may use its own backend, a CRC unit on one side and software on the
 other. `ludlc_private.h` describes the contract.
+
+The tag in the channel field is fixed the same way. A port with one
+connection runs `CONFIG_LUDLC_CHAN_TAG_BITS` on its link, zero and so no tag
+by default, and a port with several can have every link run it by setting
+`-DCONFIG_LUDLC_COMMON_CHAN_TAG=1`. The width is then a constant the core
+folds into its masks, and `struct ludlc_conn_cfg` has no `chan_tag_bits`.
+Otherwise each link sets its own there. Both ends of a link must agree on
+it.

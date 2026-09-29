@@ -276,6 +276,49 @@ typedef uint32_t ludlc_channel_t;
 #endif
 
 /**
+ * @def CONFIG_LUDLC_COMMON_CHAN_TAG
+ * @brief Every link runs the tag @ref CONFIG_LUDLC_CHAN_TAG_BITS wide.
+ *
+ * The tag counterpart of CONFIG_LUDLC_SINGLE_CSUM, for a build with several
+ * connections whose links all split the channel field the same way. The width
+ * is then a constant the core folds into its masks, and @ref ludlc_conn_cfg
+ * has no @c chan_tag_bits. A build with one connection always works this way.
+ */
+#ifndef CONFIG_LUDLC_COMMON_CHAN_TAG
+#define CONFIG_LUDLC_COMMON_CHAN_TAG	0
+#endif
+
+/**
+ * @def LUDLC_CHAN_TAG_PER_LINK
+ * @brief Whether each link sets the width of its tag in its
+ * @ref ludlc_conn_cfg, rather than run @ref CONFIG_LUDLC_CHAN_TAG_BITS.
+ */
+#define LUDLC_CHAN_TAG_PER_LINK						\
+	(CONFIG_LUDLC_MULTI_CONN && !CONFIG_LUDLC_COMMON_CHAN_TAG)
+
+/**
+ * @def CONFIG_LUDLC_CHAN_TAG_BITS
+ * @brief Top bits of the channel field that carry a tag, on every link.
+ *
+ * Read where the build runs one tag on every link: with one connection, or
+ * with @ref CONFIG_LUDLC_COMMON_CHAN_TAG. Zero, the default, gives the whole
+ * field to the channel. The tag must leave at least one bit to the channel,
+ * and room for @ref CONFIG_LUDLC_CONTROL_CHANNEL below it. See
+ * @ref ludlc_chan_make().
+ */
+#ifndef CONFIG_LUDLC_CHAN_TAG_BITS
+#define CONFIG_LUDLC_CHAN_TAG_BITS	0
+#elif LUDLC_CHAN_TAG_PER_LINK && (CONFIG_LUDLC_CHAN_TAG_BITS) != 0
+#error CONFIG_LUDLC_CHAN_TAG_BITS is unused: each link sets its tag in its cfg
+#elif (CONFIG_LUDLC_CHAN_TAG_BITS) < 0 || \
+	(CONFIG_LUDLC_CHAN_TAG_BITS) >= (CONFIG_LUDLC_CHANNEL_BITS)
+#error CONFIG_LUDLC_CHAN_TAG_BITS must leave the channel at least one bit
+#elif ((CONFIG_LUDLC_CONTROL_CHANNEL) >> \
+	((CONFIG_LUDLC_CHANNEL_BITS) - (CONFIG_LUDLC_CHAN_TAG_BITS))) != 0
+#error CONFIG_LUDLC_CHAN_TAG_BITS leaves no room for CONFIG_LUDLC_CONTROL_CHANNEL
+#endif
+
+/**
  * @def LUDLC_CTRL_DISCONNECT
  * @brief Control channel opcode announcing that the sender is leaving.
  *
@@ -394,9 +437,9 @@ struct ludlc_csum {
  *
  * Read at @ref ludlc_connection_init and copied, never borrowed, so a
  * compound literal will do. Constant for the life of the link, and both ends
- * must agree on @c max_payload and @c window. A field left at zero takes the
- * build's default, so a cfg naming one setting need not name the rest;
- * @ref LUDLC_CONN_CFG_DEFAULT spells those defaults out.
+ * must agree on @c max_payload, @c window and @c chan_tag_bits. A field left
+ * at zero takes the build's default, so a cfg naming one setting need not
+ * name the rest; @ref LUDLC_CONN_CFG_DEFAULT spells those defaults out.
  *
  * The checksum is not here. It belongs to the transport, which subtracts its
  * width to get @c max_payload. The clock is present whatever the build. The
@@ -405,7 +448,8 @@ struct ludlc_csum {
  * constant the build was made with, the core reads them as immediates and the
  * connection stores none of them. Naming one of them then does not compile.
  * That is deliberate: a build that cannot hold a payload size must not appear
- * to accept one.
+ * to accept one. The tag goes the same way where every link runs the same
+ * one; see @ref LUDLC_CHAN_TAG_PER_LINK.
  */
 struct ludlc_conn_cfg {
 	/**
@@ -449,6 +493,20 @@ struct ludlc_conn_cfg {
 	 */
 	uint8_t default_ttl;
 #endif /* CONFIG_LUDLC_MULTI_CONN */
+
+#if LUDLC_CHAN_TAG_PER_LINK
+	/**
+	 * @brief Top bits of the channel field that carry a tag.
+	 *
+	 * The bits below the tag select the channel, and the tag belongs to
+	 * the application: a link with 32 channels on an 8-bit field can
+	 * carry a 3-bit tag in every packet at no cost in payload. Zero gives
+	 * the whole field to the channel. The tag must leave at least one bit
+	 * to the channel, and room for @ref CONFIG_LUDLC_CONTROL_CHANNEL below
+	 * it. See @ref ludlc_chan_make().
+	 */
+	uint8_t chan_tag_bits;
+#endif
 };
 
 /**
@@ -456,7 +514,8 @@ struct ludlc_conn_cfg {
  * @brief Initializer from the CONFIG_* defaults.
  *
  * A zero @c max_payload asks the core for the largest payload this build
- * holds, and a zero clock for the platform's own. With one connection the
+ * holds, and a zero clock for the platform's own. A link opened with it has
+ * no tag, unless the build runs one on every link. With one connection the
  * clock is the only setting a caller may name.
  */
 #if CONFIG_LUDLC_MULTI_CONN

@@ -187,6 +187,14 @@ One channel ID (typically `0`) is reserved for connection
 management (handshake, disconnect). This field is omitted in
 PING packets, but present in unnumbered ones.
 
+A link may give the top bits of the field to a tag, which belongs
+to the application and travels in every packet at no cost in
+payload: a link with 32 channels on an 8-bit field has 3 bits to
+spare. The bits below the tag then select the channel. The width
+of the tag is a property of the link, and both ends must agree
+on it. The reserved channel carries no tag, and a packet that
+selects it with one is dropped.
+
 **`User Payload`:**
 
 Data for a given channel. This field is **optional** for the
@@ -481,8 +489,8 @@ therefore read as the handshake rather than as a restart. The two are told
 apart exactly, a deliberate disconnect no longer being empty.
 
 The control channel is reserved for these packets. Callers cannot send on
-it, as a handshake step and a disconnect are told apart by the shape of the
-packet, which a caller could otherwise imitate.
+it, with a tag or without, as a handshake step and a disconnect are told
+apart by the shape of the packet, which a caller could otherwise imitate.
 
 ## Appendix A: Optional Framing Layer
 

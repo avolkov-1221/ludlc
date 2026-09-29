@@ -88,6 +88,21 @@ static inline bool is_last_handshake_step(ludlc_id_t id)
 }
 
 /**
+ * @brief Checks if a channel field selects the control channel, whatever its
+ * tag.
+ *
+ * @param conn The connection, whose tag is left out of the comparison.
+ * @param chan The channel field of a packet.
+ * @return true if the bits below the tag hold @ref CONFIG_LUDLC_CONTROL_CHANNEL.
+ */
+static inline bool is_ctrl_chan(const struct ludlc_connection *conn,
+				ludlc_channel_t chan)
+{
+	return (chan & ludlc_conn_chan_id_mask(conn)) ==
+		CONFIG_LUDLC_CONTROL_CHANNEL;
+}
+
+/**
  * @brief Allocates the connection's sliding window.
  *
  * Only a multi-connection build allocates, the window size being a runtime
@@ -491,9 +506,10 @@ int ludlc_enqueue_data(struct ludlc_connection *conn,
 
 	/* The control channel belongs to the core, which distinguishes a
 	 * handshake step from a disconnect by the layout of the packet. A
-	 * caller sending on it could imitate either one.
+	 * caller sending on it could imitate either one, and a tag would not
+	 * get it through: the peer drops a tagged control packet.
 	 */
-	if (dst_chan == CONFIG_LUDLC_CONTROL_CHANNEL) {
+	if (is_ctrl_chan(conn, dst_chan)) {
 		return -EINVAL;
 	}
 
@@ -582,7 +598,7 @@ int ludlc_send_urgent_data(struct ludlc_connection *conn,
 	}
 
 	/* Reserved for the core, as for @ref ludlc_enqueue_data. */
-	if (dst_chan == CONFIG_LUDLC_CONTROL_CHANNEL) {
+	if (is_ctrl_chan(conn, dst_chan)) {
 		return -EINVAL;
 	}
 
@@ -828,7 +844,7 @@ static int rx_handle_nak(struct ludlc_connection *conn, ludlc_id_t num_wait)
  *
  * This function is the core of the receive-side logic. It must be
  * called with the connection lock held. It performs the following steps:
- * 1. Validates packet size.
+ * 1. Validates packet size, and drops a tagged control packet.
  * 2. If not connected, calls @ref rx_handle_handshake.
  * 3. Handles control channel packets: an announced disconnect, and an empty
  *    one, which is a handshake step from a peer that has restarted.
@@ -859,6 +875,18 @@ static int rx_handle_packet(
 		/* Too short to hold a header, yet the checksum is good, so
 		 * the peer is misbehaving. Drop it.
 		 */
+		LUDLC_INC_STATS(conn, dropped);
+		return 0;
+	}
+
+	/* The core never tags the control channel, so a peer that does is
+	 * misbehaving as well, or splits the channel field another way. The
+	 * packet belongs to no channel here. A PING has no channel field.
+	 */
+	if ((!ping ||
+	     ludlc_is_unnumbered_data(packet->hdr.id.tx_id, pkt_sz)) &&
+	    packet->hdr.chan != CONFIG_LUDLC_CONTROL_CHANNEL &&
+	    is_ctrl_chan(conn, packet->hdr.chan)) {
 		LUDLC_INC_STATS(conn, dropped);
 		return 0;
 	}
@@ -1474,8 +1502,8 @@ EXPORT_SYMBOL_GPL(ludlc_connection_cleanup);
  * in all callbacks.
  *
  * @return 0 on success.
- * @return -EINVAL if `conn` is NULL, or if `cfg` names a payload, a window or
- * a TTL this build cannot hold.
+ * @return -EINVAL if `conn` is NULL, or if `cfg` names a payload, a window, a
+ * TTL or a tag this build cannot hold.
  * @return -ENOMEM if the window could not be allocated.
  */
 int ludlc_connection_init(struct ludlc_connection *conn,
@@ -1502,6 +1530,18 @@ int ludlc_connection_init(struct ludlc_connection *conn,
 	conn->cfg.get_timestamp =
 		cfg->get_timestamp ? cfg->get_timestamp
 			   : ludlc_default_get_timestamp;
+
+#if LUDLC_CHAN_TAG_PER_LINK
+	/*
+	 * The tag has to leave a channel, and the control channel has to be
+	 * one of those left: a caller could otherwise reach it with a tag.
+	 * A tag the whole build runs is checked when it is compiled instead.
+	 */
+	if (!ludlc_chan_tag_bits_ok(cfg->chan_tag_bits))
+		return -EINVAL;
+
+	conn->cfg.chan_tag_bits = cfg->chan_tag_bits;
+#endif
 
 #if CONFIG_LUDLC_MULTI_CONN
 
@@ -1593,4 +1633,52 @@ ludlc_payload_size_t ludlc_conn_max_payload(const struct ludlc_connection *conn)
 }
 #ifdef __KERNEL__
 EXPORT_SYMBOL_GPL(ludlc_conn_max_payload);
+#endif
+
+/** @brief The tag width of @p conn, none for a NULL one. */
+static inline unsigned int chan_tag_bits(const struct ludlc_connection *conn)
+{
+	return conn ? ludlc_conn_chan_tag_bits(conn) : 0;
+}
+
+ludlc_channel_t ludlc_chan_make(const struct ludlc_connection *conn,
+		ludlc_channel_t id, ludlc_channel_t tag)
+{
+	unsigned int bits = chan_tag_bits(conn);
+
+	/* No tag, and shifting by the whole width of the field is undefined. */
+	if (!bits) {
+		return id;
+	}
+
+	return (ludlc_channel_t)((id & LUDLC_CHAN_ID_MASK(bits)) |
+			(tag << (CONFIG_LUDLC_CHANNEL_BITS - bits)));
+}
+#ifdef __KERNEL__
+EXPORT_SYMBOL_GPL(ludlc_chan_make);
+#endif
+
+ludlc_channel_t ludlc_chan_id(const struct ludlc_connection *conn,
+		ludlc_channel_t chan)
+{
+	return (ludlc_channel_t)(chan & LUDLC_CHAN_ID_MASK(chan_tag_bits(conn)));
+}
+#ifdef __KERNEL__
+EXPORT_SYMBOL_GPL(ludlc_chan_id);
+#endif
+
+ludlc_channel_t ludlc_chan_tag(const struct ludlc_connection *conn,
+		ludlc_channel_t chan)
+{
+	unsigned int bits = chan_tag_bits(conn);
+
+	/* As in ludlc_chan_make(). */
+	if (!bits) {
+		return 0;
+	}
+
+	return (ludlc_channel_t)(chan >> (CONFIG_LUDLC_CHANNEL_BITS - bits));
+}
+#ifdef __KERNEL__
+EXPORT_SYMBOL_GPL(ludlc_chan_tag);
 #endif
