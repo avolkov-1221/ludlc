@@ -11,10 +11,15 @@
 description: |
   A LuDLC link on an SPI bus the peer drives, with this system as the
   peripheral, described as a device on the SPI controller that runs in
-  peripheral mode. reg is the chip select this end answers on, and
-  spi-max-frequency the fastest clock the peer drives. What the link runs
-  comes from ludlc,link-common.yaml. A Linux peer describes its end of the
-  same link with ludlc,spi.
+  peripheral mode. reg is the chip select this end answers on,
+  spi-max-frequency the fastest clock the peer drives, and spi-cpol,
+  spi-cpha and spi-lsb-first the mode it clocks in, which both ends must
+  share. What the link runs comes from ludlc,link-common.yaml. A Linux peer
+  describes its end of the same link with ludlc,spi.
+
+  An application opens the link with the arguments
+  LUDLC_SPI_PERIPHERAL_ARGS_DT() from ludlc_dt.h builds, and the SPI
+  transport is on by default while such a node is enabled.
 
   Nothing moves on the bus until the peer clocks it, so this end asks for an
   exchange on the data-ready line. An exchange is two transfers, the lengths

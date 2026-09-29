@@ -31,6 +31,7 @@
 #include <zephyr/drivers/spi.h>
 
 #include <ludlc.h>
+#include <ludlc_dt.h>
 #include <ludlc_platform.h>
 #include <ludlc_private.h>
 #include <ludlc_serial.h>
@@ -38,6 +39,9 @@
 #include <ludlc_spi_proto.h>
 #include <ludlc_spi_slave.h>
 #include <ludlc_logger.h>
+
+/* A ludlc,spi-peripheral node no link could be opened from stops the build. */
+DT_FOREACH_STATUS_OKAY(ludlc_spi_peripheral, LUDLC_DT_CHECK)
 
 /*
  * Stack for the exchange thread: the core's callbacks run here, and TX/RX
@@ -517,6 +521,15 @@ int ludlc_spi_slave_connection_create(const ludlc_platform_args_t *args,
 		return -EINVAL;
 	}
 
+	/* The mode is the caller's; the role and the word size are not. */
+	if (args->spi.mode &
+	    ~(spi_operation_t)(SPI_MODE_CPOL | SPI_MODE_CPHA |
+			       SPI_TRANSFER_LSB)) {
+		LUDLC_LOG_ERROR("Unusable SPI mode 0x%x",
+				(unsigned int)args->spi.mode);
+		return -EINVAL;
+	}
+
 	sconn = alloc_spi_connection();
 	if (!sconn) {
 		return -ENOMEM;
@@ -527,13 +540,13 @@ int ludlc_spi_slave_connection_create(const ludlc_platform_args_t *args,
 	sconn->data_ready = args->spi.data_ready;
 
 	/*
-	 * Mode 0, eight bits, most significant first: the default at both ends
-	 * of this bus, and what the Linux controller uses unless its
-	 * devicetree overrides it. The format does not depend on the choice,
-	 * but both ends must make the same one.
+	 * Eight bits, in the mode the caller gives: mode 0, most significant
+	 * first, unless it says otherwise, which is also what the Linux
+	 * controller uses unless its devicetree overrides it. The format does
+	 * not depend on the choice, but both ends must make the same one.
 	 */
 	sconn->cfg.operation = SPI_OP_MODE_SLAVE | SPI_WORD_SET(8) |
-			       SPI_TRANSFER_MSB;
+			       args->spi.mode;
 	sconn->cfg.slave = args->spi.slave;
 
 	if (sconn->data_ready.port) {
@@ -621,10 +634,21 @@ err_free:
 
 void ludlc_default_spi_slave_platform_args(ludlc_platform_args_t *args)
 {
+	/*
+	 * The link the devicetree describes, if it describes one. Otherwise
+	 * spi1, where the board has it: a board without one gets no device,
+	 * which the create call then refuses.
+	 */
+#if DT_HAS_COMPAT_STATUS_OKAY(ludlc_spi_peripheral)
+	static const ludlc_platform_args_t def_args =
+		LUDLC_SPI_PERIPHERAL_ARGS_DT(
+			DT_COMPAT_GET_ANY_STATUS_OKAY(ludlc_spi_peripheral));
+#else
 	static const ludlc_platform_args_t def_args = {
-		.dev = DEVICE_DT_GET(DT_NODELABEL(spi1)),
+		.dev = DEVICE_DT_GET_OR_NULL(DT_NODELABEL(spi1)),
 		.csum = &ludlc_crc16_ccitt_pr0,
 	};
+#endif
 
 	if (args) {
 		*args = def_args;

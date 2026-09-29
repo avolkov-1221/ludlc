@@ -26,11 +26,15 @@
 #include <zephyr/drivers/uart.h>
 
 #include <ludlc.h>
+#include <ludlc_dt.h>
 #include <ludlc_platform.h>
 #include <ludlc_private.h>
 #include <ludlc_serial.h>
 #include <ludlc_framing.h>
 #include <ludlc_logger.h>
+
+/* A ludlc,uart node no link could be opened from stops the build here. */
+DT_FOREACH_STATUS_OKAY(ludlc_uart, LUDLC_DT_CHECK)
 
 #define RX_THREAD_STACK_SIZE 1024
 #ifdef CONFIG_LUDLC_SERIAL_SINGLE_THREAD
@@ -785,15 +789,23 @@ err:
 }
 
 /**
- * @brief The board's uart0, this build's default framing, and CRC-16/KERMIT,
- * which the other LuDLC platforms send and a Linux host runs by default.
+ * @brief The link the devicetree describes, or else the board's uart0, this
+ * build's default framing, and CRC-16/KERMIT, which the other LuDLC platforms
+ * send and a Linux host runs by default.
+ *
+ * A board with neither gets no device, which the create call then refuses.
  */
 void ludlc_default_serial_platform_args(ludlc_platform_args_t *args)
 {
+#if DT_HAS_COMPAT_STATUS_OKAY(ludlc_uart)
+	static const ludlc_platform_args_t def_args =
+		LUDLC_UART_ARGS_DT(DT_COMPAT_GET_ANY_STATUS_OKAY(ludlc_uart));
+#else
 	static const ludlc_platform_args_t def_args = {
-		.dev = DEVICE_DT_GET(DT_NODELABEL(uart0)),
+		.dev = DEVICE_DT_GET_OR_NULL(DT_NODELABEL(uart0)),
 		.csum = &ludlc_crc16_ccitt_pr0,
 	};
+#endif
 
 	if (args) {
 		*args = def_args;

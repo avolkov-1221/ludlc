@@ -14,6 +14,10 @@ description: |
   ludlc,link-common.yaml. A Linux peer describes its end of the same link
   with ludlc,serdev.
 
+  An application opens the link with the arguments LUDLC_UART_ARGS_DT()
+  from ludlc_dt.h builds, and the serial transport is on by default while
+  such a node is enabled.
+
   Example:
 
     &usart1 {

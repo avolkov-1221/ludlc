@@ -12,6 +12,7 @@
 zephyr_include_directories(${CMAKE_CURRENT_SOURCE_DIR})
 
 set(COMMON
+	${CMAKE_CURRENT_SOURCE_DIR}/ludlc_dt.h
 	${CMAKE_CURRENT_SOURCE_DIR}/ludlc_platform.h
 	${CMAKE_CURRENT_SOURCE_DIR}/ludlc_platform_args.h
 	${CMAKE_CURRENT_SOURCE_DIR}/ludlc_zephyr_platform.c

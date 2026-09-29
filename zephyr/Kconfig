@@ -209,16 +209,20 @@ config LUDLC_STATIC_FRAMING_NUM
 
 config LUDLC_SERIAL_CONN
 	bool "LuDLC Serial connection support"
-	default n
+	default DT_HAS_LUDLC_UART_ENABLED
 	depends on SERIAL
-	# For the CRC-16/KERMIT of the default args, and for an application
-	# that brings its own checksum.
+	# For the checksums in ludlc_zephyr_csum.c, and for an application
+	# that brings its own.
 	select CRC
 	select EVENTS
 	help
 	  Build LuDLC with serial (UART) connection support. A link delimits
 	  its frames with the HDLC escaping unless the application asks for
 	  COBS instead.
+
+	  On by default where the devicetree describes a link with a
+	  "ludlc,uart" node, which LUDLC_UART_ARGS_DT() in ludlc_dt.h turns
+	  into the arguments of the link.
 
 config LUDLC_SERIAL_SINGLE_THREAD
 	bool "Use single LuDLC serial IO thread"
@@ -249,15 +253,15 @@ config LUDLC_NUM_RX_BUFFERS
 
 config LUDLC_SPI_CONN
 	bool "LuDLC SPI peripheral connection support"
-	default n
+	default DT_HAS_LUDLC_SPI_PERIPHERAL_ENABLED
 	depends on SPI
 	select SPI_SLAVE
 	select GPIO
 	# What a link here falls back on when the application names no
 	# framing: the announced length already delimits the frame.
 	select LUDLC_FRAMING_RAW
-	# As for LUDLC_SERIAL_CONN: for the CRC-16/KERMIT of the default args,
-	# and for an application that brings its own checksum.
+	# As for LUDLC_SERIAL_CONN: for the checksums in ludlc_zephyr_csum.c,
+	# and for an application that brings its own.
 	select CRC
 	select EVENTS
 	help
@@ -271,6 +275,10 @@ config LUDLC_SPI_CONN
 	  controller has it. The board also needs a hardware chip select
 	  line, and wants a spare GPIO for the data-ready line, without
 	  which the controller has to poll.
+
+	  On by default where the devicetree describes a link with a
+	  "ludlc,spi-peripheral" node, which LUDLC_SPI_PERIPHERAL_ARGS_DT()
+	  in ludlc_dt.h turns into the arguments of the link.
 
 config LUDLC_STATIC_SPI_CONN
 	bool "Predefine LuDLC SPI connections as a static array"

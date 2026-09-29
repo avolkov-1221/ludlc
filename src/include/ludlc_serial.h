@@ -39,7 +39,8 @@ int ludlc_serial_connection_create(
  * A starting point for an application with no settings of its own: overwrite
  * what it does not want and pass it to ludlc_serial_connection_create(). Not
  * every port provides one; Linux takes its settings from the device tree or
- * from configfs instead.
+ * from configfs instead, and Zephyr can take them from a devicetree node with
+ * LUDLC_UART_ARGS_DT() from ludlc_dt.h.
  */
 void ludlc_default_serial_platform_args(ludlc_platform_args_t *args);
 

@@ -48,9 +48,11 @@
  * Queues the handshake before returning; the controller has to clock the
  * exchanges that carry it.
  *
- * @param args The SPI peripheral, its chip select, the data-ready line if the
- * board has one, the checksum the link runs, NULL for none, and the cfg to
- * open it with. See @c ludlc_platform_args_t.
+ * @param args The SPI peripheral, its chip select and mode, the data-ready line
+ * if the board has one, the checksum the link runs, NULL for none, and the cfg
+ * to open it with. See @c ludlc_platform_args_t, and
+ * LUDLC_SPI_PERIPHERAL_ARGS_DT() in ludlc_dt.h to take them from the
+ * devicetree.
  * @param conn Where the new connection goes. Set to NULL on failure.
  * @param cb Callbacks the link reports to. Must outlive the connection.
  * @return 0, or a negative errno.
@@ -75,8 +77,8 @@ int ludlc_spi_slave_connection_create(const ludlc_platform_args_t *args,
 void ludlc_spi_slave_connection_destroy(struct ludlc_connection *conn);
 
 /**
- * @brief Fill in @p args for the first SPI peripheral in the devicetree,
- * with no data-ready line and CRC-16/KERMIT.
+ * @brief Fill in @p args for the link a "ludlc,spi-peripheral" node
+ * describes, or else for spi1, with no data-ready line and CRC-16/KERMIT.
  *
  * The checksum is the one a Linux controller runs by default. Both ends must
  * run the same one, so change it to match the controller.

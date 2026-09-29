@@ -9,10 +9,11 @@
  * Copyright (C) 2025-2026 Andrey VOLKOV <andrey@volkov.fr> & LuDLC Contributors
  *
  * @details
- * A caller fills them in, or starts from the default arguments of its
- * transport, and passes them to its create call. The checksum and the
- * framing are borrowed and must outlive the connection; the connection
- * settings are copied when it is created.
+ * LUDLC_UART_ARGS_DT() and LUDLC_SPI_PERIPHERAL_ARGS_DT() in ludlc_dt.h
+ * build them from a devicetree node, and each transport has default
+ * arguments of its own. The checksum and the framing are borrowed and must
+ * outlive the connection; the connection settings are copied when it is
+ * created.
  */
 
 #ifndef __LUDLC_PLATFORM_ARGS_H__
@@ -23,6 +24,7 @@
 
 #if defined(CONFIG_LUDLC_SPI_CONN)
 #include <zephyr/drivers/gpio.h>
+#include <zephyr/drivers/spi.h>
 #endif
 
 struct ludlc_csum;
@@ -74,6 +76,16 @@ typedef struct ludlc_platform_args {
 		 * select and this link is not on the first.
 		 */
 		uint16_t slave;
+
+		/**
+		 * @brief The mode the controller clocks in.
+		 *
+		 * SPI_MODE_CPOL, SPI_MODE_CPHA and SPI_TRANSFER_LSB, nothing
+		 * else. Zero is mode 0, most significant bit first, which is
+		 * what the Linux controller runs unless its devicetree says
+		 * otherwise. Both ends must run the same mode.
+		 */
+		spi_operation_t mode;
 
 		/**
 		 * @brief Line this end raises to ask for an exchange.
