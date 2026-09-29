@@ -1,0 +1,64 @@
+# SPDX-License-Identifier: (Apache-2.0 OR GPL-2.0-or-later)
+#
+# @file ludlc,spi-peripheral.yaml
+#
+# @brief Devicetree binding of a LuDLC link on an SPI bus that another
+# controller drives.
+#
+# @copyright
+# Copyright (C) 2025-2026 Andrey VOLKOV <andrey@volkov.fr> & LuDLC Contributors
+
+description: |
+  A LuDLC link on an SPI bus the peer drives, with this system as the
+  peripheral, described as a device on the SPI controller that runs in
+  peripheral mode. reg is the chip select this end answers on, and
+  spi-max-frequency the fastest clock the peer drives. What the link runs
+  comes from ludlc,link-common.yaml. A Linux peer describes its end of the
+  same link with ludlc,spi.
+
+  Nothing moves on the bus until the peer clocks it, so this end asks for an
+  exchange on the data-ready line. An exchange is two transfers, the lengths
+  each end has to send and then the frames, and the chip select is released
+  in between while this end sets up the second.
+
+  Example:
+
+    &spi1 {
+        status = "okay";
+
+        ludlc-link@0 {
+            compatible = "ludlc,spi-peripheral";
+            reg = <0>;
+            spi-max-frequency = <DT_FREQ_M(8)>;
+            data-ready-gpios = <&gpioc 7 GPIO_ACTIVE_HIGH>;
+            ludlc,csum = "crc16-ccitt-pr0";
+        };
+    };
+
+compatible: "ludlc,spi-peripheral"
+
+include:
+  - name: spi-device.yaml
+  - name: ludlc,link-common.yaml
+    property-blocklist:
+      - ludlc,framing
+
+properties:
+  ludlc,framing:
+    type: string
+    enum:
+      - "cobs"
+      - "raw"
+    default: "raw"
+    description: |
+      How a frame is delimited on the wire. Both ends must agree. The length
+      announced before a frame delimits it, so raw adds nothing to the frame;
+      cobs is for a peer that already runs it on a UART. hdlc cannot be used
+      here, as its length is not known until the frame has been escaped.
+
+  data-ready-gpios:
+    type: phandle-array
+    description: |
+      The line this end raises to ask the peer for an exchange, which only
+      the peer can start. Without it the peer polls, and a frame this end has
+      ready waits for the next poll.

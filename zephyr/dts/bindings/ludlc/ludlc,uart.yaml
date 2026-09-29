@@ -1,0 +1,49 @@
+# SPDX-License-Identifier: (Apache-2.0 OR GPL-2.0-or-later)
+#
+# @file ludlc,uart.yaml
+#
+# @brief Devicetree binding of a LuDLC link on a UART.
+#
+# @copyright
+# Copyright (C) 2025-2026 Andrey VOLKOV <andrey@volkov.fr> & LuDLC Contributors
+
+description: |
+  A LuDLC link on the serial line between this system and its peer, described
+  as a device on the UART that carries it. The line settings are the UART's
+  own, current-speed and the rest; what the link runs comes from
+  ludlc,link-common.yaml. A Linux peer describes its end of the same link
+  with ludlc,serdev.
+
+  Example:
+
+    &usart1 {
+        status = "okay";
+        current-speed = <921600>;
+
+        ludlc-link {
+            compatible = "ludlc,uart";
+            ludlc,framing = "hdlc";
+            ludlc,csum = "crc16-ccitt-pr0";
+            ludlc,max-payload = <32>;
+        };
+    };
+
+compatible: "ludlc,uart"
+
+include:
+  - name: uart-device.yaml
+  - name: ludlc,link-common.yaml
+    property-blocklist:
+      - ludlc,framing
+
+properties:
+  ludlc,framing:
+    type: string
+    enum:
+      - "cobs"
+      - "hdlc"
+    default: "hdlc"
+    description: |
+      How a frame is delimited on the wire. Both ends must agree. A UART does
+      not mark where a frame ends, so the framing has to, and raw cannot be
+      used here.
