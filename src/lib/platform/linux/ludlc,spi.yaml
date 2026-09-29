@@ -1,0 +1,109 @@
+# SPDX-License-Identifier: (GPL-2.0-only OR BSD-2-Clause)
+#
+# @file ludlc,spi.yaml
+#
+# @brief Devicetree binding of a LuDLC transport on an SPI peripheral this
+# system drives.
+#
+# @copyright
+# Copyright (C) 2025-2026 Andrey VOLKOV <andrey@volkov.fr> & LuDLC Contributors
+
+%YAML 1.2
+---
+$id: http://devicetree.org/schemas/spi/ludlc,spi.yaml#
+$schema: http://devicetree.org/meta-schemas/core.yaml#
+
+title: LuDLC link over SPI
+
+maintainers:
+  - Andrey VOLKOV <andrey@volkov.fr>
+
+description: |
+  A LuDLC link to a coprocessor on an SPI bus this system drives, described as
+  a peripheral of the controller. What the link runs and the devices on it are
+  described in ludlc,link-common.yaml.
+
+  Nothing moves on the bus unless this end clocks it, so the peripheral asks
+  for an exchange on a data-ready line, and without one the link polls. An
+  exchange is two transfers, the lengths each end has to send and then the
+  frames, with the chip select released in between while the peripheral sets
+  up the second. The mode and the speed are described the ordinary way.
+
+allOf:
+  - $ref: /schemas/bus/ludlc,link-common.yaml#
+  - $ref: /schemas/spi/spi-peripheral-props.yaml#
+
+properties:
+  compatible:
+    const: ludlc,spi
+
+  reg:
+    maxItems: 1
+
+  interrupts:
+    maxItems: 1
+    description:
+      The data-ready line, which the peripheral raises when it has a frame to
+      send. An edge or a level trigger will do, the line being masked while
+      the exchange runs. Without it, the link polls.
+
+  ludlc,framing:
+    enum: [cobs, raw]
+    default: raw
+    description:
+      The length announced before a frame delimits it, so raw adds nothing to
+      the frame; cobs is for a peripheral that already runs it on a UART. hdlc
+      cannot be used here, as its length is not known until the frame has
+      been escaped.
+
+  ludlc,turnaround-us:
+    default: 50
+    description:
+      How long the peripheral needs between the two transfers of an exchange
+      to set up the second.
+
+  ludlc,poll-interval-ms:
+    default: 10
+    description:
+      How often to start an exchange when there is no data-ready line. Zero
+      never polls, so the peripheral is heard only when this end has
+      something to send.
+
+required:
+  - compatible
+  - reg
+
+unevaluatedProperties: false
+
+examples:
+  - |
+    #include <dt-bindings/interrupt-controller/irq.h>
+
+    spi {
+        #address-cells = <1>;
+        #size-cells = <0>;
+
+        coprocessor@0 {
+            compatible = "ludlc,spi";
+            reg = <0>;
+            spi-max-frequency = <4000000>;
+            interrupt-parent = <&gpio>;
+            interrupts = <12 IRQ_TYPE_EDGE_RISING>;
+            ludlc,csum = "crc16-ccitt-pr0";
+            ludlc,turnaround-us = <100>;
+            ludlc,channel-tag-bits = <3>;
+
+            #address-cells = <1>;
+            #size-cells = <0>;
+
+            led-controller@1 {
+                compatible = "vendor,coproc-leds";
+                reg = <1>;
+            };
+
+            adc@8 {
+                compatible = "vendor,coproc-adc";
+                reg = <8>;
+            };
+        };
+    };

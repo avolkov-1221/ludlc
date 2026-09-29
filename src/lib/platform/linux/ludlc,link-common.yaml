@@ -1,0 +1,109 @@
+# SPDX-License-Identifier: (GPL-2.0-only OR BSD-2-Clause)
+#
+# @file ludlc,link-common.yaml
+#
+# @brief Devicetree binding of the properties both ends of a LuDLC link must
+# agree on.
+#
+# @copyright
+# Copyright (C) 2025-2026 Andrey VOLKOV <andrey@volkov.fr> & LuDLC Contributors
+
+%YAML 1.2
+---
+$id: http://devicetree.org/schemas/bus/ludlc,link-common.yaml#
+$schema: http://devicetree.org/meta-schemas/core.yaml#
+
+title: LuDLC link common properties
+
+maintainers:
+  - Andrey VOLKOV <andrey@volkov.fr>
+
+description: |
+  A coprocessor beside the application processor usually serves several
+  unrelated functions - LEDs, a watchdog, an ADC - over the one line between
+  the two. LuDLC (Lightweight Micro Devices Link Control) makes that line
+  reliable and splits it into logical channels, so a driver for one function
+  binds to a channel the way it would bind to any other bus.
+
+  These are the properties of a link whatever carries it. The binding of each
+  transport describes the node as a client of its own bus and refers here for
+  the rest. The children of the node are the channels: one node per function
+  the coprocessor serves, addressed by its "reg" property and matched by its
+  own compatible.
+
+  Both ends of a link have to agree on the framing, the checksum, the largest
+  payload and the tag in the channel field, none of which a bus descriptor has
+  room for. A board whose coprocessor differs from the driver's defaults says
+  so here. A setting this kernel cannot honour is warned about and ignored,
+  leaving the link on its default: one that comes up misconfigured is easier
+  to diagnose from the far end than one that does not come up at all.
+
+select: false
+
+properties:
+  ludlc,framing:
+    $ref: /schemas/types.yaml#/definitions/string
+    enum: [cobs, hdlc, raw]
+    description:
+      How a frame is delimited on the wire. Both ends must agree, and each
+      transport takes only the framings its wire can carry.
+
+  ludlc,csum:
+    $ref: /schemas/types.yaml#/definitions/string
+    enum: [none, crc16-ccitt-pr0, crc16-pr0, crc16-x25-pr1, crc32-ccitt-pr0]
+    description:
+      The frame checksum, named for the algorithm and the bit order it is
+      computed in, or none for frames that carry no checksum. Both ends must
+      agree.
+
+  ludlc,max-payload:
+    $ref: /schemas/types.yaml#/definitions/uint32
+    minimum: 1
+    description:
+      The largest payload the link carries, in octets. The transport adds the
+      header and the checksum to get the frame. It is the peer's limit that
+      matters, the smaller of the two ends deciding. A value this kernel was
+      not built to hold is ignored.
+
+  ludlc,channel-tag-bits:
+    maximum: 31
+    default: 0
+    description:
+      How many top bits of the channel field carry a tag for the drivers of
+      the devices below rather than select a channel. A link with 32 channels
+      on an 8-bit field can spare 3. Both ends must agree, and the channels in
+      "reg" must fit below the tag. A width that leaves no room for the
+      channels is ignored.
+
+  "#address-cells":
+    const: 1
+
+  "#size-cells":
+    const: 0
+
+patternProperties:
+  "@[0-9a-f]+$":
+    type: object
+    description:
+      A device on the link, speaking for one or more of its channels.
+
+    properties:
+      reg:
+        minItems: 1
+        maxItems: 16
+        description:
+          The channels this device answers on. Most have one; a driver that
+          has to speak for a group of them lists several. None may use the
+          bits of the tag, if the link has one.
+
+    required:
+      - compatible
+      - reg
+
+    additionalProperties: true
+
+required:
+  - "#address-cells"
+  - "#size-cells"
+
+additionalProperties: true

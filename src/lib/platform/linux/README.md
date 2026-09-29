@@ -28,6 +28,15 @@ it. It builds three modules.
   - `ludlc_spi_cfg.o`: the exchange's own configfs attributes under
     `/sys/kernel/config/ludlc-spi`, built the same way
 
+## Bindings
+
+In DT, a link is a node on the bus that carries it:
+[`ludlc,serdev.yaml`](ludlc,serdev.yaml) on a UART and
+[`ludlc,spi.yaml`](ludlc,spi.yaml) on SPI. Both refer to
+[`ludlc,link-common.yaml`](ludlc,link-common.yaml) for what every link has
+whatever carries it: the framing, the checksum, the payload size, the channel
+tag, and the devices below the link.
+
 ## Device model
 
 The bus is named `ludlc` and carries a link's logical channels as devices
