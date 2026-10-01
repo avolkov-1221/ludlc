@@ -66,6 +66,13 @@
 #define HANDLE_RX_CAPS_F	(1U<<5)
 
 /**
+ * @def HANDLE_RX_EXPIRED_F
+ * @brief Flag indicating that a NAK has given up a packet, to be confirmed
+ *        outside the lock.
+ */
+#define HANDLE_RX_EXPIRED_F	(1U<<6)
+
+/**
  * @brief Checks if a given packet ID represents a PING packet.
  *
  * @param id The LuDLC packet ID to check.
@@ -111,10 +118,12 @@ static inline bool is_ctrl_chan(const struct ludlc_connection *conn,
 }
 
 /**
- * @brief Allocates the connection's sliding window.
+ * @brief Allocates the connection's sliding window, and the copy of the
+ * payload being sent.
  *
- * Only a multi-connection build allocates, the window size being a runtime
- * value there; a single-connection build has the array as a member.
+ * Only a multi-connection build allocates, the window size and the payload
+ * being runtime values there; a single-connection build has both arrays as
+ * members.
  *
  * @param conn The connection, with its cfg already resolved.
  * @return 0, or -ENOMEM.
@@ -124,12 +133,15 @@ static int ludlc_conn_queue_alloc(struct ludlc_connection *conn)
 #if CONFIG_LUDLC_MULTI_CONN
 	ludlc_id_t wnd = ludlc_conn_window(conn);
 
+	/* One allocation, the payload after the window. */
 	conn->packets_q =
-		ludlc_platform_alloc(wnd * sizeof(*conn->packets_q));
+		ludlc_platform_alloc(wnd * sizeof(*conn->packets_q) +
+				     ludlc_conn_payload_lim(conn));
 	if (!conn->packets_q) {
 		return -ENOMEM;
 	}
 
+	conn->tx_payload = (uint8_t *)(conn->packets_q + wnd);
 #else /* one link: the window is a member, sized by the build's constant */
 	(void)conn;
 #endif
@@ -142,6 +154,7 @@ static void ludlc_conn_queue_free(struct ludlc_connection *conn)
 #if CONFIG_LUDLC_MULTI_CONN
 	ludlc_platform_free(conn->packets_q);
 	conn->packets_q = NULL;
+	conn->tx_payload = NULL;
 #else
 	(void)conn;
 #endif
@@ -190,8 +203,8 @@ static inline void ludlc_call_on_confirm(struct ludlc_connection *conn,
 {
 	if (conn->cb && conn->cb->on_confirm) {
 		conn->cb->on_confirm(conn,
-				pkt->status.result,
-				pkt->status.chan,
+				-(int)pkt->result,
+				pkt->chan,
 				pkt->payload,
 				pkt->size,
 				conn->user_ctx);
@@ -238,6 +251,7 @@ static void ludlc_seq_reset_if_drained(struct ludlc_connection *conn)
 	conn->last_queued = 0;
 	conn->last_ack = 0;
 	conn->last_received = 0;
+	conn->last_seen = 0;
 
 	ludlc_platform_clear_bit(LUDLC_CONN_BUS_OUT_F, &conn->flags);
 }
@@ -251,7 +265,7 @@ static void ludlc_seq_reset_if_drained(struct ludlc_connection *conn)
  * cannot reach that slot first; see @ref ludlc_tx_queue_full.
  *
  * @note This function must be called with the connection lock held, and the
- * caller must have written @c status.result into the slot.
+ * caller must have written @c result into the slot.
  *
  * @param conn Pointer to the connection structure.
  * @param pkt The slot that has been resolved.
@@ -271,7 +285,7 @@ static inline void ludlc_confirm_queued_lock(struct ludlc_connection *conn,
  * next packet in the very next statement.
  *
  * @note This function must be called with the connection lock held, and the
- * caller must have written @c status.result into @c u_packet.
+ * caller must have written @c result into @c u_packet.
  *
  * @param conn Pointer to the connection structure.
  */
@@ -440,7 +454,7 @@ static void on_disconnect_lock(struct ludlc_connection *conn)
 				&conn->flags)) &&
 			!ludlc_platform_test_bit(LUDLC_CONN_DISC_AFTER_TX_F,
 				&conn->flags)) {
-		conn->u_packet.status.result = EPIPE;
+		conn->u_packet.result = EPIPE;
 		ludlc_confirm_u_lock(conn);
 	}
 
@@ -466,7 +480,7 @@ static void on_disconnect_lock(struct ludlc_connection *conn)
 
 		i = (i + 1) & LUDLC_ID_MASK;
 		it = &conn->packets_q[i & ludlc_conn_window_mask(conn)];
-		it->status.result = EPIPE;
+		it->result = EPIPE;
 
 		ludlc_confirm_queued_lock(conn, it);
 	}
@@ -492,10 +506,10 @@ static void on_disconnect_lock(struct ludlc_connection *conn)
  * @param dst_chan The destination channel for the packet.
  * @param buf Pointer to the payload data buffer.
  * @param size The size of the payload data in bytes.
- * @param ttl How many times the packet may be sent. The first send counts,
- * and each NAK that reports this packet missing costs one more. A value of
- * 0 is normalized to 1 (single send attempt). Values above
- * @ref LUDLC_MAX_TTL are clamped.
+ * @param ttl How many times the packet may be sent and lost. Each copy the
+ * peer reports missing costs one, and once none is left the packet is given
+ * up and confirmed with -ETIMEDOUT. A value of 0 is normalized to 1 (single
+ * send attempt). Values above @ref LUDLC_MAX_TTL are clamped.
  * @return 0 on success.
  * @return -EINVAL if @p buf is NULL and @p size is not, or if @p size is
  * above what this link carries.
@@ -546,7 +560,7 @@ int ludlc_enqueue_data(struct ludlc_connection *conn,
 		ludlc_id_t q_idx = id & ludlc_conn_window_mask(conn);
 
 		/* Populate the queue slot */
-		conn->packets_q[q_idx].hdr.chan = dst_chan;
+		conn->packets_q[q_idx].chan = dst_chan;
 		conn->packets_q[q_idx].ttl = ttl;
 		conn->packets_q[q_idx].payload = buf;
 		conn->packets_q[q_idx].size = size;
@@ -619,7 +633,7 @@ int ludlc_send_urgent_data(struct ludlc_connection *conn,
 				&conn->flags)) {
 		ret = -EAGAIN;
 	} else {
-		conn->u_packet.hdr.chan = dst_chan;
+		conn->u_packet.chan = dst_chan;
 		conn->u_packet.payload = buf;
 		conn->u_packet.size = size;
 
@@ -667,11 +681,11 @@ int ludlc_send_disconnect(struct ludlc_connection *conn)
 					     &conn->flags) &&
 		    !ludlc_platform_test_bit(LUDLC_CONN_DISC_AFTER_TX_F,
 					     &conn->flags)) {
-			conn->u_packet.status.result = ECANCELED;
+			conn->u_packet.result = ECANCELED;
 			ludlc_confirm_u_lock(conn);
 		}
 
-		conn->u_packet.hdr.chan = CONFIG_LUDLC_CONTROL_CHANNEL;
+		conn->u_packet.chan = CONFIG_LUDLC_CONTROL_CHANNEL;
 		conn->u_packet.payload = &opcode;
 		conn->u_packet.size = sizeof(opcode);
 
@@ -744,6 +758,8 @@ EXPORT_SYMBOL_GPL(ludlc_connect);
  *
  * @param conn Pointer to the connection structure to update.
  * @param packet Pointer to the received LUDLC packet.
+ * @param step Whether the packet is a handshake step, a numbered control
+ * packet, rather than a PING or data.
  * @retval An integer containing bit flags:
  * - HANDLE_RX_REQUEST_TX_F if a response should be sent.
  * - HANDLE_RX_CONTINUE_F if processing should continue (e.g., connected).
@@ -751,14 +767,14 @@ EXPORT_SYMBOL_GPL(ludlc_connect);
  */
 static int rx_handle_handshake(
 		struct ludlc_connection *conn,
-		ludlc_packet_t *packet)
+		ludlc_packet_t *packet,
+		bool step)
 {
 	ludlc_id_t id = packet->hdr.id.tx_id;
 	int ret = HANDLE_RX_REQUEST_TX_F; /* Default to sending a response */
 
-	/* Check for unexpected ping or non-control packets. */
-	if (is_ping(id) ||
-		packet->hdr.chan != CONFIG_LUDLC_CONTROL_CHANNEL) {
+	/* Anything but a handshake step: a PING or data. */
+	if (!step) {
 		/* In WAIT_CONN_2 the peer has already moved to CONNECTED and
 		 * is sending normal packets, so this side follows.
 		 */
@@ -820,38 +836,215 @@ static int rx_handle_handshake(
 }
 
 /**
+ * @brief Notes that the peer has answered our NAK, or needs none.
+ *
+ * From here on a gap the peer shows is news, and is reported.
+ *
+ * @note This function must be called with the connection lock held.
+ *
+ * @param conn Pointer to the connection structure.
+ */
+static inline void rx_nak_answered(struct ludlc_connection *conn)
+{
+	ludlc_platform_clear_mask((ludlc_platform_atomic_t)
+				  ((1U << LUDLC_CONN_NAK_OUT_F) |
+				   (1U << LUDLC_CONN_NAK_TRACKED_F)),
+				  &conn->flags);
+}
+
+/**
+ * @brief Checks if a NAK stands and no numbered packet has gone out since.
+ *
+ * @param conn Pointer to the connection structure.
+ * @return true if nothing yet shows whether the peer has had the NAK.
+ */
+static inline bool rx_nak_untracked(struct ludlc_connection *conn)
+{
+	return ludlc_platform_test_bit(LUDLC_CONN_NAK_OUT_F, &conn->flags) &&
+	       !ludlc_platform_test_bit(LUDLC_CONN_NAK_TRACKED_F,
+					&conn->flags);
+}
+
+/**
+ * @brief Asks the peer to send again from the first packet missing, unless
+ * it has yet to answer the last time it was asked.
+ *
+ * Everything the peer sent before it saw a NAK shows the same gap. A NAK for
+ * each would send it back once per frame, and charge the missing packet's
+ * TTL each time. A NAK therefore stands until the peer is seen answering it:
+ * the gap fills, a PING shows nothing is missing any more, the peer goes back
+ * to send its packets again (@p new_pass), or it acknowledges the first
+ * numbered packet this end sent after the NAK, by which time it has had the
+ * NAK or lost it. Meanwhile a PING carries the NAK again; see
+ * @ref ludlc_get_packet_to_send.
+ *
+ * @note This function must be called with the connection lock held.
+ *
+ * @param conn Pointer to the connection structure.
+ * @param new_pass The peer has gone back since the last NAK.
+ * @return @ref HANDLE_RX_REQUEST_TX_F to send a NAK, or 0.
+ */
+static int rx_gap(struct ludlc_connection *conn, bool new_pass)
+{
+	if (new_pass)
+		rx_nak_answered(conn);
+
+	if (ludlc_platform_test_bit(LUDLC_CONN_NAK_OUT_F, &conn->flags))
+		return 0;
+
+	/* The next frame carries it. */
+	ludlc_platform_clear_bit(LUDLC_CONN_NO_NAK_F, &conn->flags);
+	return HANDLE_RX_REQUEST_TX_F;
+}
+
+/**
  * @brief Handles a Negative Acknowledgment (NAK) condition.
  *
  * A NAK identifies one packet: it acknowledges the last packet received
  * in order, so the missing one is the next after it. Only that packet has
- * its TTL decremented. The packets behind it are re-transmitted because
- * the receiver discards everything after a gap, not because they were
- * lost, so their TTL is left alone.
+ * its TTL decremented, and once for each copy sent: a NAK arriving before
+ * the copy sent in answer to the previous one has gone out cannot be about
+ * it. The packets behind it are re-transmitted because the receiver discards
+ * everything after a gap, not because they were lost, so their TTL is left
+ * alone.
  *
- * A packet left with no attempts is not dropped here but by
- * @ref ludlc_tx_drop_expired, on the next transmit. The transport reads the
- * queue once the lock is released, and this may run while it does so.
+ * A packet left with no attempts is given up there and then, and the ones
+ * behind it move up one place, each taking the previous ID. The peer neither
+ * holds it nor can still get it: a NAK is sent when a packet arrives ahead of
+ * it, and on a link that keeps its order every copy sent before that packet
+ * is then lost. The keep-alive that repeats a NAK follows no arrival, so the
+ * ping period must exceed the time an answer to a NAK takes to arrive. The
+ * transport reads only the copy it was handed, so the slots can move and the
+ * buffer can be returned at once.
+ *
+ * Once none is left behind it, the NAK is about packets this end no longer
+ * has, yet the peer may repeat it until it sees as much. The next packet sent
+ * is therefore not charged for its first copy, which may still be on its way.
  *
  * Finally, it resets `last_sent` to `last_ack` to force a re-transmission
  * of all remaining unacknowledged packets.
  *
+ * @note This function must be called with the connection lock held.
+ *
  * @param conn Pointer to the connection structure.
- * @param num_wait The number of packets waiting for acknowledgment.
- * @return @ref HANDLE_RX_REQUEST_TX_F to signal an immediate re-transmission.
+ * @param[out] expired The packet given up, to be confirmed once the lock has
+ * been released.
+ * @return @ref HANDLE_RX_REQUEST_TX_F to signal an immediate re-transmission,
+ * with @ref HANDLE_RX_EXPIRED_F if @p expired has been filled in.
  */
-static int rx_handle_nak(struct ludlc_connection *conn, ludlc_id_t num_wait)
+static int rx_handle_nak(struct ludlc_connection *conn,
+			 struct packet_queue_item *expired)
 {
 	ludlc_id_t id = (conn->last_ack + 1) & LUDLC_ID_MASK;
-	ludlc_id_t q_idx = id & ludlc_conn_window_mask(conn);
+	struct packet_queue_item *it =
+		&conn->packets_q[id & ludlc_conn_window_mask(conn)];
+	int ret = HANDLE_RX_REQUEST_TX_F;
 
-	/* The missing packet is the first unacknowledged one */
-	if (num_wait && conn->packets_q[q_idx].ttl) {
-		conn->packets_q[q_idx].ttl--;
+	/* The missing packet is the first unacknowledged one. It pays for the
+	 * copy last sent, once, and only if one has gone out since a NAK last
+	 * sent last_sent back to it.
+	 */
+	if (conn->last_sent != conn->last_ack &&
+	    !ludlc_platform_test_and_set_bit(LUDLC_CONN_TTL_CHARGED_F,
+					     &conn->flags)) {
+		it->ttl--;
+		if (!it->ttl) {
+			unsigned int mask = ludlc_conn_window_mask(conn);
+			ludlc_id_t n = (conn->last_queued - id) & LUDLC_ID_MASK;
+
+			it->result = ETIMEDOUT;
+			*expired = *it;
+			ret |= HANDLE_RX_EXPIRED_F;
+
+			/* Those behind it move up one place. */
+			for (; n; n--, id = (id + 1) & LUDLC_ID_MASK)
+				conn->packets_q[id & mask] =
+					conn->packets_q[(id + 1) & mask];
+
+			conn->last_queued = (conn->last_queued - 1) &
+					    LUDLC_ID_MASK;
+			if (conn->last_queued == conn->last_ack)
+				ludlc_platform_set_bit(LUDLC_CONN_TTL_HOLD_F,
+						       &conn->flags);
+		}
 	}
 
 	/* resend all unconfirmed packets */
 	conn->last_sent = conn->last_ack;
-	return HANDLE_RX_REQUEST_TX_F;
+	return ret;
+}
+
+/**
+ * @brief Processes the ACK field the peer sent: which of our packets it
+ * holds, and whether it misses one.
+ *
+ * An ACK may run past `last_sent`, which a NAK sends back to `last_ack`
+ * while the peer may hold the packets after it. So the ACK is checked against
+ * what has been queued, and `last_sent` moves up with it rather than send
+ * those packets again.
+ *
+ * @note This function must be called with the connection lock held.
+ *
+ * @param conn Pointer to the connection structure.
+ * @param ack_id The ACK field, with its NAK flag.
+ * @param[out] expired See @ref rx_handle_nak.
+ * @return What @ref rx_handle_nak returns for a NAK, 0 otherwise.
+ */
+static int rx_handle_ack(struct ludlc_connection *conn, ludlc_id_t ack_id,
+			 struct packet_queue_item *expired)
+{
+	/* ludlc_id_t is unsigned, so the subtractions wrap and the mask alone
+	 * gives the right count, dropping the NAK flag as well.
+	 */
+	ludlc_id_t num_sent = (conn->last_sent - conn->last_ack) &
+			      LUDLC_ID_MASK;
+	ludlc_id_t num_acked = (ack_id - conn->last_ack) & LUDLC_ID_MASK;
+	ludlc_id_t i;
+
+	if (num_acked > ((conn->last_queued - conn->last_ack) &
+			 LUDLC_ID_MASK)) {
+		/* The peer ACKed packets we never queued, so the two sides
+		 * are badly out of sync.
+		 *
+		 * TODO: force an immediate reconnect?
+		 */
+		LUDLC_LOG_DEBUG("ACK ID is too far: (%x) from last_ack = %x",
+				ack_id, conn->last_ack);
+		return 0;
+	}
+
+	for (i = num_acked; i; i--) {
+		struct packet_queue_item *it;
+
+		conn->last_ack = (conn->last_ack + 1) & LUDLC_ID_MASK;
+		it = &conn->packets_q[conn->last_ack &
+				      ludlc_conn_window_mask(conn)];
+		it->result = 0;
+		ludlc_confirm_queued_lock(conn, it);
+
+		/* The peer holds our first numbered packet after our NAK, so
+		 * by now it has had the NAK, or lost it.
+		 */
+		if (conn->last_ack == conn->nak_track &&
+		    ludlc_platform_test_bit(LUDLC_CONN_NAK_TRACKED_F,
+					    &conn->flags))
+			rx_nak_answered(conn);
+	}
+
+	if (num_acked) {
+		/* A new first packet, which has paid for no copy yet. */
+		ludlc_platform_clear_bit(LUDLC_CONN_TTL_CHARGED_F,
+					 &conn->flags);
+
+		/* A NAK sent last_sent back below what the peer holds. */
+		if (num_acked > num_sent)
+			conn->last_sent = conn->last_ack;
+	}
+
+	if (ack_id & LUDLC_NAK_FLAG)
+		return rx_handle_nak(conn, expired);
+
+	return 0;
 }
 
 /**
@@ -860,30 +1053,37 @@ static int rx_handle_nak(struct ludlc_connection *conn, ludlc_id_t num_wait)
  * This function is the core of the receive-side logic. It must be
  * called with the connection lock held. It performs the following steps:
  * 1. Validates packet size, and drops a tagged control packet.
- * 2. If not connected, calls @ref rx_handle_handshake.
+ * 2. If not connected, calls @ref rx_handle_handshake, and starts the
+ *    watchdog if that brings the link up.
  * 3. Handles control channel packets: an announced disconnect, and a
  *    numbered one, which is a handshake step from a peer that has restarted.
  * 4. Resets the connection watchdog timer.
- * 5. Validates the packet's TX ID sequence (`tx_id`).
- * 6. Sets flags for NAK or acceptance.
- * 7. Processes the acknowledgment ID (`ack_id`) to confirm sent packets.
- * 8. Calls @ref rx_handle_nak if a NAK flag is present.
+ * 5. Processes the acknowledgment ID (`ack_id`) to confirm sent packets,
+ *    through @ref rx_handle_ack.
+ * 6. Validates the packet's TX ID sequence (`tx_id`): accepts the next one,
+ *    acknowledges again a copy of one already received, and calls
+ *    @ref rx_gap for one sent after packets that went missing.
  *
  * @param conn Pointer to the connection structure.
  * @param packet Pointer to the received LUDLC packet.
  * @param pkt_sz The total size of the received packet.
+ * @param[out] expired A packet a NAK has given up; see @ref rx_handle_nak.
  * @return A bitmask of flags:
  * - @ref HANDLE_RX_REQUEST_TX_F to request a response (ACK/NAK/PING).
  * - @ref HANDLE_RX_ACCEPT_F to accept the packet's payload.
+ * - @ref HANDLE_RX_EXPIRED_F to confirm @p expired.
  */
 static int rx_handle_packet(
 		struct ludlc_connection *conn,
 		ludlc_packet_t *packet,
-		size_t pkt_sz)
+		size_t pkt_sz,
+		struct packet_queue_item *expired)
 {
 	bool ping = is_ping(packet->hdr.id.tx_id);
-	ludlc_id_t id, next_rcvd_id;
-	ludlc_id_t num_wait, num_acked;
+	bool unnumbered = ludlc_is_unnumbered_data(packet->hdr.id.tx_id,
+						    pkt_sz);
+	ludlc_id_t id, ahead;
+	bool step;
 	int ret;
 
 	if (!ping && pkt_sz < sizeof(ludlc_packet_hdr_t)) {
@@ -898,16 +1098,28 @@ static int rx_handle_packet(
 	 * misbehaving as well, or splits the channel field another way. The
 	 * packet belongs to no channel here. A PING has no channel field.
 	 */
-	if ((!ping ||
-	     ludlc_is_unnumbered_data(packet->hdr.id.tx_id, pkt_sz)) &&
-	    packet->hdr.chan != CONFIG_LUDLC_CONTROL_CHANNEL &&
-	    is_ctrl_chan(conn, packet->hdr.chan)) {
+	if ((unnumbered || !ping) &&
+			packet->hdr.chan != CONFIG_LUDLC_CONTROL_CHANNEL &&
+			is_ctrl_chan(conn, packet->hdr.chan)) {
 		LUDLC_INC_STATS(conn, dropped);
 		return 0;
 	}
 
+	/* A numbered control packet is a handshake step, whatever it
+	 * carries.
+	 */
+	step = !ping && packet->hdr.chan == CONFIG_LUDLC_CONTROL_CHANNEL;
+
 	if (conn->conn_state != LUDLC_STATE_CONNECTED) {
-		ret = rx_handle_handshake(conn, packet);
+		ret = rx_handle_handshake(conn, packet, step);
+
+		/* The watchdog starts with the link, whichever packet brings
+		 * it up: the last handshake step returns just below, before
+		 * anything else would start it.
+		 */
+		if (ret & HANDLE_RX_CONNECTED_F)
+			ludlc_watchdog_rearm(conn);
+
 		if ((ret & HANDLE_RX_CONTINUE_F) == 0) {
 			/* Handshake not complete, stop further processing */
 			return ret;
@@ -924,7 +1136,7 @@ static int rx_handle_packet(
 	 * layout is checked before the channel is read, because a PING ends
 	 * after the two IDs and has no channel field.
 	 */
-	if (ludlc_is_unnumbered_data(packet->hdr.id.tx_id, pkt_sz) &&
+	if (unnumbered &&
 	    packet->hdr.chan == CONFIG_LUDLC_CONTROL_CHANNEL &&
 	    packet->payload[0] == LUDLC_CTRL_DISCONNECT) {
 		/* The peer is closing the session deliberately, so it ends now
@@ -936,10 +1148,9 @@ static int rx_handle_packet(
 		return ret | HANDLE_RX_DISCONNECT_F;
 	}
 
-	if (!ping && packet->hdr.chan == CONFIG_LUDLC_CONTROL_CHANNEL) {
-		/* A numbered control packet is a handshake step, whatever it
-		 * carries. Unless it is the last step arriving again, its
-		 * sender has restarted and does not know this session is over.
+	if (step) {
+		/* Unless it is the last step arriving again, its sender has
+		 * restarted and does not know this session is over.
 		 */
 		if (!is_last_handshake_step(id)) {
 			on_disconnect_lock(conn);
@@ -952,71 +1163,65 @@ static int rx_handle_packet(
 	/* Any valid packet (even ping) resets the connection watchdog */
 	ludlc_watchdog_rearm(conn);
 
-	/* 1. check the correctness of the incoming packet's sequence. */
-	next_rcvd_id = (conn->last_received + 1) & LUDLC_ID_MASK;
-	if (next_rcvd_id != id) {
-		if (conn->last_received != id) {
-			/* Out of order, so ask the peer to resend what was
-			 * missed (NAK).
-			 */
-			ludlc_platform_clear_bit(LUDLC_CONN_NO_NAK_F,
-					&conn->flags);
-			ret |= HANDLE_RX_REQUEST_TX_F;
-		}
-		/* Otherwise last_received == id, a duplicate of the packet
-		 * just received: the peer resent it because our ACK was lost.
-		 * Drop the payload, but still process its ACK field.
-		 */
-	} else if (!ping) {
-		conn->last_received = next_rcvd_id;
-		ret |= HANDLE_RX_REQUEST_TX_F | HANDLE_RX_ACCEPT_F;
-	}
+	/* 1. Our own packets first: those the peer holds, and one it misses.
+	 * The sequence below needs to know whether the peer has had our NAK.
+	 */
+	ret |= rx_handle_ack(conn, packet->hdr.id.ack_id, expired);
 
-	if (ludlc_is_unnumbered_data(packet->hdr.id.tx_id, pkt_sz)) {
+	/* 2. Then the peer's: how far past the next one expected this one
+	 * is. Up to a window ahead, it was sent after packets that never
+	 * arrived; further, it is behind, a copy of one received already.
+	 */
+	ahead = (id - conn->last_received - 1) & LUDLC_ID_MASK;
+
+	if (ping) {
+		/* A PING or an unnumbered packet holds the ID the peer sends
+		 * next, so everything before that has gone out: up to a
+		 * window of it lost, or behind, the peer having gone back.
+		 * The tie, a whole window either way, counts as lost: a NAK
+		 * too many costs a re-transmission, one too few stalls the
+		 * link. The very ID expected shows nothing missing, which
+		 * answers a NAK whose packets the peer has given up.
+		 */
+		if (!ahead || ahead > ludlc_conn_window(conn))
+			rx_nak_answered(conn);
+		else
+			ret |= rx_gap(conn, false);
+
 		/* Outside the sequence, so accept the payload regardless of
 		 * the ID check above and leave last_received unchanged.
 		 * There is nothing to ACK.
 		 */
-		ret |= HANDLE_RX_ACCEPT_F;
-	}
-
-	/* 2. now process ack_id for our side */
-	/* Get the number of packets are waiting for acknowledge */
-	num_wait = (conn->last_sent - conn->last_ack) & LUDLC_ID_MASK;
-
-	/* Number of packets this ACK confirms. ludlc_id_t is unsigned, so the
-	 * subtraction wraps and the mask alone gives the right count.
-	 */
-	num_acked = (packet->hdr.id.ack_id - conn->last_ack) & LUDLC_ID_MASK;
-
-	if (num_acked <= num_wait) {
-		/* Valid ACK range */
-		for (; num_acked; num_acked--) {
-			uint8_t q_idx;
-			conn->last_ack = (conn->last_ack + 1) & LUDLC_ID_MASK;
-			q_idx = conn->last_ack & ludlc_conn_window_mask(conn);
-			conn->packets_q[q_idx].status.result = 0;
-			ludlc_confirm_queued_lock(conn,
-						  &conn->packets_q[q_idx]);
-		}
-
-		/* NAK handling needs the unacked count after the cumulative
-		 * ACK above, not the stale num_wait from before the loop.
+		if (unnumbered)
+			ret |= HANDLE_RX_ACCEPT_F;
+	} else if (!ahead) {
+		/* The next one. A NAK still waiting would report the one
+		 * after it, which the peer is about to send in any case.
 		 */
-		if (packet->hdr.id.ack_id & LUDLC_NAK_FLAG) {
-			num_wait = (conn->last_sent - conn->last_ack) &
-					LUDLC_ID_MASK;
-			ret |= rx_handle_nak(conn, num_wait);
-		}
+		conn->last_received = id;
+		ludlc_platform_set_bit(LUDLC_CONN_NO_NAK_F, &conn->flags);
+		rx_nak_answered(conn);
+		ret |= HANDLE_RX_REQUEST_TX_F | HANDLE_RX_ACCEPT_F;
+	} else if (ahead < ludlc_conn_window(conn)) {
+		/* Packets went missing. The peer sends in rising order, so
+		 * one no further ahead than the last it sent comes again:
+		 * the peer has gone back, answering a NAK.
+		 */
+		ludlc_id_t last = (conn->last_seen - conn->last_received - 1) &
+				  LUDLC_ID_MASK;
+
+		ret |= rx_gap(conn, last < ludlc_conn_window(conn) &&
+				    ahead <= last);
 	} else {
-		/* The peer ACKed packets we never sent, so the two sides are
-		 * badly out of sync.
-		 *
-		 * TODO: force an immediate reconnect?
+		/* A copy of one received already: the peer missed our ACK,
+		 * or went back. Drop the payload, and ACK again.
 		 */
-		LUDLC_LOG_DEBUG("ACK ID is too far: (%x) from last_ack = %x",
-				packet->hdr.id.ack_id, conn->last_ack);
+		rx_nak_answered(conn);
+		ret |= HANDLE_RX_REQUEST_TX_F;
 	}
+
+	/* How far the peer has sent, a PING holding the ID it sends next. */
+	conn->last_seen = ping ? (id - 1) & LUDLC_ID_MASK : id;
 
 	return ret;
 }
@@ -1028,7 +1233,7 @@ static int rx_handle_packet(
  * machine. It acquires the connection lock, processes the packet, and
  * then (after releasing the lock) invokes any necessary user callbacks
  * (`on_caps` for the peer's capabilities, `on_confirm` for acknowledged
- * packets, `on_recv` for new data).
+ * packets and one a NAK has given up, `on_recv` for new data).
  *
  * @param conn Pointer to the connection structure.
  * @param packet Pointer to the buffer containing the received packet.
@@ -1040,6 +1245,7 @@ int ludlc_receive(struct ludlc_connection *conn,
 			ludlc_packet_t *packet, size_t pkt_sz,
 			ludlc_timestamp_t tstamp)
 {
+	struct packet_queue_item expired = { 0 };
 	int ret;
 
 	LUDLC_LOG_TRACE("packet (%x, %x) @%llu",
@@ -1048,7 +1254,7 @@ int ludlc_receive(struct ludlc_connection *conn,
 			tstamp);
 
 	LUDLC_LOCK(&conn->lock);
-		ret = rx_handle_packet(conn, packet, pkt_sz);
+		ret = rx_handle_packet(conn, packet, pkt_sz, &expired);
 	LUDLC_UNLOCK(&conn->lock);
 
 	/* --- Actions outside the lock --- */
@@ -1077,6 +1283,10 @@ int ludlc_receive(struct ludlc_connection *conn,
 	/* Call deferred on_confirm callbacks (for MT) */
 	ludlc_confirm_unlocked(conn);
 
+	/* After those, the packet given up being the one that follows them. */
+	if (ret & HANDLE_RX_EXPIRED_F)
+		ludlc_call_on_confirm(conn, &expired);
+
 	if (ret & HANDLE_RX_DISCONNECT_F) {
 		ludlc_call_on_disconnect(conn);
 	}
@@ -1099,60 +1309,6 @@ EXPORT_SYMBOL_GPL(ludlc_receive);
 #endif
 
 /**
- * @brief Drops the leading packet if its retry budget has run out.
- *
- * A NAK decrements the TTL of the packet it names but leaves it in place, so
- * the queue is only rearranged here, on the transmit side. By this point the
- * previous frame has been sent and the transport has finished reading the
- * slot it came from; dropping the packet as the NAK arrived would move a slot
- * the transport is still encoding and free a payload it is still reading.
- *
- * Only the first unacknowledged packet is ever decremented, so at most one
- * can be waiting to be dropped. The packets behind it move up one place, each
- * taking the previous ID. A NAK also rewinds `last_sent` to `last_ack`, so
- * those packets are all unsent and keep their order.
- *
- * @note This function must be called with the connection lock held.
- *
- * @param conn Pointer to the connection structure.
- * @param[out] expired The dropped packet, to be confirmed once the lock has
- * been released.
- * @return true if a packet was dropped and @p expired filled in.
- */
-static bool ludlc_tx_drop_expired(struct ludlc_connection *conn,
-		struct packet_queue_item *expired)
-{
-	ludlc_id_t id = (conn->last_ack + 1) & LUDLC_ID_MASK;
-	ludlc_id_t q_idx = id & ludlc_conn_window_mask(conn);
-	ludlc_id_t num;
-
-	/* Nothing outstanding, or the leading packet still has attempts left.
-	 * A queued packet starts with at least one, so only a NAK can bring it
-	 * to 0.
-	 */
-	if (conn->last_queued == conn->last_ack || conn->packets_q[q_idx].ttl)
-		return false;
-
-	conn->packets_q[q_idx].status.result = ETIMEDOUT;
-	*expired = conn->packets_q[q_idx];
-
-	num = (conn->last_queued - id) & LUDLC_ID_MASK;
-
-	for (; num; num--) {
-		ludlc_id_t next = (id + 1) & LUDLC_ID_MASK;
-
-		conn->packets_q[id & ludlc_conn_window_mask(conn)] =
-			conn->packets_q[next & ludlc_conn_window_mask(conn)];
-
-		id = next;
-	}
-
-	conn->last_queued = (conn->last_queued - 1) & LUDLC_ID_MASK;
-
-	return true;
-}
-
-/**
  * @brief Retrieves the next packet to be sent by the transport layer.
  *
  * This function is called by the transmit task to get the next packet
@@ -1160,9 +1316,15 @@ static bool ludlc_tx_drop_expired(struct ludlc_connection *conn,
  * the connection state:
  * - **Handshake:** Returns a control packet.
  * - **Connected (queue empty):** Returns a PING packet.
- * - **Connected (queue has data):** Returns the next data packet from the queue.
+ * - **Connected (queue has data):** Returns the next data packet from the
+ *   queue.
  *
- * It provides pointers to the header and payload segments separately.
+ * It provides pointers to the header and payload segments separately. Both
+ * are the core's and stay as they are until the next call, whatever happens
+ * to the packet meanwhile: the header is built for the frame, and the
+ * payload is a copy of the caller's buffer, which an ACK for an earlier copy
+ * or the link going down may return before the transport has finished. The
+ * capabilities of a handshake step go out as they are, being constant.
  *
  * Returning a frame also restarts the ping timer, which the transport does
  * not have to do anything about. On a connected link that postpones the
@@ -1191,9 +1353,11 @@ int ludlc_get_packet_to_send(struct ludlc_connection *conn,
 		const void **payload,
 		ludlc_payload_size_t *pay_sz)
 {
-	struct packet_queue_item u_sent, expired;
-	bool u_done = false, exp_done, disc_done = false;
-	uint8_t ack, id, q_idx;
+	const struct packet_queue_item *it = NULL;
+	struct packet_queue_item u_sent;
+	bool u_done = false, disc_done = false;
+	bool ping = false, numbered = false;
+	ludlc_id_t ack, id;
 	int ret = 1; /* Assume this is the last packet by default */
 
 	if (!hdr || !hdr_sz || !payload || !pay_sz)
@@ -1214,7 +1378,7 @@ int ludlc_get_packet_to_send(struct ludlc_connection *conn,
 		disc_done = ludlc_platform_test_bit(LUDLC_CONN_DISC_AFTER_TX_F,
 				&conn->flags);
 		if (!disc_done) {
-			conn->u_packet.status.result = 0;
+			conn->u_packet.result = 0;
 			u_sent = conn->u_packet;
 			u_done = true;
 		}
@@ -1232,23 +1396,21 @@ int ludlc_get_packet_to_send(struct ludlc_connection *conn,
 		return -ENOTCONN;
 	}
 
-	/* The same goes for a packet that has run out of attempts: it is taken
-	 * off the queue here, where the transport is between frames.
-	 */
-	exp_done = ludlc_tx_drop_expired(conn, &expired);
+	*hdr = &conn->tx_hdr;
+	*payload = NULL;
+	*pay_sz = 0;
 
 	switch (conn->conn_state) {
 	default:/* LUDLC_STATE_DISCONNECTED, LUDLC_STATE_WAIT_CONN_1, etc. */
 
 		/* Send handshake control packet */
-		conn->ctrl_packet.chan = CONFIG_LUDLC_CONTROL_CHANNEL;
-		conn->ctrl_packet.id.tx_id = conn->conn_state;
+		conn->tx_hdr.chan = CONFIG_LUDLC_CONTROL_CHANNEL;
+		conn->tx_hdr.id.tx_id = conn->conn_state;
 		/* No ACK during handshake */
-		conn->ctrl_packet.id.ack_id = 0;
+		conn->tx_hdr.id.ack_id = 0;
 
 		/* Full control header (id + channel) */
-		*hdr = &conn->ctrl_packet;
-		*hdr_sz = sizeof(conn->ctrl_packet);
+		*hdr_sz = sizeof(conn->tx_hdr);
 
 		/* The steps of States 1 and 2 both carry this end's
 		 * capabilities: the peer leaves State 1 on either, and this
@@ -1261,23 +1423,11 @@ int ludlc_get_packet_to_send(struct ludlc_connection *conn,
 		    conn->cb && conn->cb->caps_size) {
 			*payload = conn->cb->caps;
 			*pay_sz = conn->cb->caps_size;
-		} else {
-			*payload = NULL;
-			*pay_sz = 0;
 		}
 
 		break;
 
 	case LUDLC_STATE_CONNECTED:
-		/* Prepare ACK ID */
-		ack = conn->last_received;
-
-		/* Check if a NAK needs to be sent, and take it if so */
-		if (!ludlc_platform_test_and_set_bit(LUDLC_CONN_NO_NAK_F,
-						&conn->flags)) {
-			ack |= LUDLC_NAK_FLAG;
-		}
-
 		/* Next data packet sequence */
 		id = (conn->last_sent + 1) & LUDLC_ID_MASK;
 
@@ -1292,14 +1442,10 @@ int ludlc_get_packet_to_send(struct ludlc_connection *conn,
 			ludlc_platform_clear_bit(LUDLC_CONN_U_DONE_F,
 					&conn->flags);
 
-			conn->u_packet.hdr.id.tx_id = id | LUDLC_PING_FLAG;
-			conn->u_packet.hdr.id.ack_id = ack;
-
-			*hdr = &conn->u_packet.hdr;
-			*hdr_sz = sizeof(conn->u_packet.hdr);
-
-			*payload = conn->u_packet.payload;
-			*pay_sz = conn->u_packet.size;
+			conn->tx_hdr.id.tx_id = id | LUDLC_PING_FLAG;
+			conn->tx_hdr.chan = conn->u_packet.chan;
+			*hdr_sz = sizeof(conn->tx_hdr);
+			it = &conn->u_packet;
 
 			if (conn->last_sent != conn->last_queued) {
 				/* The window still has packets waiting */
@@ -1316,44 +1462,87 @@ int ludlc_get_packet_to_send(struct ludlc_connection *conn,
 			if (ludlc_platform_test_bit(LUDLC_CONN_DISC_AFTER_TX_F,
 						    &conn->flags))
 				ludlc_platform_request_tx(conn);
-
-			break;
-		}
-
-		if (conn->last_sent == conn->last_queued) {
+		} else if (conn->last_sent == conn->last_queued) {
 			/* Nothing to send, so send PING instead. */
-			conn->ctrl_packet.id.tx_id = id | LUDLC_PING_FLAG;
-			conn->ctrl_packet.id.ack_id = ack;
-			*hdr = &conn->ctrl_packet.id;
-			*hdr_sz = sizeof(conn->ctrl_packet.id);
+			conn->tx_hdr.id.tx_id = id | LUDLC_PING_FLAG;
+			*hdr_sz = sizeof(conn->tx_hdr.id);
+			ping = true;
+		} else {
+			/* send packet from the queue */
+			it = &conn->packets_q[
+				id & ludlc_conn_window_mask(conn)];
 
-			*payload = NULL;
-			*pay_sz = 0;
+			conn->tx_hdr.id.tx_id = id;
+			conn->tx_hdr.chan = it->chan;
+			*hdr_sz = sizeof(conn->tx_hdr);
 
-			break;
+			/* A new copy of the first packet unacknowledged,
+			 * which a NAK may charge for again, unless a give-up
+			 * has just emptied the window, see rx_handle_nak().
+			 */
+			if (conn->last_sent == conn->last_ack &&
+			    !ludlc_platform_test_and_clear_bit(
+					LUDLC_CONN_TTL_HOLD_F, &conn->flags))
+				ludlc_platform_clear_bit(
+					LUDLC_CONN_TTL_CHARGED_F,
+					&conn->flags);
+
+			/* Advance sent pointer */
+			conn->last_sent = id;
+			numbered = true;
+
+			if (id != conn->last_queued) {
+				/* More packets are waiting in the queue */
+				ret = 0;
+			}
 		}
 
-		/* send packet from the queue */
-		q_idx = id & ludlc_conn_window_mask(conn);
-
-		/* Fill in the dynamic header fields */
-		conn->packets_q[q_idx].hdr.id.tx_id = id;
-		conn->packets_q[q_idx].hdr.id.ack_id = ack;
-
-		*hdr = &conn->packets_q[q_idx].hdr;
-		*hdr_sz = sizeof(conn->packets_q[q_idx].hdr);
-
-		*payload = conn->packets_q[q_idx].payload;
-		*pay_sz = conn->packets_q[q_idx].size;
-
-		/* Advance sent pointer */
-		conn->last_sent = id;
-
-		if (id != conn->last_queued) {
-			/* More packets are waiting in the queue */
-			ret = 0;
+		/* Prepare ACK ID, with a NAK if one is waiting. A NAK stands
+		 * until the peer answers it, see rx_gap(), and a PING carries
+		 * it again meanwhile. Without that, a NAK lost each way would
+		 * leave each end waiting for an ACK the other cannot send
+		 * until it has the NAK. While it stands the receive path asks
+		 * for no frame, so that PING is the keep-alive, a ping period
+		 * after the last frame. The period must cover the round trip
+		 * and a full window sent ahead of the answer, or the repeat
+		 * may charge a copy still on its way, see rx_handle_nak().
+		 * Either way the NAK goes out anew, and only a numbered packet
+		 * sent after it can show it arrived.
+		 */
+		ack = conn->last_received;
+		if (!ludlc_platform_test_and_set_bit(LUDLC_CONN_NO_NAK_F,
+						&conn->flags) ||
+		    (ping && ludlc_platform_test_bit(LUDLC_CONN_NAK_OUT_F,
+						     &conn->flags))) {
+			ack |= LUDLC_NAK_FLAG;
+			ludlc_platform_set_bit(LUDLC_CONN_NAK_OUT_F,
+					       &conn->flags);
+			ludlc_platform_clear_bit(LUDLC_CONN_NAK_TRACKED_F,
+						 &conn->flags);
 		}
+
+		/* The peer's ACK for the first numbered packet after the NAK
+		 * shows that it has had the NAK, or lost it.
+		 */
+		if (numbered && rx_nak_untracked(conn)) {
+			conn->nak_track = id;
+			ludlc_platform_set_bit(LUDLC_CONN_NAK_TRACKED_F,
+					       &conn->flags);
+		}
+
+		conn->tx_hdr.id.ack_id = ack;
 		break;
+	}
+
+	if (it) {
+		/* The transport reads the frame until it asks for the next
+		 * one, while the packet may be confirmed and its buffer
+		 * returned meanwhile. So the frame carries a copy.
+		 */
+		if (it->size)
+			memcpy(conn->tx_payload, it->payload, it->size);
+		*payload = conn->tx_payload;
+		*pay_sz = it->size;
 	}
 
 	/*
@@ -1371,9 +1560,6 @@ int ludlc_get_packet_to_send(struct ludlc_connection *conn,
 
 	if (u_done)
 		ludlc_call_on_confirm(conn, &u_sent);
-
-	if (exp_done)
-		ludlc_call_on_confirm(conn, &expired);
 
 	return ret;
 }
@@ -1627,7 +1813,7 @@ int ludlc_connection_init(struct ludlc_connection *conn,
 
 	conn->cb = cb;
 	conn->user_ctx = user_ctx;
-	conn->ctrl_packet.chan = CONFIG_LUDLC_CONTROL_CHANNEL;
+	conn->tx_hdr.chan = CONFIG_LUDLC_CONTROL_CHANNEL;
 	conn->conn_state = LUDLC_STATE_DISCONNECTED;
 
 	conn->flags = LUDLC_CONN_IDLE_MASK;

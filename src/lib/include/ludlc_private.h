@@ -97,37 +97,28 @@ struct ludlc_stats {
 #endif
 
 /**
- * @struct packet_queue_item_status
- * @brief Used in the confirmation queue/callback to report packet status.
- *
- * @note The size of this structure is designed to match @ref ludlc_packet_hdr_t
- * to fit within the `packet_queue_item` union.
- */
-struct packet_queue_item_status {
-	/** 0 on success, or an error code (e.g., EPIPE, EREMOTEIO). */
-	ludlc_id_t result;
-	/** Reserved for alignment, matches `ack_id`. */
-	ludlc_id_t reserved;
-	/** The channel the packet was sent on. */
-	ludlc_channel_t	 chan;
-};
-
-/**
  * @struct packet_queue_item
- * @brief Represents a packet in the transmit window (sliding window queue).
+ * @brief A packet in the transmit window, or the unnumbered one.
+ *
+ * What the caller handed over and what its confirmation reports. The header
+ * a packet goes out with is built in @c tx_hdr each time it is sent.
  */
 struct packet_queue_item {
-	/** Pointer to the payload data buffer. */
+	/** The caller's buffer, which stays the caller's until confirmed. */
 	const void		*payload;
 	/** Size of the payload data. */
 	ludlc_payload_size_t	size;
-	union {
-		/** Header used for transmission. */
-		ludlc_packet_hdr_t 	hdr;
-		/** Status used for confirmation. */
-		struct packet_queue_item_status status;
-	};
-	/** Time-To-Live (remaining retries). */
+	/** The channel field the packet is sent with, its tag included. */
+	ludlc_channel_t		chan;
+	/** The error the confirmation reports, as a positive errno, or 0. */
+	uint8_t			result;
+	/**
+	 * @brief Losses the packet may still suffer before it is given up.
+	 *
+	 * It is given up as this reaches zero, and those behind it move up
+	 * one place, so no packet in the window holds zero. The unnumbered
+	 * packet does not use it.
+	 */
 	uint8_t			ttl;
 };
 
@@ -195,6 +186,24 @@ struct ludlc_connection {
  * It has no sequence number and no window slot, so it is reported from a slot
  * of its own rather than from the range the numbered packets use. */
 #define LUDLC_CONN_U_CONFIRM_F		6
+/** @def LUDLC_CONN_NAK_OUT_F
+ * @brief A NAK has gone out, and the peer has yet to be seen answering it.
+ *
+ * What the peer sent before it saw the NAK still shows the gap, and is not
+ * reported again. See @ref rx_gap. */
+#define LUDLC_CONN_NAK_OUT_F		7
+/** @def LUDLC_CONN_NAK_TRACKED_F
+ * @brief @c nak_track holds the packet whose ACK shows the peer has seen the
+ * NAK. */
+#define LUDLC_CONN_NAK_TRACKED_F	8
+/** @def LUDLC_CONN_TTL_CHARGED_F
+ * @brief The first unacknowledged packet has paid for the loss of the copy
+ * last sent. */
+#define LUDLC_CONN_TTL_CHARGED_F	9
+/** @def LUDLC_CONN_TTL_HOLD_F
+ * @brief A give-up has emptied the window, so the next copy sent first is not
+ * charged for: the peer may still repeat a NAK about the packets given up. */
+#define LUDLC_CONN_TTL_HOLD_F		10
 
 	/** @brief The flags above, read and written under @c lock.
 	 *
@@ -225,6 +234,8 @@ struct ludlc_connection {
 	 * run; see @c last_reported.
 	 */
 	struct packet_queue_item	*packets_q;
+	/** @brief The copy of the payload being sent, after the window. */
+	uint8_t				*tx_payload;
 #else
 	/**
 	 * @brief The sliding window packet queue.
@@ -233,10 +244,24 @@ struct ludlc_connection {
 	 * @ref ludlc_conn_window() slots.
 	 */
 	struct packet_queue_item	packets_q[CONFIG_LUDLC_WINDOW];
+	/**
+	 * @brief The payload of the frame being sent.
+	 *
+	 * A copy of the caller's buffer, taken as the frame is handed to the
+	 * transport, which reads the frame until it asks for the next one.
+	 * The packet may be confirmed meanwhile and its buffer reused, an ACK
+	 * for an earlier copy arriving or the link going down.
+	 */
+	uint8_t			tx_payload[CONFIG_LUDLC_MAX_PAYLOAD_SIZE];
 #endif
 
-	/** Pre-allocated header for control packets (PING, Handshake). */
-	ludlc_packet_hdr_t		ctrl_packet;
+	/**
+	 * @brief The header of the frame being sent.
+	 *
+	 * Built for every frame, whatever it carries, and read by the
+	 * transport until it asks for the next one. Nothing else writes it.
+	 */
+	ludlc_packet_hdr_t		tx_hdr;
 
 	/** @brief The pending unnumbered packet, see the flags above.
 	 *
@@ -267,6 +292,17 @@ struct ludlc_connection {
 	ludlc_id_t	last_ack;
 	/** ID of the last valid, in-sequence packet received. */
 	ludlc_id_t	last_received;
+	/** @brief ID of the last numbered packet received, in sequence or not.
+	 *
+	 * The peer sends its packets in rising order until it goes back to
+	 * send them again, which is how a receiver knows the peer has
+	 * answered a NAK. */
+	ludlc_id_t	last_seen;
+	/** @brief Our first numbered packet sent after our last NAK.
+	 *
+	 * Valid with @ref LUDLC_CONN_NAK_TRACKED_F. Once the peer has
+	 * acknowledged it, it has seen the NAK, or never will. */
+	ludlc_id_t	nak_track;
 
 #ifdef CONFIG_LUDLC_MT
 	/** @brief ID of the last packet whose confirmation has been reported.

@@ -75,9 +75,12 @@ struct ludlc_conn_cb {
 	 *
 	 * @param conn The connection handling the packet.
 	 * @param error 0 on successful acknowledgment, or a negative
-	 * error code (e.g., -EPIPE, -EREMOTEIO) on failure.
-	 * @param chan The channel field the packet was sent with, its tag
-	 * included.
+	 *              error code on failure: -ETIMEDOUT for a packet given up
+	 *              once its TTL ran out, -EPIPE for one the link went
+	 *              down under, -ECANCELED* for an unnumbered packet a
+	 *              DISCONNECT replaced.
+	 * @param chan The channel field the packet was sent with,
+	 *             its tag included.
 	 * @param data Pointer to the payload data that was sent.
 	 * @param data_size The size of the payload data.
 	 * @param user_arg The user-defined context pointer.
@@ -223,10 +226,12 @@ ludlc_channel_t ludlc_chan_tag(const struct ludlc_connection *conn,
  * @param buf Pointer to the payload data buffer.
  * @param size The size of the payload, up to what this link carries. See
  * @ref ludlc_conn_max_payload.
- * @param ttl How many times the packet may be sent. The first send counts,
- * and each NAK that reports this packet missing costs one more. A packet
- * re-transmitted after another packet's gap is not charged for it. A value
- * of 0 means a single attempt. Values above @ref LUDLC_MAX_TTL are clamped.
+ * @param ttl How many times the packet may be sent and lost. Each copy the
+ * peer reports missing costs one, and once none is left the packet is given
+ * up and confirmed with -ETIMEDOUT, while those queued behind it go on. A
+ * packet re-transmitted after another packet's gap is not charged for it. A
+ * value of 0 means a single attempt. Values above @ref LUDLC_MAX_TTL are
+ * clamped.
  * @return 0 on success.
  * @return -EINVAL if @p buf is NULL and @p size is not, if @p size is too
  * large, or if @p dst_chan selects @ref CONFIG_LUDLC_CONTROL_CHANNEL, with a
@@ -282,10 +287,10 @@ int ludlc_send_urgent_data(struct ludlc_connection *conn,
  *
  * This side goes down once the frame has been sent, and @c on_disconnect
  * reports it as it would any other disconnect. Packets still queued are
- * failed with @c EPIPE, so a caller with data that must arrive should see it
- * confirmed first. An unnumbered packet still waiting to be sent is dropped
- * and confirmed with @c ECANCELED, the DISCONNECT being the last frame of the
- * session.
+ * failed with @c -EPIPE, so a caller with data that must delivered should wait
+ * until it confirmed first. An unnumbered packet still waiting to be sent is
+ * dropped and confirmed with @c -ECANCELED, the DISCONNECT being the
+ * last frame of the session.
  *
  * @param conn The connection to send the disconnect on.
  * @return 0 on success.

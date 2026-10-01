@@ -24,7 +24,8 @@
  * @def CONFIG_LUDLC_WINDOW
  * @brief Largest sliding-window size a connection may use.
  *
- * Must be a power of 2. Defaults to 4. Each connection's queue is this many
+ * Must be a power of 2, and at most half the sequence numbers the IDs carry:
+ * 64 with 8-bit IDs. Defaults to 4. Each connection's queue is this many
  * slots; with @ref CONFIG_LUDLC_MULTI_CONN a link may run a smaller window
  * via @ref ludlc_conn_cfg.
  */
@@ -101,11 +102,25 @@ enum __build_assert_enum_ludlc_id_t__ {
 };
 #endif
 
+/*
+ * A receiver tells a packet sent again from one it has yet to see by where
+ * its ID falls: in the window behind the last one received, or in the window
+ * ahead. The two must not overlap, so a window is at most half the sequence
+ * numbers, the top bit of an ID being a flag. A link with several
+ * connections checks its own window when it is opened.
+ */
+#if (CONFIG_LUDLC_WINDOW) > (1ULL << ((CONFIG_LUDLC_ID_BITS) - 2))
+#error CONFIG_LUDLC_WINDOW is more than CONFIG_LUDLC_ID_BITS can tell apart
+#endif
+
 /**
  * @def CONFIG_LUDLC_PING_TIME
  * @brief The time between heartbeat PING (idle) packets, in microseconds.
  *
- * Defaults to 1,000,000 us (1 second).
+ * It must exceed the round trip plus the time a full window takes to send:
+ * a PING repeats a NAK still unanswered after this long, and an answer still
+ * on its way would be charged for as lost. Defaults to 1,000,000 us (1
+ * second).
  */
 #ifndef CONFIG_LUDLC_PING_TIME
 #define CONFIG_LUDLC_PING_TIME	1000000UL
@@ -465,8 +480,9 @@ struct ludlc_conn_cfg {
 	/**
 	 * @brief Keepalive ping period, in microseconds.
 	 *
-	 * The watchdog is three times this. Zero asks for
-	 * @ref CONFIG_LUDLC_PING_TIME.
+	 * It must exceed the round trip plus the time a full window takes to
+	 * send, see @ref CONFIG_LUDLC_PING_TIME. The watchdog is three times
+	 * this. Zero asks for @ref CONFIG_LUDLC_PING_TIME.
 	 */
 	unsigned int ping_time;
 

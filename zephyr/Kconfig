@@ -23,12 +23,14 @@ config LUDLC_MT
 
 config LUDLC_WINDOW
 	int "Transmit window size"
+	range 1 64 if LUDLC_ID_BITS = 8
 	range 1 256
 	default 4
 	help
 	  Largest sliding-window size a connection may use. Must be a power
-	  of two. With LUDLC_MULTI_CONN a link may run a smaller window via
-	  its ludlc_conn_cfg.
+	  of two, and at most half the sequence numbers LUDLC_ID_BITS
+	  carries: 64 with 8-bit IDs. With LUDLC_MULTI_CONN a link may run a
+	  smaller window via its ludlc_conn_cfg.
 
 config LUDLC_CONFIRM_BATCH
 	int "Confirmations reported per lock acquisition"
@@ -72,7 +74,10 @@ config LUDLC_PING_TIME
 	range 1 2147483647
 	default 1000000
 	help
-	  Keepalive ping period used by the protocol timers.
+	  Keepalive ping period used by the protocol timers. It must exceed
+	  the round trip plus the time a full window takes to send: a PING
+	  repeats a NAK still unanswered after this long, and an answer
+	  still on its way would be charged for as lost.
 
 config LUDLC_PAYLOAD_BITS
 	int "Payload-size type width (bits)"
