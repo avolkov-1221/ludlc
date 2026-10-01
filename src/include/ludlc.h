@@ -17,11 +17,15 @@
 
 /**
  * @struct ludlc_conn_cb
- * @brief User-facing event callbacks for a LuDLC connection.
+ * @brief User-facing event callbacks for a LuDLC connection, and the
+ * capabilities it announces.
  *
  * This structure defines the set of callback functions that the LuDLC
  * core will invoke to notify the user application of various events, such
  * as connection status changes, received data, and packet confirmations.
+ * It also holds what this end tells its peer about itself in the handshake,
+ * which is constant and so costs the connection nothing. Must outlive the
+ * connection.
  */
 struct ludlc_conn_cb {
 	/**
@@ -84,6 +88,39 @@ struct ludlc_conn_cb {
 			const void *data,
 			ludlc_payload_size_t data_size,
 			void *user_arg);
+
+	/**
+	 * @brief Called with what the peer announced in the handshake: its
+	 * capabilities, or nothing for a peer that announces none.
+	 *
+	 * Taken from the handshake step that moves this end out of State 1,
+	 * so this runs once before every @c on_connect, and a link never
+	 * comes up without it.
+	 *
+	 * @param conn The connection being established.
+	 * @param data The peer's capabilities, valid during the call only,
+	 *             or NULL when it announced none.
+	 * @param data_size Their size in bytes, zero when it announced none.
+	 * @param user_arg The user-defined context pointer.
+	 */
+	void (*on_caps)(struct ludlc_connection *conn,
+			const void *data,
+			ludlc_payload_size_t data_size,
+			void *user_arg);
+
+	/**
+	 * @brief The capabilities this end announces to the peer, or NULL.
+	 *
+	 * Sent whole with the handshake steps of States 1 and 2, so they must
+	 * fit in one packet of the link, and must not change: the peer takes
+	 * them from whichever of the two moves it out of State 1, which may
+	 * be either. Their layout belongs to the application. Borrowed, and
+	 * must outlive the connection.
+	 */
+	const void *caps;
+
+	/** @brief Octets at @c caps, at most the payload the link carries. */
+	ludlc_payload_size_t caps_size;
 };
 
 /**
@@ -103,8 +140,9 @@ struct ludlc_conn_cb {
  * @param cb Pointer to the user event callbacks.
  * @param user_ctx A user-defined context pointer passed to all callbacks.
  * @return 0 on success.
- * @return -EINVAL if @p conn is NULL, or if @p cfg names a checksum, a frame,
- * a window, a TTL or a tag this build cannot hold.
+ * @return -EINVAL if @p conn is NULL, if @p cfg names a checksum, a frame, a
+ * window, a TTL or a tag this build cannot hold, or if the capabilities in
+ * @p cb do not fit in one packet of the link.
  * @return -ENOMEM if the queue the window needs could not be allocated. A
  * build with a single connection embeds that queue in the connection and
  * never returns this.

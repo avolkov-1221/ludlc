@@ -59,6 +59,13 @@
 #define HANDLE_RX_DISCONNECT_F	(1U<<4)
 
 /**
+ * @def HANDLE_RX_CAPS_F
+ * @brief Flag indicating that the packet carries the peer's capabilities,
+ *        to be handed to the upper level.
+ */
+#define HANDLE_RX_CAPS_F	(1U<<5)
+
+/**
  * @brief Checks if a given packet ID represents a PING packet.
  *
  * @param id The LuDLC packet ID to check.
@@ -72,9 +79,10 @@ static inline bool is_ping(ludlc_id_t id)
 /**
  * @brief Tells the peer's last handshake step from a peer that has restarted.
  *
- * Both arrive as an empty control packet. A restarted peer begins again from
- * the first step; the last step is one this side has already handled, and
- * arrives again only when the reply to it was lost. Ending the session over
+ * Both arrive as a numbered control packet, which a caller cannot send,
+ * empty or carrying the sender's capabilities. A restarted peer begins again
+ * from the first step; the last step is one this side has already handled,
+ * and arrives again only when the reply to it was lost. Ending the session over
  * it would undo a handshake that has just completed. A deliberate disconnect
  * carries @ref LUDLC_CTRL_DISCONNECT on an unnumbered packet, so the step ID
  * separates the two remaining cases exactly.
@@ -736,15 +744,14 @@ EXPORT_SYMBOL_GPL(ludlc_connect);
  *
  * @param conn Pointer to the connection structure to update.
  * @param packet Pointer to the received LUDLC packet.
- * @param pkt_sz The size of the received packet.
  * @retval An integer containing bit flags:
  * - HANDLE_RX_REQUEST_TX_F if a response should be sent.
  * - HANDLE_RX_CONTINUE_F if processing should continue (e.g., connected).
+ * - HANDLE_RX_CAPS_F if the packet says what the peer announces.
  */
 static int rx_handle_handshake(
 		struct ludlc_connection *conn,
-		ludlc_packet_t *packet,
-		size_t pkt_sz)
+		ludlc_packet_t *packet)
 {
 	ludlc_id_t id = packet->hdr.id.tx_id;
 	int ret = HANDLE_RX_REQUEST_TX_F; /* Default to sending a response */
@@ -773,10 +780,18 @@ static int rx_handle_handshake(
 		 * (conn_state or conn_state + 1).
 		 */
 		if ((unsigned int)(id - conn->conn_state) < 2U) {
-			/* Check the optional caps data */
-			if (id == LUDLC_STATE_WAIT_CONN_1 &&
-					pkt_sz > sizeof(ludlc_packet_hdr_t)) {
-				ret |= HANDLE_RX_ACCEPT_F;
+			/* Only the step that takes this end out of State 1
+			 * hands on what the peer announces, its capabilities
+			 * or nothing. Every handshake leaves State 1 on the
+			 * peer's id=1 or id=2, which both carry it, whereas a
+			 * PING or data from a peer already connected may end
+			 * State 2. Either step may be the one: the peer passes
+			 * through State 1 without sending id=1 when its
+			 * transmitter gets no turn before it moves on. So this
+			 * happens once per handshake, before the link is up.
+			 */
+			if (conn->conn_state == LUDLC_STATE_WAIT_CONN_1) {
+				ret |= HANDLE_RX_CAPS_F;
 			}
 
 			/* This is the expected next handshake step */
@@ -846,8 +861,8 @@ static int rx_handle_nak(struct ludlc_connection *conn, ludlc_id_t num_wait)
  * called with the connection lock held. It performs the following steps:
  * 1. Validates packet size, and drops a tagged control packet.
  * 2. If not connected, calls @ref rx_handle_handshake.
- * 3. Handles control channel packets: an announced disconnect, and an empty
- *    one, which is a handshake step from a peer that has restarted.
+ * 3. Handles control channel packets: an announced disconnect, and a
+ *    numbered one, which is a handshake step from a peer that has restarted.
  * 4. Resets the connection watchdog timer.
  * 5. Validates the packet's TX ID sequence (`tx_id`).
  * 6. Sets flags for NAK or acceptance.
@@ -892,7 +907,7 @@ static int rx_handle_packet(
 	}
 
 	if (conn->conn_state != LUDLC_STATE_CONNECTED) {
-		ret = rx_handle_handshake(conn, packet, pkt_sz);
+		ret = rx_handle_handshake(conn, packet);
 		if ((ret & HANDLE_RX_CONTINUE_F) == 0) {
 			/* Handshake not complete, stop further processing */
 			return ret;
@@ -922,18 +937,16 @@ static int rx_handle_packet(
 	}
 
 	if (!ping && packet->hdr.chan == CONFIG_LUDLC_CONTROL_CHANNEL) {
-		if (pkt_sz == sizeof(ludlc_packet_hdr_t)) {
-			/* An empty control packet is a handshake step, so its
-			 * sender has restarted and does not know this session
-			 * is over.
-			 */
-			if (!is_last_handshake_step(id)) {
-				on_disconnect_lock(conn);
-				ret |= HANDLE_RX_DISCONNECT_F;
-			}
-			/* Respond to disconnect/handshake */
-			return ret | HANDLE_RX_REQUEST_TX_F;
+		/* A numbered control packet is a handshake step, whatever it
+		 * carries. Unless it is the last step arriving again, its
+		 * sender has restarted and does not know this session is over.
+		 */
+		if (!is_last_handshake_step(id)) {
+			on_disconnect_lock(conn);
+			ret |= HANDLE_RX_DISCONNECT_F;
 		}
+		/* Respond to disconnect/handshake */
+		return ret | HANDLE_RX_REQUEST_TX_F;
 	}
 
 	/* Any valid packet (even ping) resets the connection watchdog */
@@ -1014,7 +1027,8 @@ static int rx_handle_packet(
  * This is the main entry point for feeding data *into* the LuDLC state
  * machine. It acquires the connection lock, processes the packet, and
  * then (after releasing the lock) invokes any necessary user callbacks
- * (`on_confirm` for acknowledged packets, `on_recv` for new data).
+ * (`on_caps` for the peer's capabilities, `on_confirm` for acknowledged
+ * packets, `on_recv` for new data).
  *
  * @param conn Pointer to the connection structure.
  * @param packet Pointer to the buffer containing the received packet.
@@ -1038,6 +1052,16 @@ int ludlc_receive(struct ludlc_connection *conn,
 	LUDLC_UNLOCK(&conn->lock);
 
 	/* --- Actions outside the lock --- */
+
+	/* Never on the packet that completes the handshake, which comes later,
+	 * so the application has the peer's capabilities by on_connect.
+	 */
+	if ((ret & HANDLE_RX_CAPS_F) && conn->cb && conn->cb->on_caps) {
+		ludlc_payload_size_t size = pkt_sz - sizeof(packet->hdr);
+
+		conn->cb->on_caps(conn, size ? packet->payload : NULL, size,
+				conn->user_ctx);
+	}
 
 	if (ret & HANDLE_RX_CONNECTED_F) {
 		LUDLC_INC_STATS(conn, on_conn);
@@ -1226,8 +1250,21 @@ int ludlc_get_packet_to_send(struct ludlc_connection *conn,
 		*hdr = &conn->ctrl_packet;
 		*hdr_sz = sizeof(conn->ctrl_packet);
 
-		*payload = NULL;
-		*pay_sz = 0;
+		/* The steps of States 1 and 2 both carry this end's
+		 * capabilities: the peer leaves State 1 on either, and this
+		 * end may pass through State 1 without sending its id=1. The
+		 * first step stays empty: it is what tells a peer still in a
+		 * session that this end has restarted.
+		 */
+		if ((conn->conn_state == LUDLC_STATE_WAIT_CONN_1 ||
+		     conn->conn_state == LUDLC_STATE_WAIT_CONN_2) &&
+		    conn->cb && conn->cb->caps_size) {
+			*payload = conn->cb->caps;
+			*pay_sz = conn->cb->caps_size;
+		} else {
+			*payload = NULL;
+			*pay_sz = 0;
+		}
 
 		break;
 
@@ -1502,8 +1539,9 @@ EXPORT_SYMBOL_GPL(ludlc_connection_cleanup);
  * in all callbacks.
  *
  * @return 0 on success.
- * @return -EINVAL if `conn` is NULL, or if `cfg` names a payload, a window, a
- * TTL or a tag this build cannot hold.
+ * @return -EINVAL if `conn` is NULL, if `cfg` names a payload, a window, a TTL
+ * or a tag this build cannot hold, or if the capabilities in `cb` do not fit
+ * in one packet of the link.
  * @return -ENOMEM if the window could not be allocated.
  */
 int ludlc_connection_init(struct ludlc_connection *conn,
@@ -1574,6 +1612,13 @@ int ludlc_connection_init(struct ludlc_connection *conn,
 		return -EINVAL;
 
 #endif
+	/* The capabilities go out whole with a handshake step, so they must
+	 * fit in one packet of the link.
+	 */
+	if (cb && cb->caps_size &&
+	    (!cb->caps || cb->caps_size > ludlc_conn_payload_lim(conn)))
+		return -EINVAL;
+
 	ret = ludlc_conn_queue_alloc(conn);
 	if (ret) {
 		LUDLC_LOG_ERROR("ludlc_conn_queue_alloc has failed (%d)", -ret);

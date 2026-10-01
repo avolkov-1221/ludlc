@@ -198,8 +198,8 @@ selects it with one is dropped.
 **`User Payload`:**
 
 Data for a given channel. This field is **optional** for the
-handshake packet sent during **State 1**, allowing it to carry
-device capability information.
+handshake packets sent during **States 1 and 2**, allowing them to
+carry device capability information.
 
 > **Note:**
 >
@@ -271,9 +271,21 @@ The connection is now established.
 
 **Optional Handshake Payload**
 
-The handshake packet sent by a node when it enters **State 1**
-(i.e., the packet with `id=1`), may optionally contain a payload. This
-payload **cannot be fragmented** and its size must fit within the
+The handshake packets a node sends in **State 1** and **State 2**
+(i.e., the packets with `id=1` and `id=2`) may optionally contain a
+payload, the same in both. A node always leaves State 1 on one of
+these two packets from its peer, whereas a data packet or a PING from
+a peer already connected may end State 2 (see *Handshake Recovery*
+below). Either packet may be the one: a peer that receives `id=0` and
+`id=1` back to back may pass through State 1 without sending `id=1`,
+its transmitter getting no turn in between. The node therefore takes
+the payload from whichever packet moves it out of State 1: once per
+handshake, and before it reaches **State 3** (*Connected*). The
+payload must not change for the life of the link. The `id=0` packet
+stays empty, being what tells a node still in a session that its peer
+has restarted.
+
+This payload **cannot be fragmented** and its size must fit within the
 net wide defined maximum packet size for the connection (see
 Appendix A).
 
@@ -483,10 +495,11 @@ A peer that has **restarted** cannot announce anything, having no memory of
 a session to end. It begins a handshake instead, and its first step, an
 empty control packet, is taken as notice that the session is over.
 
-The last handshake step is an empty control packet as well, and arrives a
-second time whenever the reply to it is lost. A step carrying that ID is
-therefore read as the handshake rather than as a restart. The two are told
-apart exactly, a deliberate disconnect no longer being empty.
+The last handshake step is a numbered control packet as well, empty or
+carrying the sender's capabilities, and arrives a second time whenever the
+reply to it is lost. A step carrying that ID is therefore read as the
+handshake rather than as a restart. The two are told apart exactly, a
+deliberate disconnect being unnumbered.
 
 The control channel is reserved for these packets. Callers cannot send on
 it, with a tag or without, as a handshake step and a disconnect are told
