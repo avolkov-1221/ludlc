@@ -35,10 +35,11 @@ CONFIG_LUDLC_CHANNEL_BITS ?= 8
 # like one.
 override CONFIG_LUDLC_MT := 1
 
-# The bus hosts a link per port, and each port names its own frame size, window
-# and periods from firmware or configfs. None of that can be a build-wide
-# constant, so this port always reads the per-connection cfg: not a choice a
-# command line gets to make, hence the override.
+# The bus hosts a link per port, and each port names its own frame size, window,
+# periods and channel tag from firmware or configfs. None of that can be a
+# build-wide constant, so this port always reads the per-connection cfg: not a
+# choice a command line gets to make, hence the override. For the same reason
+# CONFIG_LUDLC_COMMON_CHAN_TAG is left out.
 override CONFIG_LUDLC_MULTI_CONN := 1
 
 # Framings compiled into the drivers. All three, because a port takes its

@@ -463,20 +463,20 @@ struct ludlc_conn_cfg {
 
 #if CONFIG_LUDLC_MULTI_CONN
 	/**
-	 * @brief Largest payload this link carries, in octets.
-	 *
-	 * The transport computes it: the frame it carries, less the header and
-	 * its checksum. Zero asks for @ref CONFIG_LUDLC_MAX_PAYLOAD_SIZE.
-	 */
-	ludlc_payload_size_t max_payload;
-
-	/**
 	 * @brief Keepalive ping period, in microseconds.
 	 *
 	 * The watchdog is three times this. Zero asks for
 	 * @ref CONFIG_LUDLC_PING_TIME.
 	 */
 	unsigned int ping_time;
+
+	/**
+	 * @brief Largest payload this link carries, in octets.
+	 *
+	 * The transport computes it: the frame it carries, less the header and
+	 * its checksum. Zero asks for @ref CONFIG_LUDLC_MAX_PAYLOAD_SIZE.
+	 */
+	ludlc_payload_size_t max_payload;
 
 	/**
 	 * @brief Sliding-window size for in-flight packets.
@@ -520,9 +520,9 @@ struct ludlc_conn_cfg {
  */
 #if CONFIG_LUDLC_MULTI_CONN
 #define LUDLC_CONN_CFG_DEFAULT {					\
+	.ping_time = CONFIG_LUDLC_PING_TIME,				\
 	.max_payload = 0,						\
 	.window = CONFIG_LUDLC_WINDOW,					\
-	.ping_time = CONFIG_LUDLC_PING_TIME,				\
 	.default_ttl = LUDLC_DEFAULT_TTL,				\
 }
 #else

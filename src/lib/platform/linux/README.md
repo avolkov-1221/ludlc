@@ -50,6 +50,15 @@ The device is named after the first, and `receive()` and `confirm()` say which
 channel a packet belongs to, so a driver owning one can ignore it. A configfs
 node takes the same list, comma-separated: `echo 2,4,7,0x19 > reg`.
 
+A link may give the top bits of its channel field to a tag, which the bus
+passes through untouched. Set `ludlc,channel-tag-bits` on the node of the
+link, or write `channel_tag_bits` in its configfs port directory; both ends
+must agree on it, and the channels in `reg` must fit below it. `receive()` and
+`confirm()` then get the whole field, from which `ludlc_chan_id()` takes the
+channel and `ludlc_chan_tag()` the tag. A driver builds the field it sends
+with `ludlc_chan_make()`, and a reply sent on the field it received keeps the
+tag.
+
 A driver receives its traffic from `receive()` and `confirm()` once `probe()`
 returns. A `probe()` that needs a reply from the peer before it can finish
 calls `ludlc_device_listen()` to start dispatch early, and
@@ -148,7 +157,8 @@ its framing the same three ways and refuses, in all of them, one its wire
 cannot carry; `framing_available` in a port directory lists what is left.
 
 Both ends must also agree on the frame size, since that is what an SPI
-announcement is checked against.
+announcement is checked against, and on the tag in the channel field, which
+comes from firmware or configfs only; see the device model above.
 
 ## Describing a link without firmware
 
@@ -161,12 +171,14 @@ instead. Both transports register the same tree, `ludlc-serdev` and
 	/sys/kernel/config/ludlc-serdev/serial0-0/
 		baudrate parity flow_control        the UART
 		csum framing max_payload            the link
+		channel_tag_bits
 		live                                open it
 		ludlc/<dev>/                        what the link carries
 
 	/sys/kernel/config/ludlc-spi/spi0.0/
 		turnaround_us poll_interval_ms      the exchange
-		csum framing max_payload live ludlc/  as above
+		csum framing max_payload            as above
+		channel_tag_bits live ludlc/
 ```
 
 A directory must be named after the device it describes, as `dev_name()` shows

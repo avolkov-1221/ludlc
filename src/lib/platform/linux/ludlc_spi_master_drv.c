@@ -691,6 +691,7 @@ void ludlc_spi_default_args(struct device *dev, ludlc_platform_args_t *args)
 
 	ludlc_spi_fw_csum(spi, args);
 	ludlc_spi_fw_framing(spi, args);
+	ludlc_fw_chan_tag_bits(&spi->dev, &args->cfg);
 
 	device_property_read_u32(&spi->dev, "ludlc,turnaround-us",
 				 &args->spi.turnaround_us);

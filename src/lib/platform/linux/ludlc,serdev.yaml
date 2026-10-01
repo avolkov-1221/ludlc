@@ -63,6 +63,16 @@ properties:
       matters, the smaller of the two ends deciding. A value this kernel was
       not built to hold is ignored.
 
+  ludlc,channel-tag-bits:
+    maximum: 31
+    default: 0
+    description:
+      How many top bits of the channel field carry a tag for the drivers of
+      the devices below rather than select a channel. A link with 32 channels
+      on an 8-bit field can spare 3. Both ends must agree, and the channels in
+      "reg" must fit below the tag. A width that leaves no room for the
+      channels is ignored.
+
   "#address-cells":
     const: 1
 
@@ -81,7 +91,8 @@ patternProperties:
         maxItems: 16
         description:
           The channels this device answers on. Most have one; a driver that
-          has to speak for a group of them lists several.
+          has to speak for a group of them lists several. None may use the
+          bits of the tag, if the link has one.
 
     required:
       - compatible

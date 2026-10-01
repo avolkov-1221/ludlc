@@ -26,7 +26,12 @@ struct ludlc_connection;
 struct fwnode_handle;
 extern const struct bus_type ludlc_bus_type;
 
-/** @brief Highest channel id @ref ludlc_channel_t can represent. */
+/**
+ * @brief Highest channel id @ref ludlc_channel_t can represent.
+ *
+ * A link with a tag in its channel field has fewer: only the bits below the
+ * tag select a channel. See ludlc_chan_id().
+ */
 #define LUDLC_CHANNEL_MAX	((u32)(ludlc_channel_t)~0U)
 
 /**
@@ -117,6 +122,10 @@ struct ludlc_driver {
 	 * acknowledged: @c error is 0 if the peer acknowledged it and negative
 	 * if it never did.
 	 *
+	 * @p chan is the channel field of the packet, so on a link with a tag
+	 * it carries the tag as well: ludlc_chan_id() gives the channel and
+	 * ludlc_chan_tag() the tag. A reply sent on @p chan keeps the tag.
+	 *
 	 * Both run in the transport's receive context, between a successful
 	 * probe() and remove(), and never two at once for the same device, on
 	 * any of its channels. They may sleep, but the link's traffic waits
@@ -145,7 +154,8 @@ struct ludlc_driver {
  *
  * @return The device, whose reference belongs to the caller: drop it with
  * ludlc_device_put() if it never reaches the bus. ERR_PTR(-EINVAL) for a
- * channel that is reserved or listed twice, or ERR_PTR(-ENOMEM).
+ * channel that is reserved, listed twice, or does not fit below the tag of
+ * the link, or ERR_PTR(-ENOMEM).
  */
 struct ludlc_device *ludlc_device_alloc(struct ludlc_connection *conn,
 					const ludlc_channel_t *chans,
@@ -219,11 +229,23 @@ extern const struct ludlc_conn_cb ludlc_bus_conn_cb;
 /**
  * @brief Look up the device @p chan belongs to on @p conn.
  *
+ * @p chan may be the channel field of a packet: a tag in it plays no part in
+ * the lookup.
+ *
  * @return The device with a reference held, which the caller drops with
  * ludlc_device_put(), or NULL if the channel is unclaimed.
  */
 struct ludlc_device *ludlc_device_find_by_channel(struct ludlc_connection *conn,
 						  ludlc_channel_t chan);
+
+/**
+ * @brief Apply what firmware says about the tag in the channel field of the
+ * link on @p dev.
+ *
+ * ludlc,channel-tag-bits = <n>, on the node of the link. For a transport's
+ * default_args(); a width no link can run is warned about and ignored.
+ */
+void ludlc_fw_chan_tag_bits(struct device *dev, struct ludlc_conn_cfg *cfg);
 
 /**
  * @brief Register @p ldrv, owned by its module so that it cannot be unloaded
@@ -324,10 +346,10 @@ struct ludlc_cfg_port_ops {
  * @brief One configfs directory, describing the link on one transport port.
  *
  * A transport registers a subsystem of these and gets the tree every LuDLC
- * port has: the checksum, the framing and the frame size a link opened from
- * here will run, a "live" switch that opens it, and the "ludlc" subgroup
- * holding the bus devices it carries. What the transport adds are the
- * settings of its own wire - see @ref ludlc_cfg_port_ops.
+ * port has: the checksum, the framing, the frame size and the channel tag a
+ * link opened from here will run, a "live" switch that opens it, and the
+ * "ludlc" subgroup holding the bus devices it carries. What the transport
+ * adds are the settings of its own wire - see @ref ludlc_cfg_port_ops.
  */
 struct ludlc_cfg_port {
 	struct config_group group;
@@ -372,6 +394,7 @@ struct ludlc_cfg_port {
 #define LUDLC_CFG_PORT_F_FRAMING_SET	1
 #define LUDLC_CFG_PORT_F_PAYLOAD_SET	2
 #define LUDLC_CFG_PORT_F_CSUM_SET	3
+#define LUDLC_CFG_PORT_F_TAG_BITS_SET	4
 #define LUDLC_CFG_PORT_F_BUS		8
 
 static inline
@@ -392,6 +415,7 @@ extern struct configfs_attribute ludlc_cfg_port_attr_framing;
 extern struct configfs_attribute ludlc_cfg_port_attr_framing_available;
 extern struct configfs_attribute ludlc_cfg_port_attr_max_payload;
 extern struct configfs_attribute ludlc_cfg_port_attr_max_payload_available;
+extern struct configfs_attribute ludlc_cfg_port_attr_channel_tag_bits;
 extern struct configfs_attribute ludlc_cfg_port_attr_live;
 
 #define LUDLC_CFG_PORT_ATTRS				\
@@ -401,6 +425,7 @@ extern struct configfs_attribute ludlc_cfg_port_attr_live;
 	&ludlc_cfg_port_attr_framing_available,		\
 	&ludlc_cfg_port_attr_max_payload,		\
 	&ludlc_cfg_port_attr_max_payload_available,	\
+	&ludlc_cfg_port_attr_channel_tag_bits,		\
 	&ludlc_cfg_port_attr_live
 
 /** @brief Frees a port and its devices; for a port type's ct_item_ops. */

@@ -538,25 +538,33 @@ static void ludlc_device_release(struct device *dev)
 }
 
 /**
- * @brief Whether the @p n channels in @p chans can be given to one device.
+ * @brief Whether the @p n channels in @p chans can be given to one device on
+ * @p conn.
  *
- * The control channel is reserved for the protocol, and no channel may appear
- * twice, since a channel belongs to one device and is claimed once.
- *
- * @param parent The link's device, to log through.
+ * Each has to fit below the tag of the link, the control channel is reserved
+ * for the protocol, and no channel may appear twice, since a channel belongs
+ * to one device and is claimed once.
  */
-static bool ludlc_channels_ok(struct device *parent,
+static bool ludlc_channels_ok(struct ludlc_connection *conn,
 			      const ludlc_channel_t *chans, unsigned int n)
 {
+	struct device *parent = conn->pconn.dev;
+	unsigned int id_max = ludlc_conn_chan_id_mask(conn);
 	unsigned int i, j;
 
-	if (!n || n > LUDLC_CHANNEL_MAX) {
+	if (!n || n > id_max) {
 		dev_err(parent, "a device owns from one channel to %u, not %u\n",
-			LUDLC_CHANNEL_MAX, n);
+			id_max, n);
 		return false;
 	}
 
 	for (i = 0; i < n; i++) {
+		if (chans[i] > id_max) {
+			dev_err(parent, "channel %u overlaps the %u-bit tag\n",
+				chans[i], ludlc_conn_chan_tag_bits(conn));
+			return false;
+		}
+
 		if (chans[i] == CONFIG_LUDLC_CONTROL_CHANNEL) {
 			dev_err(parent, "channel %u is reserved\n", chans[i]);
 			return false;
@@ -593,7 +601,7 @@ struct ludlc_device *ludlc_device_alloc(struct ludlc_connection *conn,
 	if (!conn || !chans)
 		return ERR_PTR(-EINVAL);
 
-	if (!ludlc_channels_ok(conn->pconn.dev, chans, nchans))
+	if (!ludlc_channels_ok(conn, chans, nchans))
 		return ERR_PTR(-EINVAL);
 
 	ldev = kzalloc(struct_size(ldev, chans, nchans), GFP_KERNEL);
@@ -962,7 +970,8 @@ static void ludlc_bus_on_recv(struct ludlc_connection *conn,
 	ldev = ludlc_device_find_by_channel(conn, chan);
 	if (!ldev) {
 		dev_dbg_ratelimited(conn->pconn.dev,
-				    "no device on channel %u\n", chan);
+				    "no device on channel %u\n",
+				    ludlc_chan_id(conn, chan));
 		return;
 	}
 
@@ -1024,6 +1033,9 @@ void ludlc_bus_conn_resync(struct ludlc_connection *conn)
 /**
  * @brief Look up the device owning @p chan on @p conn.
  *
+ * The devices are filed under the channel alone, so a tag in @p chan is left
+ * out of the lookup.
+ *
  * @return The device with a reference held, or NULL if the channel is
  * unclaimed. Release it with ludlc_device_put().
  */
@@ -1039,7 +1051,7 @@ struct ludlc_device *ludlc_device_find_by_channel(struct ludlc_connection *conn,
 	channels = &conn->pconn.channels;
 
 	xa_lock(channels);
-	ldev = xa_load(channels, chan);
+	ldev = xa_load(channels, ludlc_chan_id(conn, chan));
 	if (ldev)
 		get_device(&ldev->dev);
 	xa_unlock(channels);
@@ -1047,6 +1059,31 @@ struct ludlc_device *ludlc_device_find_by_channel(struct ludlc_connection *conn,
 	return ldev;
 }
 EXPORT_SYMBOL_GPL(ludlc_device_find_by_channel);
+
+/**
+ * @brief Take the width of the tag in the channel field from the firmware
+ * node of @p dev.
+ *
+ * As with the checksum and the frame size, a width no link can run is warned
+ * about and leaves @p cfg as it was: a link that comes up without the tag the
+ * peer expects is easier to diagnose than one that does not come up.
+ */
+void ludlc_fw_chan_tag_bits(struct device *dev, struct ludlc_conn_cfg *cfg)
+{
+	u32 bits;
+
+	if (device_property_read_u32(dev, "ludlc,channel-tag-bits", &bits))
+		return;
+
+	if (!ludlc_chan_tag_bits_ok(bits)) {
+		dev_warn(dev, "cannot run a tag of %u bits, keeping %u\n",
+			 bits, (unsigned int)cfg->chan_tag_bits);
+		return;
+	}
+
+	cfg->chan_tag_bits = bits;
+}
+EXPORT_SYMBOL_GPL(ludlc_fw_chan_tag_bits);
 
 void ludlc_driver_unregister(struct ludlc_driver *ldrv)
 {

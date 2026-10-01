@@ -66,7 +66,8 @@ typedef struct ludlc_platform_args {
 	 * @brief Protocol settings for this link.
 	 *
 	 * Copied into the connection at create. Window, payload size, ping
-	 * period and default TTL. Zero @c max_payload asks for the build max.
+	 * period, default TTL and channel tag. Zero @c max_payload asks for
+	 * the build max.
 	 */
 	struct ludlc_conn_cfg cfg;
 

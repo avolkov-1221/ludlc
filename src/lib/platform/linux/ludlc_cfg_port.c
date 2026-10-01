@@ -18,6 +18,7 @@
  *           csum              the checksum both ends run
  *           framing           how frames are delimited
  *           max_payload       the largest payload the link carries
+ *           channel_tag_bits  the top bits of the channel field left to drivers
  *           live              is the link on this port up?
  *           ludlc/            LuDLC bus devices parented to <port>
  *               <dev>/        compatible, label, reg, live
@@ -53,6 +54,7 @@
 
 #include <ludlc.h>
 #include <ludlc_framing.h>
+#include <ludlc_private.h>
 
 #include "ludlc_bus.h"
 #include "ludlc_csum.h"
@@ -263,6 +265,58 @@ ludlc_cfg_port_max_payload_available_show(struct config_item *item, char *page)
 }
 LUDLC_CFG_PORT_ATTR_RO(max_payload_available);
 
+/*
+ * Empty until written, as the checksum is: zero is a width of its own, a link
+ * with no tag, so it cannot also stand for what firmware says.
+ */
+static ssize_t ludlc_cfg_port_channel_tag_bits_show(struct config_item *item,
+						    char *page)
+{
+	struct ludlc_cfg_port *port = to_ludlc_cfg_port(item);
+
+	guard(mutex)(&port->lock);
+
+	if (!test_bit(LUDLC_CFG_PORT_F_TAG_BITS_SET, &port->flags))
+		return sysfs_emit(page, "\n");
+
+	return sysfs_emit(page, "%u\n",
+			  (unsigned int)port->args.cfg.chan_tag_bits);
+}
+
+/**
+ * @brief Choose how many top bits of the channel field a link opened from
+ * here leaves to its drivers as a tag.
+ *
+ * Both ends must agree on this as they must on the checksum. Zero gives the
+ * whole field to the channel, whatever firmware says.
+ *
+ * @return @p count, or -EINVAL for a width that leaves no room for the
+ * channels.
+ */
+static ssize_t ludlc_cfg_port_channel_tag_bits_store(struct config_item *item,
+						     const char *page,
+						     size_t count)
+{
+	struct ludlc_cfg_port *port = to_ludlc_cfg_port(item);
+	u8 bits;
+	int ret;
+
+	ret = kstrtou8(page, 0, &bits);
+	if (ret)
+		return ret;
+
+	if (!ludlc_chan_tag_bits_ok(bits))
+		return -EINVAL;
+
+	scoped_guard(mutex, &port->lock) {
+		port->args.cfg.chan_tag_bits = bits;
+		__set_bit(LUDLC_CFG_PORT_F_TAG_BITS_SET, &port->flags);
+	}
+
+	return count;
+}
+LUDLC_CFG_PORT_ATTR(channel_tag_bits);
+
 /**
  * @brief Apply the attributes the user wrote here to @p args.
  *
@@ -284,6 +338,9 @@ static void ludlc_cfg_port_override(struct ludlc_cfg_port *port,
 
 	if (test_bit(LUDLC_CFG_PORT_F_PAYLOAD_SET, &port->flags))
 		args->cfg.max_payload = port->args.cfg.max_payload;
+
+	if (test_bit(LUDLC_CFG_PORT_F_TAG_BITS_SET, &port->flags))
+		args->cfg.chan_tag_bits = port->args.cfg.chan_tag_bits;
 
 	/*
 	 * The args borrow the descriptor from the port, but only the port's

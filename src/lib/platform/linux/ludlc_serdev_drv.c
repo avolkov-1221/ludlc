@@ -738,6 +738,7 @@ void ludlc_serdev_default_args(struct device *dev,
 	ludlc_serdev_fw_crc(serdev, args);
 	ludlc_serdev_fw_framing(serdev, args);
 	ludlc_serdev_fw_payload(serdev, args);
+	ludlc_fw_chan_tag_bits(&serdev->dev, &args->cfg);
 
 	if (ludlc_serdev_acpi_args(serdev, args))
 		return;
