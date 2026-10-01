@@ -22,12 +22,14 @@
 #include <linux/container_of.h>
 #include <linux/bitops.h>
 #include <linux/slab.h>
+#include <linux/spinlock.h>
 #include <linux/timer.h>
 #include <linux/wait.h>
 #include <linux/workqueue.h>
 #include <linux/xarray.h>
 
 #include <ludlc_types.h>
+#include <ludlc_proto.h>
 
 struct device;
 struct ludlc_csum;
@@ -221,6 +223,21 @@ struct ludlc_platform_connection {
 	 * place to take conn->lock and call the drivers back.
 	 */
 	struct work_struct		timeout_work;
+
+	/**
+	 * @brief What the peer announced in its latest handshake, for the
+	 * drivers on this link: see ludlc_device_peer_caps().
+	 *
+	 * Copied in before the link comes up, and replaced by the next
+	 * handshake rather than cleared when the link goes down: the end of a
+	 * session can be reported after the next handshake has announced, and
+	 * clearing it then would bring the link up without it. The length is
+	 * negative until the peer has announced anything. Both are read and
+	 * written under @c caps_lock.
+	 */
+	spinlock_t			caps_lock;
+	int				peer_caps_len;
+	u8 peer_caps[CONFIG_LUDLC_MAX_PAYLOAD_SIZE];
 };
 
 static inline

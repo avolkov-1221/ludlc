@@ -73,6 +73,11 @@ channel and `ludlc_chan_tag()` the tag. A driver builds the field it sends
 with `ludlc_chan_make()`, and a reply sent on the field it received keeps the
 tag.
 
+The peer may announce its capabilities in the handshake, in a layout the two
+ends agree on. The bus keeps what it announced and a driver copies it out with
+`ludlc_device_peer_caps()`. The handshake comes before the link is up, so a
+device the link enumerates can read them from its `probe()`.
+
 A driver receives its traffic from `receive()` and `confirm()` once `probe()`
 returns. A `probe()` that needs a reply from the peer before it can finish
 calls `ludlc_device_listen()` to start dispatch early, and

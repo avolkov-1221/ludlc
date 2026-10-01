@@ -220,11 +220,31 @@ void ludlc_bus_conn_resync(struct ludlc_connection *conn);
  * @brief Connection events, handled by the bus for every Linux transport.
  *
  * The link state creates and removes the devices firmware describes below the
- * transport, and payloads go to the driver bound to the channel's device. A
+ * transport, and payloads go to the driver bound to the channel's device. What
+ * the peer announces in the handshake is kept for ludlc_device_peer_caps(). A
  * transport passes this to ludlc_connection_init() and needs no callbacks of
  * its own; drivers see the traffic through @ref ludlc_driver instead.
  */
 extern const struct ludlc_conn_cb ludlc_bus_conn_cb;
+
+/**
+ * @brief Copy out what the peer on @p ldev's link announced about itself.
+ *
+ * The peer announces its capabilities in the handshake, before the link comes
+ * up, so a device the link enumerates finds them in place from its probe().
+ * They are those of the latest handshake: a device that outlives a session
+ * keeps the previous peer's until the next one has announced. Their layout is
+ * what the two ends agree on.
+ *
+ * @param ldev A device on the link.
+ * @param buf Where to copy them, or NULL with @p len zero to learn the size.
+ * @param len Room at @p buf; no more than this is copied.
+ * @return The size of the capabilities, more than @p len when they did not
+ * fit, zero if the peer announced none, -ENODATA if it has not announced yet,
+ * or -EINVAL.
+ */
+ssize_t ludlc_device_peer_caps(struct ludlc_device *ldev, void *buf,
+			       size_t len);
 
 /**
  * @brief Look up the device @p chan belongs to on @p conn.

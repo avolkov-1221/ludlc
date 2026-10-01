@@ -928,6 +928,29 @@ static void ludlc_bus_link_workfn(struct work_struct *work)
 		ludlc_bus_sweep(conn, true);
 }
 
+/**
+ * @brief Keep what the peer announced, for the drivers on this link.
+ *
+ * Runs before the link comes up, so a driver probing a device the link
+ * enumerates finds it in place.
+ */
+static void ludlc_bus_on_caps(struct ludlc_connection *conn, const void *data,
+			      ludlc_payload_size_t size, void *user_arg)
+{
+	struct ludlc_platform_connection *pconn = &conn->pconn;
+	unsigned long flags;
+
+	/* The link refuses a packet larger than the build carries. */
+	if (WARN_ON_ONCE(size > sizeof(pconn->peer_caps)))
+		return;
+
+	spin_lock_irqsave(&pconn->caps_lock, flags);
+	if (size)
+		memcpy(pconn->peer_caps, data, size);
+	pconn->peer_caps_len = size;
+	spin_unlock_irqrestore(&pconn->caps_lock, flags);
+}
+
 /** @brief The peer answered: the devices on this link can be created. */
 static void ludlc_bus_on_connect(struct ludlc_connection *conn, void *user_arg)
 {
@@ -1010,8 +1033,31 @@ const struct ludlc_conn_cb ludlc_bus_conn_cb = {
 	.on_disconnect	= ludlc_bus_on_disconnect,
 	.on_recv	= ludlc_bus_on_recv,
 	.on_confirm	= ludlc_bus_on_confirm,
+	.on_caps	= ludlc_bus_on_caps,
 };
 EXPORT_SYMBOL_GPL(ludlc_bus_conn_cb);
+
+ssize_t ludlc_device_peer_caps(struct ludlc_device *ldev, void *buf,
+			       size_t len)
+{
+	struct ludlc_platform_connection *pconn;
+	unsigned long flags;
+	int size;
+
+	if (!ldev || (!buf && len))
+		return -EINVAL;
+
+	pconn = &ldev->conn->pconn;
+
+	spin_lock_irqsave(&pconn->caps_lock, flags);
+	size = pconn->peer_caps_len;
+	if (size > 0 && len)
+		memcpy(buf, pconn->peer_caps, min_t(size_t, size, len));
+	spin_unlock_irqrestore(&pconn->caps_lock, flags);
+
+	return size < 0 ? -ENODATA : size;
+}
+EXPORT_SYMBOL_GPL(ludlc_device_peer_caps);
 
 /**
  * @brief Wait for whatever the bus was in the middle of.
@@ -1458,6 +1504,9 @@ int ludlc_platform_conn_init(struct ludlc_connection *conn)
 	xa_init(&conn->pconn.channels);
 	INIT_WORK(&conn->pconn.bus_work, ludlc_bus_link_workfn);
 	INIT_WORK(&conn->pconn.timeout_work, ludlc_conn_timeout_workfn);
+
+	spin_lock_init(&conn->pconn.caps_lock);
+	conn->pconn.peer_caps_len = -1;
 
 	return 0;
 }
