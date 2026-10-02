@@ -234,19 +234,19 @@ static void ludlc_serial_irq_cb(const struct device *dev, void *user_data)
 
 	if (uart_irq_tx_ready(dev)) {
 		uint8_t *data_ptr = NULL;
-		uint32_t len = ring_buf_get_claim(&sconn->tx_rb, &data_ptr,
+		uint32_t len = ring_buf_get_ptr(&sconn->tx_rb, &data_ptr,
 						  sizeof(sconn->tx_rb_buffer));
 
 		if (len > 0) {
 			int written = uart_fifo_fill(dev, data_ptr, len);
 
 			if (written > 0) {
-				ring_buf_get_finish(&sconn->tx_rb, written);
+				ring_buf_consume(&sconn->tx_rb, written);
 				k_event_post(&sconn->conn.pconn.tx_events,
 					     TX_SPACE_AVAIL_EVT);
 
 			} else {
-				ring_buf_get_finish(&sconn->tx_rb, 0);
+				ring_buf_consume(&sconn->tx_rb, 0);
 				if (written < 0) {
 					LUDLC_LOG_ERROR(
 						"uart_fifo_fill() failed: %d",
@@ -260,7 +260,7 @@ static void ludlc_serial_irq_cb(const struct device *dev, void *user_data)
 				}
 			}
 		} else {
-			ring_buf_get_finish(&sconn->tx_rb, len);
+			ring_buf_consume(&sconn->tx_rb, len);
 			uart_irq_tx_disable(dev);
 			k_event_post(&sconn->conn.pconn.tx_events,
 				     TX_EMPTY_EVT | TX_SPACE_AVAIL_EVT);
@@ -403,7 +403,7 @@ static void ludlc_serial_start_tx(struct ludlc_serial_connection *sconn)
 			return;
 		}
 
-		len = ring_buf_get_claim(&sconn->tx_rb, &data_ptr,
+		len = ring_buf_get_ptr(&sconn->tx_rb, &data_ptr,
 					 sizeof(sconn->tx_rb_buffer));
 
 		if (len > 0) {
@@ -411,7 +411,7 @@ static void ludlc_serial_start_tx(struct ludlc_serial_connection *sconn)
 					  SYS_FOREVER_US);
 
 			if (ret < 0) {
-				ring_buf_get_finish(&sconn->tx_rb, 0);
+				ring_buf_consume(&sconn->tx_rb, 0);
 				ludlc_platform_clear_bit(TX_ASYNC_BUSY,
 							 &sconn->flags);
 				ludlc_platform_request_tx(&sconn->conn);
@@ -445,8 +445,7 @@ static void ludlc_serial_async_cb(const struct device *dev,
 	struct ludlc_serial_connection *sconn = user_data;
 
 	if (evt->type == UART_TX_DONE) {
-
-		ring_buf_get_finish(&sconn->tx_rb, evt->data.tx.len);
+		ring_buf_consume(&sconn->tx_rb, evt->data.tx.len);
 
 		ludlc_platform_clear_bit(TX_ASYNC_BUSY, &sconn->flags);
 
@@ -454,7 +453,8 @@ static void ludlc_serial_async_cb(const struct device *dev,
 
 		ludlc_serial_start_tx(sconn);
 	} else if (evt->type == UART_TX_ABORTED) {
-		ring_buf_get_finish(&sconn->tx_rb, evt->data.tx.len);
+		ring_buf_consume(&sconn->tx_rb, evt->data.tx.len);
+
 		ludlc_platform_clear_bit(TX_ASYNC_BUSY, &sconn->flags);
 		ludlc_platform_request_tx(&sconn->conn);
 		k_event_post(&sconn->conn.pconn.tx_events, TX_SPACE_AVAIL_EVT);
@@ -555,17 +555,15 @@ static void ludlc_serial_tx_thread(void *p1, void *p2, void *p3)
 		 */
 		while (ludlc_enc_busy(sconn->fs)) {
 			uint8_t *dst;
-			uint32_t room;
-
-			room = ring_buf_put_claim(&sconn->tx_rb, &dst,
+			uint32_t room = ring_buf_put_ptr(&sconn->tx_rb, &dst,
 						  UINT32_MAX);
 			if (!room)
 				break;
 
-			ring_buf_put_finish(&sconn->tx_rb,
-				(uint32_t)ludlc_enc_fill(sconn->fs,
-							 sconn->csum, dst,
-							 room));
+			ring_buf_commit(&sconn->tx_rb,
+					ludlc_enc_fill(sconn->fs,
+						 sconn->csum, dst,
+						 room));
 
 			if (!ludlc_enc_busy(sconn->fs))
 				LUDLC_INC_STATS(&sconn->conn, tx_packet);
