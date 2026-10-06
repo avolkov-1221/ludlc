@@ -84,27 +84,12 @@ static inline bool is_ping(ludlc_id_t id)
 }
 
 /**
- * @brief Tells the peer's last handshake step from a peer that has restarted.
- *
- * Both arrive as a numbered control packet, which a caller cannot send,
- * empty or carrying the sender's capabilities. A restarted peer begins again
- * from the first step; the last step is one this side has already handled,
- * and arrives again only when the reply to it was lost. Ending the session over
- * it would undo a handshake that has just completed. A deliberate disconnect
- * carries @ref LUDLC_CTRL_DISCONNECT on an unnumbered packet, so the step ID
- * separates the two remaining cases exactly.
- *
- * @param id Sequence number of the received packet.
- * @return true if the packet is the peer's last handshake step.
- */
-static inline bool is_last_handshake_step(ludlc_id_t id)
-{
-	return id == LUDLC_STATE_WAIT_CONN_2;
-}
-
-/**
  * @brief Checks if a channel field selects the control channel, whatever its
  * tag.
+ *
+ * Control packets can't be tagged: the core sends them untagged and tells
+ * them by the whole field. A field selecting the control channel with a tag
+ * belongs to no channel, so it is refused on send and dropped on receipt.
  *
  * @param conn The connection, whose tag is left out of the comparison.
  * @param chan The channel field of a packet.
@@ -947,8 +932,7 @@ static int rx_handle_nak(struct ludlc_connection *conn,
 	if (conn->last_sent != conn->last_ack &&
 	    !ludlc_platform_test_and_set_bit(LUDLC_CONN_TTL_CHARGED_F,
 					     &conn->flags)) {
-		it->ttl--;
-		if (!it->ttl) {
+		if (--it->ttl == 0) {
 			unsigned int mask = ludlc_conn_window_mask(conn);
 			ludlc_id_t n = (conn->last_queued - id) & LUDLC_ID_MASK;
 
@@ -1079,11 +1063,11 @@ static int rx_handle_packet(
 		size_t pkt_sz,
 		struct packet_queue_item *expired)
 {
-	bool ping = is_ping(packet->hdr.id.tx_id);
-	bool unnumbered = ludlc_is_unnumbered_data(packet->hdr.id.tx_id,
-						    pkt_sz);
 	ludlc_id_t id, ahead;
-	bool step;
+	bool ping = is_ping(packet->hdr.id.tx_id);
+	bool u_packet = (ping && pkt_sz > sizeof(ludlc_packet_hdr_t)) ? true
+								: false;
+	bool is_hshake;
 	int ret;
 
 	if (!ping && pkt_sz < sizeof(ludlc_packet_hdr_t)) {
@@ -1098,7 +1082,7 @@ static int rx_handle_packet(
 	 * misbehaving as well, or splits the channel field another way. The
 	 * packet belongs to no channel here. A PING has no channel field.
 	 */
-	if ((unnumbered || !ping) &&
+	if ((u_packet || !ping) &&
 			packet->hdr.chan != CONFIG_LUDLC_CONTROL_CHANNEL &&
 			is_ctrl_chan(conn, packet->hdr.chan)) {
 		LUDLC_INC_STATS(conn, dropped);
@@ -1108,10 +1092,10 @@ static int rx_handle_packet(
 	/* A numbered control packet is a handshake step, whatever it
 	 * carries.
 	 */
-	step = !ping && packet->hdr.chan == CONFIG_LUDLC_CONTROL_CHANNEL;
+	is_hshake = !ping && packet->hdr.chan == CONFIG_LUDLC_CONTROL_CHANNEL;
 
 	if (conn->conn_state != LUDLC_STATE_CONNECTED) {
-		ret = rx_handle_handshake(conn, packet, step);
+		ret = rx_handle_handshake(conn, packet, is_hshake);
 
 		/* The watchdog starts with the link, whichever packet brings
 		 * it up: the last handshake step returns just below, before
@@ -1136,7 +1120,7 @@ static int rx_handle_packet(
 	 * layout is checked before the channel is read, because a PING ends
 	 * after the two IDs and has no channel field.
 	 */
-	if (unnumbered &&
+	if (u_packet &&
 	    packet->hdr.chan == CONFIG_LUDLC_CONTROL_CHANNEL &&
 	    packet->payload[0] == LUDLC_CTRL_DISCONNECT) {
 		/* The peer is closing the session deliberately, so it ends now
@@ -1148,11 +1132,11 @@ static int rx_handle_packet(
 		return ret | HANDLE_RX_DISCONNECT_F;
 	}
 
-	if (step) {
+	if (is_hshake) {
 		/* Unless it is the last step arriving again, its sender has
 		 * restarted and does not know this session is over.
 		 */
-		if (!is_last_handshake_step(id)) {
+		if (id != LUDLC_STATE_LAST_STEP) {
 			on_disconnect_lock(conn);
 			ret |= HANDLE_RX_DISCONNECT_F;
 		}
@@ -1192,7 +1176,7 @@ static int rx_handle_packet(
 		 * the ID check above and leave last_received unchanged.
 		 * There is nothing to ACK.
 		 */
-		if (unnumbered)
+		if (u_packet)
 			ret |= HANDLE_RX_ACCEPT_F;
 	} else if (!ahead) {
 		/* The next one. A NAK still waiting would report the one

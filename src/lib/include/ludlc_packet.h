@@ -117,25 +117,8 @@ enum __CONFIG_LUDLC_MAX_PAYLOAD_SIZE_leaves_no_room_for_the_header__ {
  * gap while the packet consumes no number of its own. Two kinds of packet
  * carry this flag: a PING, which is a bare @ref ludlc_ping_packet_t used
  * for keep-alives and standalone ACKs/NAKs, and an unnumbered data packet,
- * which has a full header and a payload. They are distinguished by length,
- * see @ref ludlc_is_unnumbered_data().
+ * which has a full header and a payload. They are distinguished by length.
  */
 #define LUDLC_PING_FLAG		LUDLC_MAX_TX_ID
-
-/**
- * @brief Distinguishes an unnumbered data packet from a PING.
- *
- * Both set @ref LUDLC_PING_FLAG. A PING ends after the two IDs, so
- * anything longer than a full header carries a channel and a payload.
- *
- * @param tx_id The `tx_id` field of the received packet.
- * @param pkt_sz The total size of the received packet in bytes.
- * @return true if the packet carries unnumbered data.
- */
-static inline bool ludlc_is_unnumbered_data(ludlc_id_t tx_id, size_t pkt_sz)
-{
-	return (tx_id & LUDLC_PING_FLAG) &&
-			pkt_sz > sizeof(ludlc_packet_hdr_t);
-}
 
 #endif /* __LUDLC_PACKET_H__ */

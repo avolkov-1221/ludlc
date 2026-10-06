@@ -56,6 +56,7 @@ enum ludlc_conn_state
 	LUDLC_STATE_WAIT_CONN_1  = 1,
 	/** Received first reply, sent second, awaiting final. */
 	LUDLC_STATE_WAIT_CONN_2  = 2,
+	LUDLC_STATE_LAST_STEP = LUDLC_STATE_WAIT_CONN_2,
 	/** Handshake complete, connection established. */
 	LUDLC_STATE_CONNECTED    = 3,
 	/** State to signal termination (not part of handshake). */

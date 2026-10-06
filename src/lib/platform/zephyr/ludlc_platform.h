@@ -37,13 +37,22 @@ struct ludlc_platform_connection {
 #define LUDLC_CONN_FORCE_TX_F		BIT(0)
 #define LUDLC_CONN_TX_EXIT_EVT		BIT(1)
 /* The watchdog, for a TX thread that also serves the receive path. */
-#define LUDLC_CONN_IO_TOUT_EVT		BIT(2)
+
+#if IS_ENABLED(CONFIG_LUDLC_SERIAL_SINGLE_THREAD)
+#define LUDLC_CONN_RX_TOUT_EVT		BIT(2)
 #define LUDLC_PLATFORM_LAST_TX_EVENT	3
-
-	struct k_event		tx_events;
-
+	union {
+		struct k_event		rx_event;
+		struct k_event		tx_events;
+	};
+#else
 #define LUDLC_CONN_RX_TOUT_EVT		BIT(0)
+#define LUDLC_PLATFORM_LAST_TX_EVENT	2
+#define LUDLC_PLATFORM_LAST_RX_EVENT	1
+
 	struct k_event		rx_event;
+	struct k_event		tx_events;
+#endif
 
 	/**
 	 * @brief Ask the transport for a TX round.
