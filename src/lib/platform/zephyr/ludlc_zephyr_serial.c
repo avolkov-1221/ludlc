@@ -197,8 +197,7 @@ static void ludlc_serial_irq_cb(const struct device *dev, void *user_data)
 
 	if (uart_irq_tx_ready(dev)) {
 		uint8_t *data_ptr = NULL;
-		uint32_t len = ring_buf_get_ptr(&sconn->tx_rb, &data_ptr,
-						  sizeof(sconn->tx_rb_buffer));
+		uint32_t len = ring_buf_get_ptr(&sconn->tx_rb, &data_ptr, 0);
 
 		if (len > 0) {
 			int written = uart_fifo_fill(dev, data_ptr, len);
@@ -383,8 +382,7 @@ static void ludlc_serial_start_tx(struct ludlc_serial_connection *sconn)
 			return;
 		}
 
-		len = ring_buf_get_ptr(&sconn->tx_rb, &data_ptr,
-					 sizeof(sconn->tx_rb_buffer));
+		len = ring_buf_get_ptr(&sconn->tx_rb, &data_ptr, 0);
 
 		if (len > 0) {
 			int ret = uart_tx(sconn->uart_dev, data_ptr, len,
@@ -526,8 +524,7 @@ static void ludlc_serial_tx_thread(void *p1, void *p2, void *p3)
 		 */
 		while (ludlc_enc_busy(sconn->fs)) {
 			uint8_t *dst;
-			uint32_t spc = ring_buf_put_ptr(&sconn->tx_rb, &dst,
-						  UINT32_MAX);
+			uint32_t spc = ring_buf_put_ptr(&sconn->tx_rb, &dst, 0);
 			if (!spc)
 				break;
 
