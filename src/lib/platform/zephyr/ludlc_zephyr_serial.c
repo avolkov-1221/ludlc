@@ -707,7 +707,7 @@ int ludlc_serial_connection_create(const ludlc_platform_args_t *arg,
 #ifndef CONFIG_LUDLC_SERIAL_SINGLE_THREAD
 	sconn->rx_thread = k_thread_create(&sconn->rx_thread_data,
 			sconn->rx_thread_stack,
-			sizeof(sconn->rx_thread_stack),
+			K_KERNEL_STACK_SIZEOF(sconn->rx_thread_stack),
 			ludlc_serial_rx_thread,
 			sconn, NULL, NULL,
 			RX_THREAD_PRIO, 0, K_NO_WAIT);
@@ -721,7 +721,7 @@ int ludlc_serial_connection_create(const ludlc_platform_args_t *arg,
 
 	sconn->tx_thread = k_thread_create(&sconn->tx_thread_data,
 			sconn->tx_thread_stack,
-			sizeof(sconn->tx_thread_stack),
+			K_KERNEL_STACK_SIZEOF(sconn->tx_thread_stack),
 			ludlc_serial_tx_thread,
 			sconn, NULL, NULL,
 			TX_THREAD_PRIO, 0, K_NO_WAIT);
