@@ -24,6 +24,17 @@ target_include_directories(ludlc_includes INTERFACE
 	"${CMAKE_CURRENT_BINARY_DIR}"
 )
 
+# Any other name, such as LOG_INFO from log.h, reads as 0 in the #if tests of
+# ludlc_logger.h and would silently compile all logging out.
+set(MAX_LOG_LEVEL LUDLC_LOG_LVL_INFO CACHE STRING
+	"POSIX: most verbose log level compiled in (LUDLC_LOG_LVL_*)")
+if(NOT MAX_LOG_LEVEL MATCHES
+   "^LUDLC_LOG_LVL_(FATAL|ERROR|WARN|INFO|DEBUG|TRACE)$")
+	message(FATAL_ERROR "MAX_LOG_LEVEL must be a LUDLC_LOG_LVL_* level")
+endif()
+target_compile_definitions(ludlc_includes INTERFACE
+	MAX_LOG_LEVEL=${MAX_LOG_LEVEL})
+
 # ISO C11 + POSIX.1-2008 (no _GNU_SOURCE — library stays libc-agnostic).
 # Requires: clock_gettime(CLOCK_MONOTONIC), timer_create/timer_settime (link librt
 # where the platform keeps those symbols), pthreads, C11 atomics.

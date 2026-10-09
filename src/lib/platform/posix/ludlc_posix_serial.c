@@ -399,7 +399,7 @@ ssize_t ludlc_serial_read(struct ludlc_serial_connection *sconn,
 	ret = poll(pfd, 2, timeout_ms);
 
 	if (ret == -1) {
-		printf("poll failed, errno = %d\n", errno);
+		LUDLC_LOG_ERROR("poll failed, errno = %d\n", errno);
 		return -errno;
 	}
 
