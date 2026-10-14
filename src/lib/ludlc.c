@@ -1109,7 +1109,6 @@ static int rx_handle_packet(
 			return ret;
 		}
 		/* Handshake just completed, continue processing this packet */
-		ret &= ~HANDLE_RX_CONTINUE_F;
 	} else {
 		ret = 0;
 	}
