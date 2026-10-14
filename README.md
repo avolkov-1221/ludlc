@@ -48,6 +48,10 @@ Please refer to [ludlc.md](doc/ludlc.md) to get all information related to LuDLC
 ```bash
    cmake --build .
 ```
+4. Run the tests:
+```bash
+   ctest --output-on-failure
+```
 
 Running Examples:
 

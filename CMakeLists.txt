@@ -12,7 +12,8 @@
 # else the one LUDLC_PLATFORM_DIR names, else Zephyr where ZEPHYR_BASE is set,
 # else POSIX. Every platform but Zephyr builds an ordinary library, versioned
 # from the VERSION file; Zephyr builds a Zephyr library instead. The sources are
-# added from src/. See doc/PORTING.md for a port kept outside this tree.
+# added from src/ and, on POSIX, the tests from tests/. See doc/PORTING.md for
+# a port kept outside this tree.
 
 cmake_minimum_required(VERSION 3.20.0)
 
@@ -211,6 +212,14 @@ if(CCACHE_FOUND)
 endif(CCACHE_FOUND)
 
 add_subdirectory(src)
+
+# The tests are built with the samples and run by ctest from the build
+# directory. A project that takes LuDLC as a dependency does not get them.
+if(LUDLC_ENABLE_BINARIES AND NOT LUDLC_AS_SUBPROJECT)
+  enable_testing()
+  add_subdirectory(tests)
+endif()
+
 if(NOT DEFINED DISABLE_PACKAGE_CONFIG_AND_INSTALL)
   add_subdirectory(doc)
 endif()
