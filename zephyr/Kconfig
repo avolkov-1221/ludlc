@@ -256,6 +256,19 @@ config LUDLC_NUM_RX_BUFFERS
 	help
 	  Number of RX packet buffers used by Zephyr serial transport.
 
+config LUDLC_SERIAL_ASYNC_RX_BUF_SIZE
+	int "Size of the buffers a UART receives into with the asynchronous API"
+	range 2 4096
+	default 64
+	depends on LUDLC_SERIAL_CONN && UART_ASYNC_API
+	help
+	  A serial link runs the asynchronous UART API where its UART can
+	  receive with it, which is by DMA in most drivers, and the
+	  interrupt-driven API otherwise. The driver fills two buffers of this
+	  size in turn, and reports the octets when the line goes idle and
+	  when a buffer fills, or half of it with a cyclic DMA. A larger
+	  buffer means fewer interrupts on a fast link that is kept busy.
+
 config LUDLC_SPI_CONN
 	bool "LuDLC SPI peripheral connection support"
 	default DT_HAS_LUDLC_SPI_PERIPHERAL_ENABLED

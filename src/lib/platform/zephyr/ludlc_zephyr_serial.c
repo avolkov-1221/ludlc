@@ -10,6 +10,8 @@
  * @details
  * UART communication in interrupt-driven and asynchronous modes, the RX and TX
  * threads, and the Zephyr primitives they use: events, FIFOs and memory slabs.
+ * A link runs the asynchronous API where its UART can receive with it, which
+ * is by DMA in most drivers, and the interrupt-driven API otherwise.
  * The checksum the framing runs comes from the caller in
  * `ludlc_platform_args_t`, from those in ludlc_zephyr_csum.c or its own.
  */
@@ -57,6 +59,28 @@ DT_FOREACH_STATUS_OKAY(ludlc_uart, LUDLC_DT_CHECK)
 #define NUM_RX_BUFFERS 3
 #endif
 
+/*
+ * The size of each of the two buffers a UART receives into with the
+ * asynchronous API. The octets are decoded as the driver reports them, so the
+ * buffers only have to cover the time between two reports.
+ */
+#ifdef CONFIG_LUDLC_SERIAL_ASYNC_RX_BUF_SIZE
+#define RX_ASYNC_BUF_SIZE CONFIG_LUDLC_SERIAL_ASYNC_RX_BUF_SIZE
+#else
+#define RX_ASYNC_BUF_SIZE 64
+#endif
+
+/*
+ * The driver reports what it has received once the line has been idle for
+ * this many characters, or for RX_ASYNC_TIMEOUT_US where the baud rate is not
+ * known. Never for no time at all, which leaves a driver to its own idea of
+ * an idle line. The STM32 one then waits for the idle-line interrupt, and
+ * loses it when the line goes idle while it swaps its DMA buffers: the end of
+ * a frame stays unreported until the next frame arrives.
+ */
+#define RX_ASYNC_TIMEOUT_CHARS	2
+#define RX_ASYNC_TIMEOUT_US	100
+
 #define TX_SPACE_AVAIL_EVT	BIT(LUDLC_PLATFORM_LAST_TX_EVENT)
 #define TX_EMPTY_EVT		BIT(LUDLC_PLATFORM_LAST_TX_EVENT + 1)
 
@@ -96,6 +120,12 @@ struct ludlc_serial_connection {
 
 	uint8_t rx_slab_bufs[RX_BUF_ALIGNED_SIZE * NUM_RX_BUFFERS];
 	uint8_t	tx_rb_buffer[LUDLC_TX_FIFO_SIZE];
+#if IS_ENABLED(CONFIG_UART_ASYNC_API)
+	/* What the UART receives into with the asynchronous API. */
+	uint8_t rx_async_buf[2][RX_ASYNC_BUF_SIZE];
+	/* The one of the two the driver was last given. */
+	uint8_t rx_async_idx;
+#endif
 
 	ludlc_platform_atomic_t flags;
 	const struct device *uart_dev;	/* Zephyr UART device */
@@ -113,7 +143,7 @@ struct ludlc_serial_connection {
 	atomic_ptr_t		curr_rx_buf;
 
 	/** Framing state of this link, allocated at open. The decoder runs
-	 * in the UART IRQ.
+	 * in the UART IRQ, or in the callback of the asynchronous API.
 	 */
 	struct ludlc_framing_state *fs;
 
@@ -181,6 +211,75 @@ static inline void free_serial_connection(struct ludlc_serial_connection *conn)
 
 /* --- UART Callbacks --- */
 
+/** @brief Checks if the link runs the asynchronous UART API. */
+static inline bool ludlc_serial_is_async(struct ludlc_serial_connection *sconn)
+{
+	return IS_ENABLED(CONFIG_UART_ASYNC_API) &&
+	       ludlc_platform_test_bit(USE_ASYNC_API, &sconn->flags);
+}
+
+/**
+ * @brief Feeds received octets to the framing decoder.
+ *
+ * Runs in the UART interrupt, or in the callback of the asynchronous API.
+ * Each frame the decoder completes is queued for the receive path, and the
+ * decoder goes on in the next free buffer.
+ *
+ * @param sconn The connection.
+ * @param buf The octets as they came off the wire.
+ * @param n How many.
+ * @return true if all of @p buf was taken.
+ * @return false if no buffer is free. The octets left are dropped, and the
+ * receive path hands a buffer back once it has read a frame.
+ */
+static bool ludlc_serial_rx_feed(struct ludlc_serial_connection *sconn,
+				 const uint8_t *buf, size_t n)
+{
+	struct rx_packet_item *rx_buf = atomic_ptr_get(&sconn->curr_rx_buf);
+	size_t i;
+
+	if (!rx_buf) {
+		return false;
+	}
+
+	for (i = 0; i < n; ) {
+		struct rx_packet_item *next_buf = NULL;
+		bool done;
+
+		i += ludlc_dec_feed(sconn->fs, sconn->csum, &sconn->conn,
+				    &buf[i], n - i, &done);
+		if (!done) {
+			continue;
+		}
+
+		rx_buf->size = ludlc_dec_size(sconn->fs);
+
+		if (!k_mem_slab_alloc(&sconn->rx_slab, (void **)&next_buf,
+				      K_NO_WAIT)) {
+			ludlc_dec_prep(sconn->fs, sconn->csum,
+				       next_buf->payload,
+				       ludlc_conn_frame_sz(&sconn->conn,
+							   sconn->csum));
+		}
+
+		atomic_ptr_set(&sconn->curr_rx_buf, next_buf);
+
+		k_fifo_put(&sconn->rx_fifo, rx_buf);
+
+		k_event_post(&sconn->conn.pconn.rx_event, RX_READY_EVT);
+
+		if (!next_buf) {
+			LUDLC_INC_STATS(&sconn->conn, overrun);
+			return false;
+		}
+
+		/* The frames that follow in this run go to the new buffer. */
+		rx_buf = next_buf;
+	}
+
+	return true;
+}
+
 /**
  * @brief UART interrupt callback.
  *
@@ -194,7 +293,6 @@ static void ludlc_serial_irq_cb(const struct device *dev, void *user_data)
 	 * a run of them, which keeps the loop out of the IRQ.
 	 */
 	uint8_t buf[8];
-	struct rx_packet_item *rx_buf;
 	int n;
 
 	uart_irq_update(dev);
@@ -233,59 +331,27 @@ static void ludlc_serial_irq_cb(const struct device *dev, void *user_data)
 		}
 	}
 
-	rx_buf = atomic_ptr_get(&sconn->curr_rx_buf);
-	if (!uart_irq_rx_ready(dev) || !rx_buf) {
+	if (!uart_irq_rx_ready(dev) ||
+	    !atomic_ptr_get(&sconn->curr_rx_buf)) {
 		return;
 	}
 
 	while ((n = uart_fifo_read(dev, buf, sizeof(buf))) > 0) {
-		int i;
-
-		for (i = 0; i < n; ) {
-			bool done;
-			struct rx_packet_item *next_buf;
-
-			i += (int)ludlc_dec_feed(sconn->fs, sconn->csum,
-						 &sconn->conn, &buf[i],
-						 (size_t)(n - i), &done);
- 			if (!done) {
-				continue;
-			}
-
-			rx_buf->size = ludlc_dec_size(sconn->fs);
-
-			if (!k_mem_slab_alloc(&sconn->rx_slab,
-					(void **)&next_buf, K_NO_WAIT)) {
-				ludlc_dec_prep(sconn->fs,
-					       sconn->csum,
-					       next_buf->payload,
-					       ludlc_conn_frame_sz(&sconn->conn,
-							sconn->csum));
-			}
-
-			atomic_ptr_set(&sconn->curr_rx_buf, next_buf);
-
-			k_fifo_put(&sconn->rx_fifo, rx_buf);
-
-			k_event_post(&sconn->conn.pconn.rx_event, RX_READY_EVT);
-
-			if (!next_buf) {
-				uart_irq_rx_disable(sconn->uart_dev);
-				LUDLC_INC_STATS(&sconn->conn, overrun);
-				LUDLC_LOG_TRACE(
-					"RX-IRQ slab empty, disable RX IRQ");
-				return;
-			}
+		if (!ludlc_serial_rx_feed(sconn, buf, (size_t)n)) {
+			/* Until the receive path hands a buffer back. */
+			uart_irq_rx_disable(sconn->uart_dev);
+			LUDLC_LOG_TRACE("RX-IRQ slab empty, disable RX IRQ");
+			return;
 		}
 	}
 }
 
 /**
- * @brief Pass the frames the UART IRQ completed to the core.
+ * @brief Pass the frames the decoder completed to the core.
  *
  * Runs in the RX thread, or in the TX thread when there is no RX thread. Each
- * buffer goes back to the IRQ, re-enabling UART RX, if the IRQ ran out of
- * them, and to the slab otherwise.
+ * buffer goes back to the decoder if it ran out of them, and to the slab
+ * otherwise. With the interrupt-driven API that also re-enables the RX IRQ.
  * @param sconn Pointer to the `ludlc_serial_connection` structure.
  */
 static void ludlc_serial_rx(struct ludlc_serial_connection *sconn)
@@ -318,7 +384,9 @@ static void ludlc_serial_rx(struct ludlc_serial_connection *sconn)
 				ludlc_conn_frame_sz(&sconn->conn, sconn->csum));
 
 			atomic_ptr_set(&sconn->curr_rx_buf, rx_buf);
-			uart_irq_rx_enable(sconn->uart_dev);
+			if (!ludlc_serial_is_async(sconn)) {
+				uart_irq_rx_enable(sconn->uart_dev);
+			}
 		} else {
 			k_mem_slab_free(&sconn->rx_slab, rx_buf);
 		}
@@ -376,8 +444,7 @@ static void ludlc_serial_rx_thread(void *p1, void *p2, void *p3)
  */
 static void ludlc_serial_start_tx(struct ludlc_serial_connection *sconn)
 {
-	if (IS_ENABLED(CONFIG_UART_ASYNC_API) &&
-	    ludlc_platform_test_bit(USE_ASYNC_API, &sconn->flags)) {
+	if (ludlc_serial_is_async(sconn)) {
 		uint8_t *data_ptr;
 		uint32_t len;
 
@@ -412,11 +479,38 @@ static void ludlc_serial_start_tx(struct ludlc_serial_connection *sconn)
 	}
 }
 
+#if IS_ENABLED(CONFIG_UART_ASYNC_API)
+/**
+ * @brief Starts receiving with the asynchronous UART API.
+ *
+ * @param sconn The connection.
+ * @return 0 on success, or what uart_rx_enable() returns: a negative errno
+ * if the UART cannot receive this way.
+ */
+static int ludlc_serial_async_rx_start(struct ludlc_serial_connection *sconn)
+{
+	int32_t timeout = RX_ASYNC_TIMEOUT_US;
+	struct uart_config cfg;
+
+	/* A character is ten bits on the wire. */
+	if (IS_ENABLED(CONFIG_UART_USE_RUNTIME_CONFIGURE) &&
+	    !uart_config_get(sconn->uart_dev, &cfg) && cfg.baudrate) {
+		timeout = DIV_ROUND_UP(RX_ASYNC_TIMEOUT_CHARS * 10U *
+				       USEC_PER_SEC, cfg.baudrate);
+	}
+
+	sconn->rx_async_idx = 0;
+
+	return uart_rx_enable(sconn->uart_dev, sconn->rx_async_buf[0],
+			      RX_ASYNC_BUF_SIZE, timeout);
+}
+
 /**
  * @brief Asynchronous UART callback.
  *
- * Handles `UART_TX_DONE` and `UART_TX_ABORTED`: releases the sent bytes from
- * the TX ring buffer and wakes the TX thread.
+ * Feeds the received octets to the framing decoder and keeps the driver in
+ * buffers. On `UART_TX_DONE` and `UART_TX_ABORTED` it releases the sent bytes
+ * from the TX ring buffer and wakes the TX thread.
  * @param dev Pointer to the UART device.
  * @param evt Pointer to the UART event structure.
  * @param user_data Pointer to the `ludlc_serial_connection` structure.
@@ -426,20 +520,55 @@ static void ludlc_serial_async_cb(const struct device *dev,
 {
 	struct ludlc_serial_connection *sconn = user_data;
 
-	if(evt->type != UART_TX_DONE && evt->type != UART_TX_ABORTED) {
-		return;
+	switch (evt->type) {
+	case UART_RX_RDY:
+		/* With no buffer free the octets are dropped: the driver
+		 * cannot be held back, and the decoder finds the next frame
+		 * by itself.
+		 */
+		(void)ludlc_serial_rx_feed(sconn,
+				evt->data.rx.buf + evt->data.rx.offset,
+				evt->data.rx.len);
+		break;
+
+	case UART_RX_BUF_REQUEST:
+		/* What a buffer held has been decoded by the time the driver
+		 * leaves it, so the two take turns.
+		 */
+		sconn->rx_async_idx ^= 1U;
+		(void)uart_rx_buf_rsp(dev,
+				sconn->rx_async_buf[sconn->rx_async_idx],
+				RX_ASYNC_BUF_SIZE);
+		break;
+
+	case UART_RX_DISABLED:
+		/* The driver stops by itself on an error, or once it is out
+		 * of buffers. A frame is lost, and the link goes on.
+		 */
+		if (sconn->conn.conn_state != LUDLC_STATE_TERMINATE &&
+		    ludlc_serial_is_async(sconn)) {
+			(void)ludlc_serial_async_rx_start(sconn);
+		}
+		break;
+
+	case UART_TX_DONE:
+	case UART_TX_ABORTED:
+		ring_buf_consume(&sconn->tx_rb, evt->data.tx.len);
+		ludlc_platform_clear_bit(TX_ASYNC_BUSY, &sconn->flags);
+
+		if (evt->type == UART_TX_ABORTED) {
+			ludlc_platform_request_tx(&sconn->conn);
+		}
+
+		k_event_post(&sconn->conn.pconn.tx_events, TX_SPACE_AVAIL_EVT);
+		ludlc_serial_start_tx(sconn);
+		break;
+
+	default:
+		break;
 	}
-
-	ring_buf_consume(&sconn->tx_rb, evt->data.tx.len);
-	ludlc_platform_clear_bit(TX_ASYNC_BUSY, &sconn->flags);
-
-	if (evt->type == UART_TX_ABORTED) {
-		ludlc_platform_request_tx(&sconn->conn);
-	}
-
-	k_event_post(&sconn->conn.pconn.tx_events, TX_SPACE_AVAIL_EVT);
-	ludlc_serial_start_tx(sconn);
 }
+#endif /* CONFIG_UART_ASYNC_API */
 
 /**
  * @brief TX serial thread entry point.
@@ -580,7 +709,11 @@ void ludlc_serial_connection_destroy(struct ludlc_connection *conn)
 #endif
 	k_event_post(&conn->pconn.tx_events, LUDLC_CONN_TX_EXIT_EVT);
 
-	uart_irq_rx_disable(sconn->uart_dev);
+	if (ludlc_serial_is_async(sconn)) {
+		(void)uart_rx_disable(sconn->uart_dev);
+	} else if (IS_ENABLED(CONFIG_UART_INTERRUPT_DRIVEN)) {
+		uart_irq_rx_disable(sconn->uart_dev);
+	}
 
 	if (sconn->tx_thread) {
 		k_thread_join(sconn->tx_thread, K_FOREVER);
@@ -672,29 +805,43 @@ int ludlc_serial_connection_create(const ludlc_platform_args_t *arg,
 		goto err;
 	}
 
-	atomic_ptr_set(&sconn->curr_rx_buf, rx_buf);
-
 	ring_buf_init(&sconn->tx_rb, sizeof(sconn->tx_rb_buffer),
 			sconn->tx_rb_buffer);
 
 	ret = -ENOTSUP;
-	if (IS_ENABLED(CONFIG_UART_INTERRUPT_DRIVEN)) {
+
+#if IS_ENABLED(CONFIG_UART_ASYNC_API)
+	/*
+	 * The asynchronous API first: its driver moves the octets by DMA
+	 * where the UART has it, which a fast link needs. Receiving starts
+	 * here, to find out whether this UART can, and what arrives is
+	 * dropped until the decoder gets its buffer below.
+	 */
+	ret = uart_callback_set(sconn->uart_dev, ludlc_serial_async_cb,
+			(void *)sconn);
+	if (!ret) {
+		ret = ludlc_serial_async_rx_start(sconn);
+		if (!ret) {
+			ludlc_platform_set_bit(USE_ASYNC_API, &sconn->flags);
+		} else {
+			(void)uart_callback_set(sconn->uart_dev, NULL, NULL);
+		}
+	}
+#endif
+
+	if (IS_ENABLED(CONFIG_UART_INTERRUPT_DRIVEN) && ret) {
 		ret = uart_irq_callback_user_data_set(sconn->uart_dev,
 				ludlc_serial_irq_cb,
 				(void *)sconn);
 	}
 
-	if (IS_ENABLED(CONFIG_UART_ASYNC_API) && ret) {
-		ret = uart_callback_set(sconn->uart_dev, ludlc_serial_async_cb,
-				(void *)sconn);
-		if (!ret) {
-			ludlc_platform_set_bit(USE_ASYNC_API, &sconn->flags);
-		}
-	}
-
 	if (ret) {
 		goto err;
 	}
+
+	LUDLC_LOG_DEBUG("The link runs the %s UART API",
+			ludlc_serial_is_async(sconn) ? "asynchronous" :
+						       "interrupt-driven");
 
 	ret = ludlc_connection_init(&sconn->conn, &cfg, cb, user_arg);
 	if (ret) {
@@ -742,12 +889,10 @@ int ludlc_serial_connection_create(const ludlc_platform_args_t *arg,
 		k_thread_name_set(sconn->tx_thread, "LuDLC TX thread");
 	}
 
-	if (IS_ENABLED(CONFIG_UART_ASYNC_API) &&
-			ludlc_platform_test_bit(USE_ASYNC_API, &sconn->flags)) {
-		uart_rx_enable(sconn->uart_dev, rx_buf->payload,
-			       sizeof(rx_buf->payload),
-			       0);
-	} else {
+	/* The decoder has its buffer from here on, and takes what arrives. */
+	atomic_ptr_set(&sconn->curr_rx_buf, rx_buf);
+
+	if (!ludlc_serial_is_async(sconn)) {
 		uart_irq_rx_enable(sconn->uart_dev);
 	}
 
