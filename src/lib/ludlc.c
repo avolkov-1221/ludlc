@@ -1435,21 +1435,26 @@ int ludlc_get_packet_to_send(struct ludlc_connection *conn,
 				ret = 0;
 			}
 
-			/* A DISCONNECT is the last frame of the session, so
-			 * nothing else asks for a turn once it is out. The
-			 * core counts a frame as sent on the call which asks
-			 * for the next one, so without a turn asked for here
-			 * that call comes from the ping timer and the session
-			 * ends a ping period late.
+			/* The core counts a frame as sent on the call which
+			 * asks for the next one, and that call is what frees
+			 * the slot and confirms the packet. Without a turn
+			 * asked for here it comes from the ping timer: on an
+			 * idle window a stream of unnumbered packets would run
+			 * at one per ping period, and a DISCONNECT would end
+			 * the session a ping period late. The turn sends a
+			 * PING when nothing else is waiting; that PING is not
+			 * the keep-alive and repeats no NAK, see below.
 			 */
-			if (ludlc_platform_test_bit(LUDLC_CONN_DISC_AFTER_TX_F,
-						    &conn->flags))
-				ludlc_platform_request_tx(conn);
+			ludlc_platform_request_tx(conn);
 		} else if (conn->last_sent == conn->last_queued) {
-			/* Nothing to send, so send PING instead. */
+			/* Nothing to send, so send PING instead. The PING of
+			 * the turn an unnumbered packet asked for follows
+			 * that packet at once, not a ping period after the
+			 * last frame, so it is not the keep-alive.
+			 */
 			conn->tx_hdr.id.tx_id = id | LUDLC_PING_FLAG;
 			*hdr_sz = sizeof(conn->tx_hdr.id);
-			ping = true;
+			ping = !u_done;
 		} else {
 			/* send packet from the queue */
 			it = &conn->packets_q[
