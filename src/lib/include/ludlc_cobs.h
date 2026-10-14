@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: (Apache-2.0 OR GPL-2.0-only)
+/* SPDX-License-Identifier: (Apache-2.0 OR GPL-2.0-only) */
 /**
  * @file ludlc_cobs.h
  *

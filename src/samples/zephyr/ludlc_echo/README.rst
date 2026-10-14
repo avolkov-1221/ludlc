@@ -1,4 +1,4 @@
-.. SPDX-License-Identifier: Apache-2.0 OR GPL-2.0-or-later
+.. SPDX-License-Identifier: (Apache-2.0 OR GPL-2.0-only)
 .. Copyright (C) 2025-2026 Andrey VOLKOV <andrey@volkov.fr> & LuDLC Contributors
 
 LuDLC Echo Sample

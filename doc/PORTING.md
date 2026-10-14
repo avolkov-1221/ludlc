@@ -1,8 +1,5 @@
-<!--
-SPDX-License-Identifier: (Apache-2.0 OR GPL-2.0-or-later)
-
-Copyright (C) 2025-2026 Andrey VOLKOV <andrey@volkov.fr> & LuDLC Contributors
--->
+<!-- SPDX-License-Identifier: (Apache-2.0 OR GPL-2.0-only) -->
+<!-- Copyright (C) 2025-2026 Andrey VOLKOV <andrey@volkov.fr> & LuDLC Contributors -->
 
 # Porting LuDLC
 
