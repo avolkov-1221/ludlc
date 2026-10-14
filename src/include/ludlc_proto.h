@@ -550,4 +550,29 @@ struct ludlc_conn_cfg {
 /** @brief Shared instance of @ref LUDLC_CONN_CFG_DEFAULT. */
 extern const struct ludlc_conn_cfg ludlc_conn_cfg_default;
 
+#ifndef CONFIG_LUDLC_STATS
+#define CONFIG_LUDLC_STATS 1
+#endif
+
+#if CONFIG_LUDLC_STATS
+/**
+ * @struct ludlc_stats
+ * @brief A structure to hold connection statistics (if enabled).
+ */
+struct ludlc_stats {
+	uint32_t rx_packet;  /**< Count of valid received packets. */
+	uint32_t tx_packet;  /**< Count of transmitted packets. */
+	uint32_t bad_csum;   /**< Count of packets received with bad csum. */
+	uint32_t jabber;   /**< Count of excessively large/malformed packets. */
+	uint32_t on_conn;    /**< Connection established counter. */
+	uint32_t on_disconn; /**< Connection lost/disconnected counter. */
+	uint32_t dropped;    /**< Count of dropped packets. */
+	uint32_t overrun;    /**< Count of rx overruns. */
+};
+
+#define LUDLC_STATS_VAL(conn, var)	((conn)->stats.var)
+#else
+#define LUDLC_STATS_VAL(conn, var)	(0)
+#endif
+
 #endif /* __LUDLC_PROTO_H__ */
