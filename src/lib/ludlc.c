@@ -1102,7 +1102,7 @@ static int rx_handle_packet(
 		 * anything else would start it.
 		 */
 		if (ret & HANDLE_RX_CONNECTED_F)
-			ludlc_watchdog_rearm(conn);
+			ludlc_watchdog_restart(conn);
 
 		if ((ret & HANDLE_RX_CONTINUE_F) == 0) {
 			/* Handshake not complete, stop further processing */
@@ -1145,7 +1145,7 @@ static int rx_handle_packet(
 	}
 
 	/* Any valid packet (even ping) resets the connection watchdog */
-	ludlc_watchdog_rearm(conn);
+	ludlc_watchdog_restart(conn);
 
 	/* 1. Our own packets first: those the peer holds, and one it misses.
 	 * The sequence below needs to know whether the peer has had our NAK.
@@ -1655,14 +1655,14 @@ EXPORT_SYMBOL_GPL(ludlc_handle_disconnect);
  *
  * @param conn The connection, or NULL.
  */
-void ludlc_watchdog_rearm(struct ludlc_connection *conn)
+void ludlc_watchdog_restart(struct ludlc_connection *conn)
 {
 	if (conn)
 		ludlc_platform_start_timer(&conn->wd_timer,
 					   ludlc_conn_wd_time(conn), 0);
 }
 #ifdef __KERNEL__
-EXPORT_SYMBOL_GPL(ludlc_watchdog_rearm);
+EXPORT_SYMBOL_GPL(ludlc_watchdog_restart);
 #endif
 
 /**

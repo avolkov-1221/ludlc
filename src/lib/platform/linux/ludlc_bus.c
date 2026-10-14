@@ -1265,7 +1265,7 @@ void ludlc_conn_resume(struct ludlc_connection *conn)
 	 * the RX path, a session whose far end is gone would never time out.
 	 */
 	if (READ_ONCE(conn->conn_state) == LUDLC_STATE_CONNECTED) {
-		ludlc_watchdog_rearm(conn);
+		ludlc_watchdog_restart(conn);
 		ludlc_platform_request_tx(conn);
 		return;
 	}

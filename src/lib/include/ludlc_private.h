@@ -364,7 +364,7 @@ int ludlc_get_packet_to_send(struct ludlc_connection *conn,
 void ludlc_handle_disconnect(struct ludlc_connection *conn);
 
 /** @brief Restarts the watchdog for another period. */
-void ludlc_watchdog_rearm(struct ludlc_connection *conn);
+void ludlc_watchdog_restart(struct ludlc_connection *conn);
 
 /**
  * @name Per-connection protocol settings
