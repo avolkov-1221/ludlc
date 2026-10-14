@@ -1,0 +1,19 @@
+# SPDX-License-Identifier: Apache-2.0 OR GPL-2.0-or-later
+#
+# @file testcase.yaml
+#
+# @brief Twister description of the Zephyr module smoke test.
+#
+# @copyright
+# Copyright (C) 2025-2026 Andrey VOLKOV <andrey@volkov.fr> & LuDLC Contributors
+
+tests:
+  modules.ludlc.smoke.native_sim:
+    build_only: true
+    platform_allow:
+      - native_sim
+    integration_platforms:
+      - native_sim
+    tags:
+      - ludlc
+      - zephyr

@@ -1,0 +1,35 @@
+# SPDX-License-Identifier: Apache-2.0 OR GPL-2.0-or-later
+#
+# @file testcase.yaml
+#
+# @brief Twister description of the Zephyr COBS test.
+#
+# @copyright
+# Copyright (C) 2025-2026 Andrey VOLKOV <andrey@volkov.fr> & LuDLC Contributors
+
+tests:
+  modules.ludlc.cobs:
+    platform_allow:
+      - native_sim
+    integration_platforms:
+      - native_sim
+    tags:
+      - ludlc
+      - cobs
+
+  # A frame's length is not the framing's to limit, and this is what says so on
+  # this side: a megabyte through the same header, which would need a megabyte
+  # of stack in ludlc_cobs_encode() if a frame were still gathered before being
+  # stuffed. Zephyr's encoder buffers one COBS group and no more.
+  modules.ludlc.cobs.big_frames:
+    platform_allow:
+      - native_sim
+    integration_platforms:
+      - native_sim
+    extra_configs:
+      - CONFIG_LUDLC_PAYLOAD_BITS=32
+      - CONFIG_LUDLC_FRAME_BITS=32
+      - CONFIG_LUDLC_MAX_PAYLOAD_SIZE=1048576
+    tags:
+      - ludlc
+      - cobs

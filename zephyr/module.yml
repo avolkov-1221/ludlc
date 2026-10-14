@@ -19,3 +19,6 @@ build:
 
 samples:
   - src/samples/zephyr/ludlc_echo
+
+tests:
+  - tests/zephyr

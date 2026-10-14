@@ -75,6 +75,14 @@ west build -b native_sim src/samples/zephyr/ludlc_echo -- \
   -DZEPHYR_EXTRA_MODULES=/path/to/ludlc
 ```
 
+The Zephyr tests and the sample run under Twister:
+
+```bash
+EXTRA_ZEPHYR_MODULES=/path/to/ludlc \
+/path/to/zephyrproject/zephyr/scripts/twister -p native_sim \
+  -T tests/zephyr -T src/samples/zephyr/ludlc_echo
+```
+
 ## Acknowledgments
 
 The author acknowledges [MUNIC SA](https://munic.io) for sponsoring the
