@@ -11,8 +11,9 @@
  * Each connection is a bus of its own, and carries the channels of its link
  * as devices, which protocol clients bind to as ordinary Linux drivers. The
  * bus follows the link: it creates the devices firmware describes when the
- * peer answers and removes them when the peer goes away. This file also
- * holds what the core needs from the platform on Linux - its timers and the
+ * peer answers and removes them when the peer goes away, and it probes the
+ * drivers of the other devices again for each session. This file also holds
+ * what the core needs from the platform on Linux - its timers and the
  * per-connection state - and registers the bus when the module loads.
  */
 
@@ -294,7 +295,15 @@ static int ludlc_bus_probe(struct device *dev)
 {
 	struct ludlc_driver *ldrv = to_ludlc_driver(dev->driver);
 	struct ludlc_device *ldev = to_ludlc_device(dev);
+	struct ludlc_connection *conn = ldev->conn;
+	bool up = READ_ONCE(conn->conn_state) == LUDLC_STATE_CONNECTED;
+	int session = atomic_read(&conn->pconn.session);
 	int ret;
+
+	/* A device on its way off the bus takes no driver. */
+	scoped_guard(mutex, &ldev->cb_lock)
+		if (test_bit(LUDLC_DEV_REMOVED_F, &ldev->flags))
+			return -ENODEV;
 
 	if (device_property_read_bool(dev, "wakeup-source")) {
 		ret = device_init_wakeup(dev, true);
@@ -314,11 +323,21 @@ static int ludlc_bus_probe(struct device *dev)
 	}
 
 	/*
+	 * A probe() that began with the link down said nothing to an earlier
+	 * peer: what it sent waited for the session that began meanwhile, so
+	 * that is the session its driver belongs to.
+	 */
+	if (!up)
+		session = atomic_read(&conn->pconn.session);
+
+	/*
 	 * The channel is dispatched to the driver once probe() has returned,
 	 * unless the driver called ludlc_device_listen() to start earlier.
 	 */
-	scoped_guard(mutex, &ldev->cb_lock)
+	scoped_guard(mutex, &ldev->cb_lock) {
 		ldev->drv = ldrv;
+		ldev->session = session;
+	}
 
 	return 0;
 }
@@ -339,6 +358,14 @@ static void ludlc_bus_remove(struct device *dev)
 
 	if (ldrv->remove)
 		ldrv->remove(ldev);
+
+	/*
+	 * A remove() with something left to say to the peer may have called
+	 * ludlc_device_listen(). Nothing may reach the driver once it has
+	 * returned, whether or not it stopped the traffic again itself.
+	 */
+	scoped_guard(mutex, &ldev->cb_lock)
+		ldev->drv = NULL;
 
 	device_init_wakeup(dev, false);
 }
@@ -796,15 +823,22 @@ void ludlc_device_unregister(struct ludlc_device *ldev)
 	channels = &ldev->conn->pconn.channels;
 
 	/*
-	 * Erasing the first channel claims the removal: a device can be removed
-	 * both by its creator and by the sweep that follows its link going
-	 * down, and only the caller that takes it out of the map owns the
-	 * reference dropped here.
+	 * Setting the flag claims the removal: a device can be removed both by
+	 * its creator and by the sweep that follows its link going down, and
+	 * only the caller that sets it owns the reference dropped here.
 	 */
-	if (xa_erase(channels, ldev->chans[0]) != ldev)
-		return;
+	scoped_guard(mutex, &ldev->cb_lock)
+		if (__test_and_set_bit(LUDLC_DEV_REMOVED_F, &ldev->flags))
+			return;
 
-	for (i = 1; i < ldev->nchans; i++)
+	/*
+	 * The driver goes first, while the channels still lead to the device:
+	 * a remove() with a last word for the peer needs the answer to find
+	 * its way back.
+	 */
+	device_release_driver(&ldev->dev);
+
+	for (i = 0; i < ldev->nchans; i++)
 		xa_erase(channels, ldev->chans[i]);
 
 	device_unregister(&ldev->dev);
@@ -895,14 +929,67 @@ static void ludlc_bus_sweep(struct ludlc_connection *conn, bool enumerated_only)
 }
 
 /**
+ * @brief Bind the drivers of the devices the link did not enumerate again.
+ *
+ * Those devices belong to whoever created them and stay on the bus when the
+ * peer goes away, so their drivers are still bound from the session before.
+ * The peer of a new session may have restarted and lost what it was told, so
+ * each driver is removed and probed again, as a driver of an enumerated
+ * device is when its device comes back. A device left without a driver,
+ * because its probe() found no peer to talk to, gets one the same way.
+ */
+static void ludlc_bus_reprobe(struct ludlc_connection *conn)
+{
+	int session = atomic_read(&conn->pconn.session);
+	struct ludlc_device *ldev;
+	unsigned long chan;
+	void *entry;
+
+	xa_for_each(&conn->pconn.channels, chan, entry) {
+		bool fresh;
+
+		ldev = ludlc_device_find_by_channel(conn, chan);
+		if (!ldev)
+			continue;
+
+		/* Once per device, however many channels it owns. */
+		if (chan != ldev->chans[0] ||
+		    test_bit(LUDLC_DEV_ENUMERATED_F, &ldev->flags)) {
+			ludlc_device_put(ldev);
+			continue;
+		}
+
+		/*
+		 * A driver probed in this session has met this peer. The
+		 * device lock waits for a probe() under way, whose driver may
+		 * turn out to be one of those.
+		 */
+		device_lock(&ldev->dev);
+		scoped_guard(mutex, &ldev->cb_lock)
+			fresh = ldev->dev.driver && ldev->session == session;
+		device_unlock(&ldev->dev);
+
+		if (!fresh && device_reprobe(&ldev->dev))
+			dev_warn(&ldev->dev, "cannot bind a driver again\n");
+
+		ludlc_device_put(ldev);
+	}
+}
+
+/**
  * @brief Bring the bus in line with the link.
  *
  * Deferred out of the link handlers because adding a device probes its driver,
  * which may need to talk to the peer: those handlers run either on the thread
  * that has just received a packet or on the one holding the port to send one,
- * and neither can carry that traffic while it waits for a probe. Reading the
- * link state here rather than taking it as an argument also makes a link that
- * went down and up again while the work was queued cost nothing.
+ * and neither can carry that traffic while it waits for a probe.
+ *
+ * The link state is read here rather than taken as an argument, so what is
+ * followed is where the link has got to, not each step of the way. A session
+ * that ended is the exception: it is remembered, because the next one may
+ * have begun by the time this runs, and its peer may be one that restarted. The
+ * devices of the old session are then removed before those of the new one are
+ * created, so every driver meets the peer afresh.
  */
 static void ludlc_bus_link_workfn(struct work_struct *work)
 {
@@ -916,16 +1003,23 @@ static void ludlc_bus_link_workfn(struct work_struct *work)
 	if (test_bit(LUDLC_CONN_BUS_HOLD_F, &pconn->flags))
 		return;
 
+	/* The session the bus was populated for is over, whatever came next. */
+	if (test_and_clear_bit(LUDLC_CONN_SESSION_LOST_F, &pconn->flags) &&
+	    test_and_clear_bit(LUDLC_CONN_POPULATED_F, &pconn->flags))
+		ludlc_bus_sweep(conn, true);
+
 	/* The bus already matches the link. */
 	if (up == test_bit(LUDLC_CONN_POPULATED_F, &pconn->flags))
 		return;
 
 	assign_bit(LUDLC_CONN_POPULATED_F, &pconn->flags, up);
 
-	if (up)
+	if (up) {
 		ludlc_bus_populate(conn);
-	else
+		ludlc_bus_reprobe(conn);
+	} else {
 		ludlc_bus_sweep(conn, true);
+	}
 }
 
 /**
@@ -954,6 +1048,7 @@ static void ludlc_bus_on_caps(struct ludlc_connection *conn, const void *data,
 /** @brief The peer answered: the devices on this link can be created. */
 static void ludlc_bus_on_connect(struct ludlc_connection *conn, void *user_arg)
 {
+	atomic_inc(&conn->pconn.session);
 	schedule_work(&conn->pconn.bus_work);
 }
 
@@ -961,6 +1056,7 @@ static void ludlc_bus_on_connect(struct ludlc_connection *conn, void *user_arg)
 static void ludlc_bus_on_disconnect(struct ludlc_connection *conn,
 				    void *user_arg)
 {
+	set_bit(LUDLC_CONN_SESSION_LOST_F, &conn->pconn.flags);
 	schedule_work(&conn->pconn.bus_work);
 }
 

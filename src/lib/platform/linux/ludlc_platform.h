@@ -173,16 +173,28 @@ struct ludlc_platform_connection {
 	 * the timers are stopped and the port must not be written to, from the
 	 * transport's suspend to its resume. @c BUS_HOLD: no device may be
 	 * added to or removed from the bus while the driver core walks it for a
-	 * system transition, from prepare to complete. Accessed atomically,
+	 * system transition, from prepare to complete. @c SESSION_LOST: the
+	 * peer went away since the bus last followed the link, so the devices
+	 * it carries are those of a session that is over. Accessed atomically,
 	 * unlike the fields that belong to a single lock or context: a PM
-	 * transition writes two of these bits while the bus work writes the
-	 * third, and neither may lose the other's update.
+	 * transition writes two of these bits while the bus work and the link
+	 * handlers write the others, and none may lose another's update.
 	 */
 #define LUDLC_CONN_FORCE_TX_F		0
 #define LUDLC_CONN_POPULATED_F		1
 #define LUDLC_CONN_SUSPENDED_F		2
 #define LUDLC_CONN_BUS_HOLD_F		3
+#define LUDLC_CONN_SESSION_LOST_F	4
 	unsigned long			flags;
+
+	/**
+	 * @brief How many sessions this link has had with its peer.
+	 *
+	 * Counted when the peer answers. The bus keeps it with each driver it
+	 * probes, to tell a driver that has met this peer from one bound in a
+	 * session before.
+	 */
+	atomic_t			session;
 
 	/** Ask the transport for a TX round. */
 	void (*start_tx)(struct ludlc_connection *conn);

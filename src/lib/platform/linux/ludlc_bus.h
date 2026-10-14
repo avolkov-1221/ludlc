@@ -54,17 +54,28 @@ struct ludlc_device {
 	struct ludlc_driver *drv;
 
 	/**
+	 * @brief The session of the link the driver was probed in.
+	 *
+	 * Set with @c drv. A device whose driver was probed in an earlier
+	 * session is probed again when the peer comes back.
+	 */
+	int session;
+
+	/**
 	 * @brief What this device is, and whether it is listening.
 	 *
 	 * @c ENUMERATED marks a device the bus created from firmware, which
 	 * comes and goes with the link; one created by any other code stays
 	 * until its creator removes it. @c SUSPENDED blocks delivery from the
-	 * end of the driver's suspend() to the start of its resume(). Written
+	 * end of the driver's suspend() to the start of its resume().
+	 * @c REMOVED marks a device on its way off the bus, which only one
+	 * caller takes off and no driver binds any more. Written
 	 * non-atomically: the first bit before the device is visible, the
-	 * second only under @c cb_lock, so the two writers never overlap.
+	 * others only under @c cb_lock, so the writers never overlap.
 	 */
 #define LUDLC_DEV_ENUMERATED_F	0
 #define LUDLC_DEV_SUSPENDED_F	1
+#define LUDLC_DEV_REMOVED_F	2
 	unsigned long flags;
 
 	/**
@@ -110,8 +121,21 @@ struct ludlc_driver {
 	 * Nothing is dispatched to the driver until probe() returns. A driver
 	 * that must talk to the peer before it can finish calls
 	 * ludlc_device_listen() once it is ready to handle a callback.
+	 *
+	 * A device is probed for each session with the peer: when the peer
+	 * goes away and comes back, the driver is removed and probed again,
+	 * the peer being possibly one that restarted.
 	 */
 	int (*probe)(struct ludlc_device *ldev);
+
+	/**
+	 * @brief Unbind from @p ldev.
+	 *
+	 * Nothing is dispatched to the driver once this is called. A driver
+	 * that still has something to say to the peer calls
+	 * ludlc_device_listen() first, and ludlc_device_unlisten() before it
+	 * frees what its callbacks use.
+	 */
 	void (*remove)(struct ludlc_device *ldev);
 
 	/** Quiesce the channel on reboot or poweroff. Optional. */
@@ -127,8 +151,9 @@ struct ludlc_driver {
 	 * ludlc_chan_tag() the tag. A reply sent on @p chan keeps the tag.
 	 *
 	 * Both run in the transport's receive context, between a successful
-	 * probe() and remove(), and never two at once for the same device, on
-	 * any of its channels. They may sleep, but the link's traffic waits
+	 * probe() and remove(), unless the driver asked for them earlier or
+	 * later with ludlc_device_listen(), and never two at once for the same
+	 * device, on any of its channels. They may sleep, but the link's traffic waits
 	 * while they do, and neither may remove the device from the bus:
 	 * remove() waits for them under the lock they are called with.
 	 */
@@ -187,12 +212,18 @@ static inline void ludlc_device_put(struct ludlc_device *ldev)
 
 /**
  * @brief Start dispatching @p ldev's channels to the driver from within its
- * own probe(), rather than when probe() returns.
+ * own probe(), rather than when probe() returns, or again from within its
+ * remove().
  *
  * For a driver whose probe() needs a reply from the peer. Its receive() and
  * confirm() may be called as soon as this returns, so it must be called only
  * once everything they use is initialised. The bus undoes it if probe() then
  * fails.
+ *
+ * A remove() that still has to talk to the peer calls it too, the bus having
+ * stopped the dispatch before calling remove(), and then calls
+ * ludlc_device_unlisten() before it frees what the callbacks use. The bus
+ * stops the dispatch again when remove() returns.
  */
 void ludlc_device_listen(struct ludlc_device *ldev);
 

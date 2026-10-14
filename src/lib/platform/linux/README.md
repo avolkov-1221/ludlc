@@ -82,7 +82,15 @@ A driver receives its traffic from `receive()` and `confirm()` once `probe()`
 returns. A `probe()` that needs a reply from the peer before it can finish
 calls `ludlc_device_listen()` to start dispatch early, and
 `ludlc_device_unlisten()` if it then has to fail. The bus does the same either
-side of `remove()`, so a driver is never called into after it has gone.
+side of `remove()`, so a driver is never called into after it has gone. A
+`remove()` that still has something to say to the peer calls
+`ludlc_device_listen()` first, and `ludlc_device_unlisten()` before it frees
+what its callbacks use.
+
+A driver is probed once for each session with the peer. When the peer goes
+away and comes back it may have restarted, so the devices the link enumerates
+are removed and created again, and the drivers of the other devices are
+removed and probed again.
 
 ## Data path
 
