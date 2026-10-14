@@ -1,8 +1,16 @@
 /* SPDX-License-Identifier: GPL-2.0-only */
 /**
- * @file ludlc_spi_master.h
+ * @file ludlc_spi_master_drv.h
  *
- * @brief A LuDLC link over an SPI bus this system drives.
+ * @brief A LuDLC link over an SPI bus this system drives: the driver's side.
+ *
+ * @copyright
+ * Copyright (C) 2025-2026 Andrey VOLKOV <andrey@volkov.fr> & LuDLC Contributors
+ *
+ * @details
+ * The calls that open and close a link are in ludlc_spi_master.h, which every
+ * port shares. This file adds what the Linux driver and its optional configfs
+ * front-end need.
  *
  * The wire format is not this driver's to define: it is shared with whatever
  * runs on the peripheral, and lives in ludlc_spi_proto.h, which describes the
@@ -21,13 +29,10 @@
  * until its queue has drained is served in one call rather than flooding the
  * handler. How long the peer needs between the two transfers of an exchange is
  * a property of its firmware, which states it as @c ludlc,turnaround-us.
- *
- * Copyright (C) 2025-2026 Andrey VOLKOV <andrey@volkov.fr> & LuDLC Contributors
- *
  */
 
-#ifndef __LUDLC_SPI_MASTER_H__
-#define __LUDLC_SPI_MASTER_H__
+#ifndef __LUDLC_SPI_MASTER_DRV_H__
+#define __LUDLC_SPI_MASTER_DRV_H__
 
 #include <linux/cache.h>
 #include <linux/mutex.h>
@@ -37,6 +42,7 @@
 #include <ludlc.h>
 #include <ludlc_framing.h>
 #include <ludlc_private.h>
+#include <ludlc_spi_master.h>
 #include <ludlc_spi_proto.h>
 
 #include "ludlc_csum.h"
@@ -88,23 +94,6 @@ struct ludlc_spi_connection {
 	/** Decoded packet: a packet and its checksum. */
 	u8 rx_pkt[LUDLC_FRAME_BUF_SIZE];
 };
-
-/**
- * @brief Open a LuDLC link on an SPI peripheral.
- *
- * @param args The SPI device, the checksum to run, the timings the peer needs
- * and the cfg to open the link with, clock included.
- * @param[out] conn The link, on success.
- * @param cb Must be NULL: on Linux the events belong to the bus, which passes
- * them to the driver bound to the channel they concern.
- * @return 0, or a negative errno with nothing left open.
- */
-int ludlc_spi_master_connection_create(const ludlc_platform_args_t *args,
-				       struct ludlc_connection **conn,
-				       const struct ludlc_conn_cb *cb);
-
-/** @brief Take the link down and free it. */
-void ludlc_spi_master_connection_destroy(struct ludlc_connection *conn);
 
 /** @brief The transport state of @p conn, which must belong to this driver. */
 static inline
@@ -190,4 +179,4 @@ static inline void ludlc_spi_cfg_deinit(void)
 { }
 #endif
 
-#endif /* __LUDLC_SPI_MASTER_H__ */
+#endif /* __LUDLC_SPI_MASTER_DRV_H__ */

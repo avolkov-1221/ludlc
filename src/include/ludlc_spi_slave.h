@@ -4,9 +4,13 @@
  *
  * @brief A LuDLC link over an SPI bus driven by another controller.
  *
+ * @copyright
+ * Copyright (C) 2025-2026 Andrey VOLKOV <andrey@volkov.fr> & LuDLC Contributors
+ *
+ * @details
  * The wire format is shared with the controller on the other end of the bus
  * and is described in ludlc_spi_proto.h; read that first. This file covers
- * the peripheral half, written against the Linux ludlc_spi_master driver. A
+ * the peripheral half, written against the ludlc_spi_master driver. A
  * peripheral cannot start an exchange, only be ready for one, so the single
  * thread this transport runs stays inside a transfer nearly all of the time.
  * When it has something to send it raises the data-ready line - see
@@ -15,7 +19,7 @@
  * @section spi_cb What runs where
  *
  * One thread does everything, so @c on_recv and @c on_confirm run on it,
- * between one transfer and the next. While they run this end is not armed and
+ * between one transfer and another. While they run this end is not armed and
  * an exchange the controller clocks meanwhile is lost: the framing recovers
  * within an exchange or two, but the round is wasted. Callbacks must
  * therefore queue work rather than do it inline. Sending from a callback is
@@ -29,12 +33,6 @@
  * @ref LUDLC_MAX_FRAME_SIZE, which sizes the two frame buffers here. This end
  * usually has the less memory of the two, so it limits what the link can
  * carry: a controller announcing more is refused.
- *
- * Copyright (C) 2025-2026 Andrey VOLKOV <andrey@volkov.fr> & LuDLC Contributors
- *
- * This file is licensed under either the Apache License, Version 2.0,
- * or the GNU General Public License, version 2 or (at your option)
- * any later version.
  */
 
 #ifndef __LUDLC_SPI_SLAVE_H__
@@ -49,8 +47,9 @@
  * exchanges that carry it.
  *
  * @param args The SPI peripheral, its chip select and mode, the data-ready line
- * if the board has one, the checksum the link runs, NULL for none, and the cfg
- * to open it with. See @c ludlc_platform_args_t, and
+ * if the board has one, the checksum the link runs, NULL for none, the cfg to
+ * open it with, and the priority of the link's thread. See
+ * @c ludlc_platform_args_t, and
  * LUDLC_SPI_PERIPHERAL_ARGS_DT() in ludlc_dt.h to take them from the
  * devicetree.
  * @param conn Where the new connection goes. Set to NULL on failure.

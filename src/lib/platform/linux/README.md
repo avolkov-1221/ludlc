@@ -248,5 +248,5 @@ peripheral so that an announcement built by one and read by the other cannot
 drift.
 
 The peripheral in this repository is the Zephyr transport in
-[`../zephyr/ludlc_spi_slave.h`](../zephyr/ludlc_spi_slave.h), which the echo
+[`ludlc_spi_slave.h`](../../../include/ludlc_spi_slave.h), which the echo
 sample runs on a Nucleo G0B1RE. Its board overlay documents the wiring.

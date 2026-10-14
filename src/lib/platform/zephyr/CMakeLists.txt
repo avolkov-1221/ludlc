@@ -26,7 +26,6 @@ endif(CONFIG_LUDLC_SERIAL_CONN)
 
 if(CONFIG_LUDLC_SPI_CONN)
 	set(SPI_SRC
-		${CMAKE_CURRENT_SOURCE_DIR}/ludlc_spi_slave.h
 		${CMAKE_CURRENT_SOURCE_DIR}/ludlc_zephyr_spi_slave.c
 	)
 endif(CONFIG_LUDLC_SPI_CONN)

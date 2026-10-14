@@ -13,7 +13,7 @@
  * represents the local end of the link on the LuDLC bus.
  *
  * The wire format - what an exchange looks like and what firmware on the other
- * side has to implement - is written down in ludlc_spi_master.h.
+ * side has to implement - is written down in ludlc_spi_master_drv.h.
  */
 
 #include <linux/delay.h>
@@ -32,7 +32,7 @@
 #include "ludlc_bus.h"
 #include "ludlc_csum.h"
 #include "ludlc_framing.h"
-#include "ludlc_spi_master.h"
+#include "ludlc_spi_master_drv.h"
 
 /*
  * What a peer is given to point its controller at a buffer for the second

@@ -40,7 +40,7 @@
 #include <linux/sysfs.h>
 
 #include "ludlc_bus.h"
-#include "ludlc_spi_master.h"
+#include "ludlc_spi_master_drv.h"
 
 /* The bits this port keeps beyond the ones every port has. */
 #define LUDLC_SPI_CFG_F_TURNAROUND_SET	(LUDLC_CFG_PORT_F_BUS + 0)
