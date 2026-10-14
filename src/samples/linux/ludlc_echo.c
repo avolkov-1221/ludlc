@@ -141,5 +141,6 @@ module_ludlc_driver(ludlc_echo_driver);
 
 MODULE_AUTHOR("Andrey Volkov <andrey@volkov.fr>");
 MODULE_DESCRIPTION("LuDLC echo responder");
+MODULE_VERSION(LUDLC_VERSION_STRING);
 MODULE_LICENSE("GPL");
 MODULE_SOFTDEP("pre: ludlc_core");

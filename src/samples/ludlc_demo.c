@@ -668,6 +668,8 @@ static int usage(const char *prog, FILE *out)
 	}
 
 	fprintf(out,
+		"LuDLC " LUDLC_VERSION_STRING "\n"
+		"\n"
 		"Usage: %s [options] <serial-port>\n"
 		"\n"
 		"Options:\n"

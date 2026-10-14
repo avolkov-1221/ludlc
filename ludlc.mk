@@ -55,6 +55,9 @@ CONFIG_LUDLC_FRAMING_RAW  ?= 1
 # the kernel has a heap to take them from instead.
 CONFIG_LUDLC_STATIC_FRAMING_NUM ?= 0
 
+# The core's file list and the version, shared by every make-based build.
+include $(LUDLC_SRC)/src/lib/ludlc-core.mk
+
 LUDLC_CCFLAGS :=							\
 	-I$(LUDLC_SRC)/src/include					\
 	-I$(LUDLC_SRC)/src/lib/include					\
@@ -67,4 +70,5 @@ LUDLC_CCFLAGS :=							\
 	-DCONFIG_LUDLC_FRAMING_HDLC=$(CONFIG_LUDLC_FRAMING_HDLC)	\
 	-DCONFIG_LUDLC_FRAMING_COBS=$(CONFIG_LUDLC_FRAMING_COBS)	\
 	-DCONFIG_LUDLC_FRAMING_RAW=$(CONFIG_LUDLC_FRAMING_RAW)		\
-	-DCONFIG_LUDLC_STATIC_FRAMING_NUM=$(CONFIG_LUDLC_STATIC_FRAMING_NUM)
+	-DCONFIG_LUDLC_STATIC_FRAMING_NUM=$(CONFIG_LUDLC_STATIC_FRAMING_NUM) \
+	$(LUDLC_VERSION_CFLAGS)

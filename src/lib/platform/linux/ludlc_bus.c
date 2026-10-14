@@ -1705,4 +1705,5 @@ module_exit(ludlc_core_exit);
 
 MODULE_AUTHOR("Andrey Volkov <andrey@volkov.fr>");
 MODULE_DESCRIPTION("LuDLC Linux core glue and software bus");
+MODULE_VERSION(LUDLC_VERSION_STRING);
 MODULE_LICENSE("GPL");

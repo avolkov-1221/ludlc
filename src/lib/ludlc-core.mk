@@ -18,7 +18,33 @@
 #
 # LUDLC_CORE_SRCS then holds the paths to compile and LUDLC_CORE_NAMES the
 # bare file names, which Kbuild needs to name its objects. Neither lists
-# anything from platform/: a port declares its own files.
+# anything from platform/: a port declares its own files. LUDLC_VERSION and
+# LUDLC_VERSION_STRING hold the version of the tree, the latter with its
+# suffix, and LUDLC_VERSION_CFLAGS passes the string to the code as the
+# definition of the same name.
+
+# This directory, for an includer that did not name it.
+LUDLC_LIB_DIR ?= $(patsubst %/,%,$(dir $(lastword $(MAKEFILE_LIST))))
+
+# The version, from the VERSION file at the top of the tree. Read with sed
+# rather than included: the file is make syntax, but its names are those of
+# the kernel's own Makefile, which a Kbuild include must not disturb. The
+# suffix, EXTRAVERSION, is spelled as Zephyr spells it, rc1, and goes after
+# a dash: 1.0.0-rc1.
+LUDLC_VERSION_FILE := $(LUDLC_LIB_DIR)/../../VERSION
+ludlc-version-field = $(strip $(shell \
+	sed -n 's/^$(1)[[:space:]]*=[[:space:]]*//p' $(LUDLC_VERSION_FILE)))
+
+LUDLC_VERSION_MAJOR := $(call ludlc-version-field,VERSION_MAJOR)
+LUDLC_VERSION_MINOR := $(call ludlc-version-field,VERSION_MINOR)
+LUDLC_PATCHLEVEL := $(call ludlc-version-field,PATCHLEVEL)
+LUDLC_EXTRAVERSION := $(call ludlc-version-field,EXTRAVERSION)
+
+LUDLC_VERSION := \
+	$(LUDLC_VERSION_MAJOR).$(LUDLC_VERSION_MINOR).$(LUDLC_PATCHLEVEL)
+LUDLC_VERSION_STRING := \
+	$(LUDLC_VERSION)$(if $(LUDLC_EXTRAVERSION),-$(LUDLC_EXTRAVERSION))
+LUDLC_VERSION_CFLAGS := -DLUDLC_VERSION_STRING=\"$(LUDLC_VERSION_STRING)\"
 
 # The protocol, and whichever framings the port asked for.
 LUDLC_CORE_NAMES := ludlc.c

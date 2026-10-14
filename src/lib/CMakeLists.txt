@@ -96,10 +96,13 @@ if(LUDLC_BUILD_LIBRARY)
   endif(LUDLC_STATIC_LIBRARY)
 
   if(LUDLC_SHARED_LIBRARY)
+    # The shared library takes the plain name; a static one built beside it
+    # is ludlc_static.
+    set(ludlc_lib ${ludlc_target})
     set(CMAKE_LIBRARY_PATH ${CMAKE_CURRENT_BINARY_DIR})
     add_library(${ludlc_lib} SHARED ${LUDLC_SRC})
     set_target_properties(${ludlc_lib} PROPERTIES VERSION
-        ${CMAKE_PROJECT_VERSION} SOVERSION 1)
+        ${LUDLC_VERSION} SOVERSION 1)
     target_link_libraries(${ludlc_lib} PUBLIC ${libs})
   endif(LUDLC_SHARED_LIBRARY)
 

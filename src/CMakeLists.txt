@@ -25,8 +25,14 @@ if(LUDLC_BUILD_LIBRARY)
   target_include_directories(ludlc_includes INTERFACE
     ${LUDLC_INCLUDE}
   )
+
+  # The version, suffix included, for the library and its users to print.
+  target_compile_definitions(ludlc_includes INTERFACE
+    LUDLC_VERSION_STRING="${LUDLC_VERSION_STRING}")
 elseif(TARGET_PLATFORM_ZEPHYR)
   zephyr_include_directories(${LUDLC_INCLUDE})
+  zephyr_compile_definitions(
+    LUDLC_VERSION_STRING="${LUDLC_VERSION_STRING}")
 endif()
 
 add_subdirectory(lib)

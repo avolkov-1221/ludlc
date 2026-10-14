@@ -28,11 +28,13 @@ set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 #
 # It reads the specified file line by line, skips comments,
 # and sets a variable in the parent scope for each "KEY = VALUE"
-# pair it finds.
+# pair it finds, named PREFIX followed by KEY.
 #
 # @param FILE_PATH The path to the version file.
+# @param PREFIX What the variables are named with, to keep them apart
+# from those of another project that reads a file of the same layout.
 #--------------------------------------------------------------------
-function(parse_version_file FILE_PATH)
+function(parse_version_file FILE_PATH PREFIX)
   if(NOT EXISTS ${FILE_PATH})
     message(FATAL_ERROR "Version file not found: ${FILE_PATH}")
     return()
@@ -43,7 +45,7 @@ function(parse_version_file FILE_PATH)
   foreach(LINE ${VERSION_LINES})
 
     # Skip empty lines or comments
-    if(line MATCHES "^[ \t]*#" OR line STREQUAL "")
+    if(LINE MATCHES "^[ \t]*#" OR LINE STREQUAL "")
       continue()
     endif()
 
@@ -60,7 +62,7 @@ function(parse_version_file FILE_PATH)
 
     string(STRIP "${VALUE}" VALUE)
 
-    set(${KEY} "${VALUE}" PARENT_SCOPE)
+    set(${PREFIX}${KEY} "${VALUE}" PARENT_SCOPE)
   endforeach()
 endfunction()
 #--------------------------------------------------------------------
@@ -109,27 +111,32 @@ endif()
 message(STATUS "The selected platform is '${TARGET_PLATFORM}' "
   "(${LUDLC_PLATFORM_DIR})")
 
+# The version, from the VERSION file. LUDLC_VERSION is the three numbers,
+# which is all project() and a shared library take. LUDLC_VERSION_STRING adds
+# EXTRAVERSION, the suffix of a candidate or a development build, after a
+# dash, as Zephyr spells it: 1.0.0-rc1. The code gets the string as the
+# LUDLC_VERSION_STRING definition. Everything here is prefixed: Zephyr reads
+# a file of the same layout into the bare names, and VERSION_FILE names the
+# file it reads.
+set(LUDLC_VERSION_FILE "${CMAKE_CURRENT_SOURCE_DIR}/VERSION")
+parse_version_file(${LUDLC_VERSION_FILE} LUDLC_)
+
+if(NOT DEFINED LUDLC_VERSION_MAJOR OR NOT DEFINED LUDLC_VERSION_MINOR OR
+  NOT DEFINED LUDLC_PATCHLEVEL)
+  message(FATAL_ERROR "VERSION_MAJOR, VERSION_MINOR, or "
+    "PATCHLEVEL not found in ${LUDLC_VERSION_FILE}")
+endif()
+
+set(LUDLC_VERSION
+  "${LUDLC_VERSION_MAJOR}.${LUDLC_VERSION_MINOR}.${LUDLC_PATCHLEVEL}")
+set(LUDLC_VERSION_STRING "${LUDLC_VERSION}")
+if(DEFINED LUDLC_EXTRAVERSION AND NOT LUDLC_EXTRAVERSION STREQUAL "")
+  string(APPEND LUDLC_VERSION_STRING "-${LUDLC_EXTRAVERSION}")
+endif()
+message(STATUS "LuDLC ${LUDLC_VERSION_STRING}")
+
 if(NOT TARGET_PLATFORM STREQUAL "zephyr")
-  set(VERSION_FILE "${CMAKE_CURRENT_SOURCE_DIR}/VERSION")
-  # Call the parser. This will create variables like
-  #    VERSION_MAJOR, VERSION_MINOR, etc. in this scope.
-  parse_version_file(${VERSION_FILE})
-
-  # Check that the required variables were loaded
-  if(NOT DEFINED VERSION_MAJOR OR NOT DEFINED VERSION_MINOR OR
-    NOT DEFINED PATCHLEVEL)
-    message(FATAL_ERROR "VERSION_MAJOR, VERSION_MINOR, or "
-      "PATCHLEVEL not found in ${VERSION_FILE}")
-  endif()
-
-  set(PROJECT_VERSION "${VERSION_MAJOR}.${VERSION_MINOR}.${PATCHLEVEL}")
-
-  # Optionally add the extra version info if it's defined and not empty
-  if(DEFINED EXTRAVERSION AND NOT EXTRAVERSION STREQUAL "")
-    set(PROJECT_VERSION "${PROJECT_VERSION}${EXTRAVERSION}")
-  endif()
-
-  project(${project_name} VERSION ${PROJECT_VERSION} LANGUAGES C)
+  project(${project_name} VERSION ${LUDLC_VERSION} LANGUAGES C)
 endif()
 
 if(TARGET_PLATFORM STREQUAL "posix")
@@ -139,7 +146,7 @@ if(TARGET_PLATFORM STREQUAL "posix")
 
 elseif(TARGET_PLATFORM STREQUAL "zephyr")
   find_package(Zephyr REQUIRED HINTS $ENV{ZEPHYR_BASE})
-  project(${project_name})
+  project(${project_name} VERSION ${LUDLC_VERSION})
 
   set(WITH_ZEPHYR 1)
   set(TARGET_PLATFORM_ZEPHYR 1)

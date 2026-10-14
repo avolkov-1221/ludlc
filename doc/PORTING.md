@@ -79,7 +79,9 @@ CFLAGS += $(LUDLC_INCLUDES)
 ```
 
 `LUDLC_SRCS` is the core plus the port, and `LUDLC_INCLUDES` the three include
-paths, the port's own first.
+paths, the port's own first. `LUDLC_VERSION_STRING` is the version of the
+checkout, suffix included, and `LUDLC_VERSION_CFLAGS` passes it to the code as
+a definition of the same name, for a port that wants to print it.
 
 A port kept in another project compiles the core where the checkout is. Build
 the port's sources as the project builds its own, and give the core sources an

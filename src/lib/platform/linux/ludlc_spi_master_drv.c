@@ -1005,4 +1005,5 @@ module_exit(ludlc_spi_exit);
 
 MODULE_AUTHOR("Andrey Volkov <andrey@volkov.fr>");
 MODULE_DESCRIPTION("LuDLC SPI master transport");
+MODULE_VERSION(LUDLC_VERSION_STRING);
 MODULE_LICENSE("GPL");
