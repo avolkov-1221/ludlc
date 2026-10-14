@@ -775,13 +775,15 @@ void ludlc_serial_connection_destroy(struct ludlc_connection *conn)
  * @param[out] conn On success, this pointer is updated to point to the
  * new core `ludlc_connection`.
  * @param cb User-facing event callbacks.
+ * @param user_arg User data passed to the event callbacks as is.
  * @return 0 on success.
  * @return -ENOMEM on allocation failure.
  * @return -errno on system call failures (pipe, open, pthread_create).
  */
 int ludlc_serial_connection_create(const ludlc_platform_args_t *args,
 		struct ludlc_connection **conn,
-		const struct ludlc_conn_cb *cb)
+		const struct ludlc_conn_cb *cb,
+		void *user_arg)
 {
 	struct ludlc_serial_connection *sconn = NULL;
 	struct ludlc_conn_cfg cfg;
@@ -832,7 +834,7 @@ int ludlc_serial_connection_create(const ludlc_platform_args_t *args,
 
 	LUDLC_RING_BUF_INIT(&sconn->tx_fifo, sconn->tx_buf, LUDLC_TX_FIFO_SIZE);
 
-	ret = ludlc_connection_init(&sconn->conn, &cfg, cb, sconn);
+	ret = ludlc_connection_init(&sconn->conn, &cfg, cb, user_arg);
 	if (ret) {
 		LUDLC_LOG_ERROR("Can't open a link of %u payload octets: %d",
 				(unsigned int)ludlc_cfg_max_payload(&cfg),

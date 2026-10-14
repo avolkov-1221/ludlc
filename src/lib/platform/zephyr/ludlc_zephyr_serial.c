@@ -602,11 +602,13 @@ void ludlc_serial_connection_destroy(struct ludlc_connection *conn)
  * open the link with.
  * @param conn Output pointer to the newly created core `ludlc_connection`.
  * @param cb Callback structure for the LuDLC connection.
+ * @param user_arg User data passed to the event callbacks as is.
  * @return 0 on success, or a negative errno value on failure.
  */
 int ludlc_serial_connection_create(const ludlc_platform_args_t *arg,
 		   struct ludlc_connection **conn,
-		   const struct ludlc_conn_cb *cb)
+		   const struct ludlc_conn_cb *cb,
+		   void *user_arg)
 {
 	struct ludlc_serial_connection *sconn = NULL;
 	struct rx_packet_item *rx_buf = NULL;
@@ -690,7 +692,7 @@ int ludlc_serial_connection_create(const ludlc_platform_args_t *arg,
 		goto err;
 	}
 
-	ret = ludlc_connection_init(&sconn->conn, &cfg, cb, &sconn->conn);
+	ret = ludlc_connection_init(&sconn->conn, &cfg, cb, user_arg);
 	if (ret) {
 		LUDLC_LOG_ERROR("Can't open a link of %u payload octets: %d",
 				(unsigned int)ludlc_cfg_max_payload(&cfg), ret);

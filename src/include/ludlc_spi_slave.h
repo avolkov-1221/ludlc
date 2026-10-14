@@ -54,11 +54,13 @@
  * devicetree.
  * @param conn Where the new connection goes. Set to NULL on failure.
  * @param cb Callbacks the link reports to. Must outlive the connection.
+ * @param user_arg User data passed to the event callbacks as is.
  * @return 0, or a negative errno.
  */
 int ludlc_spi_slave_connection_create(const ludlc_platform_args_t *args,
 				      struct ludlc_connection **conn,
-				      const struct ludlc_conn_cb *cb);
+				      const struct ludlc_conn_cb *cb,
+				      void *user_arg);
 
 /**
  * @brief Take a LuDLC SPI link down and free what it held.

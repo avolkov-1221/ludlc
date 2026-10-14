@@ -127,7 +127,7 @@ static inline int ludlc_spi_link_up(struct device *dev,
 	if (ludlc_spi_get_conn(dev))
 		return -EBUSY;
 
-	return ludlc_spi_master_connection_create(args, conn, NULL);
+	return ludlc_spi_master_connection_create(args, conn, NULL, NULL);
 }
 
 static inline void ludlc_spi_link_down(struct device *dev)

@@ -486,7 +486,8 @@ void ludlc_spi_slave_connection_destroy(struct ludlc_connection *conn)
 
 int ludlc_spi_slave_connection_create(const ludlc_platform_args_t *args,
 				      struct ludlc_connection **conn,
-				      const struct ludlc_conn_cb *cb)
+				      const struct ludlc_conn_cb *cb,
+				      void *user_arg)
 {
 	struct ludlc_spi_connection *sconn = NULL;
 	struct ludlc_conn_cfg cfg;
@@ -559,7 +560,7 @@ int ludlc_spi_slave_connection_create(const ludlc_platform_args_t *args,
 		}
 	}
 
-	ret = ludlc_connection_init(&sconn->conn, &cfg, cb, &sconn->conn);
+	ret = ludlc_connection_init(&sconn->conn, &cfg, cb, user_arg);
 	if (ret) {
 		LUDLC_LOG_ERROR("Can't open a link of %u payload octets: %d",
 				(unsigned int)ludlc_cfg_max_payload(&cfg), ret);

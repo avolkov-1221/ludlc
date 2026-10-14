@@ -18,7 +18,7 @@
  * static const ludlc_platform_args_t args =
  * 	LUDLC_UART_ARGS_DT(DT_NODELABEL(coproc_link));
  *
- * ret = ludlc_serial_connection_create(&args, &conn, &callbacks);
+ * ret = ludlc_serial_connection_create(&args, &conn, &callbacks, NULL);
  * @endcode
  *
  * A property the node leaves out takes the default of its binding, and a

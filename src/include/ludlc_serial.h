@@ -25,13 +25,14 @@
  * @param[out] conn A pointer to a `struct ludlc_connection*` that will be
  * updated to point to the newly created connection.
  * @param cb Pointer to the user-facing event callbacks.
+ * @param user_arg User data transfered to the event callback as is.
  * @return 0 on success, or a negative error code on failure.
  */
 int ludlc_serial_connection_create(
 		const ludlc_platform_args_t *args,
 		struct ludlc_connection **conn,
-		const struct ludlc_conn_cb *cb
-		);
+		const struct ludlc_conn_cb *cb,
+		void *user_arg);
 
 /**
  * @brief Fill @p args with what this port opens a serial link with.

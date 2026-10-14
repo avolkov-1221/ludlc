@@ -28,11 +28,13 @@
  * @param cb Pointer to the user-facing event callbacks. Must be NULL on
  * Linux: there the events belong to the bus, which passes them to the driver
  * bound to the channel they concern.
+ * @param user_arg User data passed to the event callbacks as is.
  * @return 0, or a negative errno with nothing left open.
  */
 int ludlc_spi_master_connection_create(const ludlc_platform_args_t *args,
 				       struct ludlc_connection **conn,
-				       const struct ludlc_conn_cb *cb);
+				       const struct ludlc_conn_cb *cb,
+				       void *user_arg);
 
 /**
  * @brief Take the link down and free it.

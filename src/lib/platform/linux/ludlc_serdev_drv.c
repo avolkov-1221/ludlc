@@ -324,12 +324,15 @@ EXPORT_SYMBOL_GPL(ludlc_serial_connection_destroy);
  * @param[out] conn The link, on success.
  * @param cb Must be NULL: on Linux the events belong to the bus, which passes
  * them to the driver bound to the channel they concern.
+ * @param user_arg Passed to the event callbacks as is. They are the bus's
+ * here, and do not use it.
  * @return 0, or a negative errno with nothing left open.
  */
 int ludlc_serial_connection_create(
 		   const ludlc_platform_args_t *args,
 		   struct ludlc_connection **conn,
-		   const struct ludlc_conn_cb *cb)
+		   const struct ludlc_conn_cb *cb,
+		   void *user_arg)
 {
 	struct ludlc_serial_connection *lsc;
 	const struct ludlc_csum *csum;
@@ -375,7 +378,7 @@ int ludlc_serial_connection_create(
 	cfg = *ludlc_args_conn_cfg(args);
 
 	ret = ludlc_connection_init(&lsc->conn, &cfg,
-				    &ludlc_bus_conn_cb, lsc);
+				    &ludlc_bus_conn_cb, user_arg);
 	if (ret) {
 		dev_err(&args->serdev.dev->dev,
 			"cannot open a link of %u payload octets: %d\n",

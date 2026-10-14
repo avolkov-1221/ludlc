@@ -116,7 +116,7 @@ static inline int ludlc_serdev_link_up(struct device *dev,
 	if (ludlc_serdev_get_conn(dev))
 		return -EBUSY;
 
-	return ludlc_serial_connection_create(args, conn, NULL);
+	return ludlc_serial_connection_create(args, conn, NULL, NULL);
 }
 
 static inline void ludlc_serdev_link_down(struct device *dev)

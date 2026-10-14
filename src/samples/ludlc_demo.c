@@ -1142,7 +1142,8 @@ int main (int argc, char **argv)
 		}
 		ui_logf("creating connection...");
 
-		ret = ludlc_serial_connection_create(&ser_args, &conn, &cb);
+		ret = ludlc_serial_connection_create(&ser_args, &conn, &cb,
+						     NULL);
 		if ( !ret ) {
 			/* Run interactive menu until user exits or Ctrl+C. */
 			(void)menu_handler(conn);

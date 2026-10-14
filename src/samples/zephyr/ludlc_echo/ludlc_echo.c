@@ -218,7 +218,8 @@ static int echo_link_up(struct ludlc_connection **conn)
 		arg.spi.data_ready.port ? arg.spi.data_ready.port->name
 					: "none, the controller polls");
 
-	return ludlc_spi_slave_connection_create(&arg, conn, &demo_callbacks);
+	return ludlc_spi_slave_connection_create(&arg, conn, &demo_callbacks,
+						 NULL);
 }
 #else
 
@@ -235,7 +236,8 @@ static int echo_link_up(struct ludlc_connection **conn)
 
 	LOG_INF("Using UART device: %s", arg.dev->name);
 
-	return ludlc_serial_connection_create(&arg, conn, &demo_callbacks);
+	return ludlc_serial_connection_create(&arg, conn, &demo_callbacks,
+					      NULL);
 }
 #endif /* CONFIG_LUDLC_ECHO_SPI */
 
