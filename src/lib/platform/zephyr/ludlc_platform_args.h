@@ -66,6 +66,31 @@ typedef struct ludlc_platform_args {
 	 */
 	struct ludlc_conn_cfg cfg;
 
+	/**
+	 * @brief The threads the transport runs for the link.
+	 *
+	 * Zephyr priorities, as k_thread_create() takes them: a negative one
+	 * is cooperative. LUDLC_UART_ARGS_DT() and
+	 * LUDLC_SPI_PERIPHERAL_ARGS_DT() take them from the node, with the
+	 * defaults of its binding for what it leaves out, and the default
+	 * arguments of a transport carry its own defaults. These threads move
+	 * the frames the application waits for, so they belong above the
+	 * threads that produce the traffic.
+	 */
+	struct {
+		/**
+		 * @brief The thread that receives on a serial link, and the
+		 * only thread of a link on SPI.
+		 */
+		int8_t rx_prio;
+		/**
+		 * @brief The thread that transmits on a serial link, and the
+		 * only thread of one built with
+		 * CONFIG_LUDLC_SERIAL_SINGLE_THREAD.
+		 */
+		int8_t tx_prio;
+	} thread;
+
 #if defined(CONFIG_LUDLC_SPI_CONN)
 	/** @brief Settings used only by a link over SPI. */
 	struct {

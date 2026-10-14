@@ -183,6 +183,12 @@ extern const struct ludlc_framing ludlc_framing_raw;
 		.csum = LUDLC_DT_CSUM(node_id),				\
 		.framing = LUDLC_DT_FRAMING(node_id),			\
 		.cfg = LUDLC_DT_CONN_CFG(node_id),			\
+		.thread = {						\
+			.rx_prio = DT_PROP(node_id,			\
+					   ludlc_rx_thread_priority),	\
+			.tx_prio = DT_PROP(node_id,			\
+					   ludlc_tx_thread_priority),	\
+		},							\
 	}
 
 #if defined(CONFIG_LUDLC_SPI_CONN)
@@ -197,7 +203,8 @@ extern const struct ludlc_framing ludlc_framing_raw;
  *
  * For ludlc_spi_slave_connection_create(). The SPI controller is the node's
  * parent, its chip select the node's reg, and the data-ready line the node's
- * data-ready-gpios, none if it has no such line.
+ * data-ready-gpios, none if it has no such line. The link runs one thread,
+ * at the node's ludlc,thread-priority.
  */
 #define LUDLC_SPI_PERIPHERAL_ARGS_DT(node_id)				\
 	{								\
@@ -205,6 +212,10 @@ extern const struct ludlc_framing ludlc_framing_raw;
 		.csum = LUDLC_DT_CSUM(node_id),				\
 		.framing = LUDLC_DT_FRAMING(node_id),			\
 		.cfg = LUDLC_DT_CONN_CFG(node_id),			\
+		.thread = {						\
+			.rx_prio = DT_PROP(node_id, ludlc_thread_priority), \
+			.tx_prio = DT_PROP(node_id, ludlc_thread_priority), \
+		},							\
 		.spi = {						\
 			.slave = DT_REG_ADDR(node_id),			\
 			.mode = LUDLC_DT_SPI_MODE(node_id),		\

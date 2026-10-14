@@ -44,6 +44,10 @@ DT_FOREACH_STATUS_OKAY(ludlc_uart, LUDLC_DT_CHECK)
 #define TX_THREAD_STACK_SIZE 512
 #endif
 
+/*
+ * The priorities of arguments not built from a devicetree node: the defaults
+ * of ludlc,uart.yaml.
+ */
 #define RX_THREAD_PRIO 7
 #define TX_THREAD_PRIO 7
 
@@ -712,7 +716,7 @@ int ludlc_serial_connection_create(const ludlc_platform_args_t *arg,
 			K_KERNEL_STACK_SIZEOF(sconn->rx_thread_stack),
 			ludlc_serial_rx_thread,
 			sconn, NULL, NULL,
-			RX_THREAD_PRIO, 0, K_NO_WAIT);
+			arg->thread.rx_prio, 0, K_NO_WAIT);
 	if (!sconn->rx_thread) {
 		ret = -EFAULT;
 		goto err;
@@ -726,7 +730,7 @@ int ludlc_serial_connection_create(const ludlc_platform_args_t *arg,
 			K_KERNEL_STACK_SIZEOF(sconn->tx_thread_stack),
 			ludlc_serial_tx_thread,
 			sconn, NULL, NULL,
-			TX_THREAD_PRIO, 0, K_NO_WAIT);
+			arg->thread.tx_prio, 0, K_NO_WAIT);
 	if (!sconn->tx_thread) {
 		ret = -EFAULT;
 		goto err;
@@ -775,6 +779,10 @@ void ludlc_default_serial_platform_args(ludlc_platform_args_t *args)
 	static const ludlc_platform_args_t def_args = {
 		.dev = DEVICE_DT_GET_OR_NULL(DT_NODELABEL(uart0)),
 		.csum = &ludlc_crc16_ccitt_pr0,
+		.thread = {
+			.rx_prio = RX_THREAD_PRIO,
+			.tx_prio = TX_THREAD_PRIO,
+		},
 	};
 #endif
 

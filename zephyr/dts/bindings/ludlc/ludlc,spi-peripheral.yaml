@@ -67,3 +67,12 @@ properties:
       The line this end raises to ask the peer for an exchange, which only
       the peer can start. Without it the peer polls, and a frame this end has
       ready waits for the next poll.
+
+  ludlc,thread-priority:
+    type: int
+    default: 7
+    description: |
+      The Zephyr priority of the thread that runs the exchanges of this
+      link, negative for a cooperative one. It moves every frame of the
+      link, so it belongs above the threads that produce or consume the
+      traffic.

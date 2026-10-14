@@ -51,3 +51,22 @@ properties:
       How a frame is delimited on the wire. Both ends must agree. A UART does
       not mark where a frame ends, so the framing has to, and raw cannot be
       used here.
+
+  ludlc,rx-thread-priority:
+    type: int
+    default: 7
+    description: |
+      The Zephyr priority of the thread that receives on this link, negative
+      for a cooperative one. The thread has to run before the receive
+      buffers fill up, CONFIG_LUDLC_NUM_RX_BUFFERS frames, so it belongs
+      above the threads that produce or consume the traffic. With
+      CONFIG_LUDLC_SERIAL_SINGLE_THREAD the link has no receive thread and
+      this is not used.
+
+  ludlc,tx-thread-priority:
+    type: int
+    default: 7
+    description: |
+      The Zephyr priority of the thread that transmits on this link, or of
+      its only thread with CONFIG_LUDLC_SERIAL_SINGLE_THREAD. Negative for a
+      cooperative one.

@@ -20,8 +20,9 @@
  * and typically spawns the TX and RX threads for a serial transport.
  *
  * @param args Platform arguments: the port, its line settings, the
- * @ref ludlc_csum to run or NULL for none, and the @ref ludlc_conn_cfg to
- * open the link with, clock included.
+ * @ref ludlc_csum to run or NULL for none, the @ref ludlc_conn_cfg to
+ * open the link with, clock included, and, on Zephyr, the priorities of the
+ * link's threads.
  * @param[out] conn A pointer to a `struct ludlc_connection*` that will be
  * updated to point to the newly created connection.
  * @param cb Pointer to the user-facing event callbacks.

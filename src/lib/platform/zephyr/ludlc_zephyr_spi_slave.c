@@ -49,6 +49,10 @@ DT_FOREACH_STATUS_OKAY(ludlc_spi_peripheral, LUDLC_DT_CHECK)
  * link may carry is @c max_payload on the connection, not this stack.
  */
 #define XFER_THREAD_STACK_SIZE	1536
+/*
+ * The priority of arguments not built from a devicetree node: the default of
+ * ludlc,spi-peripheral.yaml.
+ */
 #define XFER_THREAD_PRIO	7
 
 /** @brief How long the shutdown waits for the DISCONNECT to go out, in ms. */
@@ -601,7 +605,7 @@ int ludlc_spi_slave_connection_create(const ludlc_platform_args_t *args,
 			sconn->xfer_thread_stack,
 			sizeof(sconn->xfer_thread_stack),
 			ludlc_spi_xfer_thread, sconn, NULL, NULL,
-			XFER_THREAD_PRIO, 0, K_NO_WAIT);
+			args->thread.rx_prio, 0, K_NO_WAIT);
 	if (!sconn->xfer_thread) {
 		ret = -EFAULT;
 		goto err_destroy;
@@ -648,6 +652,10 @@ void ludlc_default_spi_slave_platform_args(ludlc_platform_args_t *args)
 	static const ludlc_platform_args_t def_args = {
 		.dev = DEVICE_DT_GET_OR_NULL(DT_NODELABEL(spi1)),
 		.csum = &ludlc_crc16_ccitt_pr0,
+		.thread = {
+			.rx_prio = XFER_THREAD_PRIO,
+			.tx_prio = XFER_THREAD_PRIO,
+		},
 	};
 #endif
 
