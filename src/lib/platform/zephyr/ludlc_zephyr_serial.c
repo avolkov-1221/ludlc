@@ -571,6 +571,30 @@ static void ludlc_serial_async_cb(const struct device *dev,
 #endif /* CONFIG_UART_ASYNC_API */
 
 /**
+ * @brief Whether the caller is the RX or the TX thread of @p conn.
+ *
+ * What ludlc_in_callback() asks the transport. Compared with the thread
+ * objects, which exist before the threads run. One thread does both
+ * directions with CONFIG_LUDLC_SERIAL_SINGLE_THREAD.
+ *
+ * @param conn The connection.
+ * @return true on one of the link's threads.
+ */
+static bool ludlc_serial_in_callback(struct ludlc_connection *conn)
+{
+	struct ludlc_serial_connection *sconn =
+		CONTAINER_OF(conn, struct ludlc_serial_connection, conn);
+	k_tid_t self = k_current_get();
+
+#ifndef CONFIG_LUDLC_SERIAL_SINGLE_THREAD
+	if (self == &sconn->rx_thread_data) {
+		return true;
+	}
+#endif
+	return self == &sconn->tx_thread_data;
+}
+
+/**
  * @brief TX serial thread entry point.
  *
  * Pumps the framing encoder into the TX ring and starts the UART transmitter.
@@ -856,6 +880,9 @@ int ludlc_serial_connection_create(const ludlc_platform_args_t *arg,
 	 */
 	ludlc_dec_prep(sconn->fs, sconn->csum, rx_buf->payload,
 			ludlc_conn_frame_sz(&sconn->conn, sconn->csum));
+
+	/* Set before the threads run, so each knows itself from its start. */
+	sconn->conn.pconn.in_callback = ludlc_serial_in_callback;
 
 #ifndef CONFIG_LUDLC_SERIAL_SINGLE_THREAD
 	sconn->rx_thread = k_thread_create(&sconn->rx_thread_data,

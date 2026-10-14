@@ -1430,6 +1430,24 @@ void ludlc_platform_conn_timeout(struct ludlc_connection *conn)
 		schedule_work(&conn->pconn.timeout_work);
 }
 
+/*
+ * The caller is in the work that ends a session the watchdog gave up on,
+ * which the receiving thread does on the other platforms, or in a context
+ * the transport runs the link in, which the transport knows. Never an
+ * interrupt.
+ */
+bool ludlc_in_callback(struct ludlc_connection *conn)
+{
+	if (!conn || !in_task())
+		return false;
+
+	if (current_work() == &conn->pconn.timeout_work)
+		return true;
+
+	return conn->pconn.in_callback && conn->pconn.in_callback(conn);
+}
+EXPORT_SYMBOL_GPL(ludlc_in_callback);
+
 #if CONFIG_LUDLC_STATS
 /**
  * @brief The link an attribute reports on.
@@ -1594,6 +1612,7 @@ int ludlc_platform_conn_init(struct ludlc_connection *conn)
 
 	conn->pconn.flags = 0;
 	conn->pconn.start_tx = NULL;
+	conn->pconn.in_callback = NULL;
 	conn->pconn.dev = NULL;
 	conn->pconn.stats = NULL;
 
@@ -1614,6 +1633,7 @@ void ludlc_platform_conn_destroy(struct ludlc_connection *conn)
 		return;
 
 	conn->pconn.start_tx = NULL;
+	conn->pconn.in_callback = NULL;
 
 	/*
 	 * The timers are shut down by now, so nothing queues this again. It

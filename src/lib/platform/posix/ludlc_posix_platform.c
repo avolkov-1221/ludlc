@@ -268,6 +268,12 @@ void ludlc_platform_conn_timeout(struct ludlc_connection *conn)
 	}
 }
 
+/* The transport knows its threads: ask it. */
+bool ludlc_in_callback(struct ludlc_connection *conn)
+{
+	return conn && conn->pconn.in_callback && conn->pconn.in_callback(conn);
+}
+
 void ludlc_platform_conn_destroy(struct ludlc_connection *conn)
 {
 	if (conn->pconn.tx_pipe[0] >= 0) {

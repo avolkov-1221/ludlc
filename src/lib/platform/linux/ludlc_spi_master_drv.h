@@ -62,6 +62,11 @@ struct ludlc_spi_connection {
 
 	struct mutex xfer_lock;
 	struct delayed_work xfer_work;
+	/**
+	 * @brief The thread of the data-ready handler, which runs exchanges
+	 * too, noted when it first runs. For ludlc_in_callback().
+	 */
+	struct task_struct *irq_task;
 
 	int irq;
 	u32 turnaround_us;

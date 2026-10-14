@@ -118,6 +118,23 @@ static void ludlc_spi_schedule_xfer(struct ludlc_connection *conn)
 		mod_delayed_work(system_wq, &lsc->xfer_work, 0);
 }
 
+/**
+ * @brief Whether the caller is in a context this link runs in.
+ *
+ * What ludlc_in_callback() asks the transport: the exchange work, or the
+ * thread of the data-ready handler once it has run.
+ */
+static bool ludlc_spi_in_callback(struct ludlc_connection *conn)
+{
+	struct ludlc_spi_connection *lsc = to_spi_conn(conn);
+	struct work_struct *work = current_work();
+
+	if (work)
+		return work == &lsc->xfer_work.work;
+
+	return current == READ_ONCE(lsc->irq_task);
+}
+
 static void ludlc_spi_on_packet(void *ctx, void *pkt, size_t size)
 {
 	struct ludlc_spi_connection *lsc = ctx;
@@ -372,6 +389,9 @@ static irqreturn_t ludlc_spi_ready_isr(int irq, void *data)
 	if (ludlc_spi_quiesced(lsc))
 		return IRQ_HANDLED;
 
+	/* This thread runs exchanges too; see ludlc_spi_in_callback(). */
+	WRITE_ONCE(lsc->irq_task, current);
+
 	scoped_guard(mutex, &lsc->xfer_lock)
 		more = ludlc_spi_drain(lsc);
 
@@ -569,6 +589,7 @@ int ludlc_spi_master_connection_create(const ludlc_platform_args_t *args,
 	ludlc_dec_prep(lsc->fs, csum, lsc->rx_pkt, 0);
 
 	lsc->conn.pconn.start_tx = ludlc_spi_schedule_xfer;
+	lsc->conn.pconn.in_callback = ludlc_spi_in_callback;
 
 	/* The peripheral represents the local end of the link on the bus. */
 	ret = ludlc_conn_set_device(&lsc->conn, &lsc->spi->dev);

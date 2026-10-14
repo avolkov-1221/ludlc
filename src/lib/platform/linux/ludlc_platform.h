@@ -200,6 +200,15 @@ struct ludlc_platform_connection {
 	void (*start_tx)(struct ludlc_connection *conn);
 
 	/**
+	 * @brief Whether the caller runs in a context of this link's transport.
+	 *
+	 * Set by the transport, which knows the work items and threads it
+	 * runs the link in, when it opens the link. What ludlc_in_callback()
+	 * asks, in task context only.
+	 */
+	bool (*in_callback)(struct ludlc_connection *conn);
+
+	/**
 	 * @brief The device representing the local end of the link.
 	 *
 	 * Borrowed from the transport that registered it: the parent of every

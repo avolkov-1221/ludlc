@@ -151,6 +151,15 @@ struct ludlc_platform_connection {
 	 * end (written by destroy and by the watchdog).
 	 */
 	 int rx_pipe[2];
+
+	/**
+	 * @brief Whether the caller runs on a thread of this link.
+	 *
+	 * Set by the transport, which keeps the handles of its threads and
+	 * compares the caller with them, before it starts them. What
+	 * ludlc_in_callback() asks.
+	 */
+	bool (*in_callback)(struct ludlc_connection *conn);
 };
 
 /**

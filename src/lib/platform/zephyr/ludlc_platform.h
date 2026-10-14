@@ -66,6 +66,15 @@ struct ludlc_platform_connection {
 	 * not needed.
 	 */
 	void (*start_tx)(struct ludlc_connection *conn);
+
+	/**
+	 * @brief Whether the caller runs on a thread of this link.
+	 *
+	 * Set by the transport, which owns the thread objects and compares
+	 * the caller with them, before it starts them. What
+	 * ludlc_in_callback() asks; never from an interrupt.
+	 */
+	bool (*in_callback)(struct ludlc_connection *conn);
 };
 
 /* --- Atomics --- */

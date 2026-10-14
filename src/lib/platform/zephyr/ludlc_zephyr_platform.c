@@ -87,6 +87,13 @@ void ludlc_platform_conn_timeout(struct ludlc_connection *conn)
 	}
 }
 
+/* The transport knows its threads: ask it, unless this is an interrupt. */
+bool ludlc_in_callback(struct ludlc_connection *conn)
+{
+	return conn && !k_is_in_isr() && conn->pconn.in_callback &&
+	       conn->pconn.in_callback(conn);
+}
+
 int ludlc_platform_conn_init(struct ludlc_connection *conn)
 {
 	k_event_init(&conn->pconn.tx_events);

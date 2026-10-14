@@ -432,6 +432,27 @@ ssize_t ludlc_serial_read(struct ludlc_serial_connection *sconn,
 }
 
 /**
+ * @brief Whether the caller is the RX or the TX thread of @p conn.
+ *
+ * What ludlc_in_callback() asks the transport. A thread not started, or
+ * already joined, leaves a stale ID behind: the flags say which IDs count.
+ *
+ * @param conn The connection.
+ * @return true on one of the two threads.
+ */
+static bool ludlc_serial_in_callback(struct ludlc_connection *conn)
+{
+	struct ludlc_serial_connection *sconn =
+		container_of(conn, struct ludlc_serial_connection, conn);
+	pthread_t self = pthread_self();
+
+	return ((sconn->flags & RX_THREAD_OK) &&
+		pthread_equal(self, sconn->rx_thread)) ||
+	       ((sconn->flags & TX_THREAD_OK) &&
+		pthread_equal(self, sconn->tx_thread));
+}
+
+/**
  * @brief Main thread function for the serial receiver (RX).
  *
  * Reads octets from the TTY and feeds them to the framing decoder. Completed
@@ -846,6 +867,9 @@ int ludlc_serial_connection_create(const ludlc_platform_args_t *args,
 	if (ret) {
 		goto err;
 	}
+
+	/* Set before the threads run, so each knows itself from its start. */
+	sconn->conn.pconn.in_callback = ludlc_serial_in_callback;
 
 	ret = pthread_create(&sconn->rx_thread, NULL,
 			ludlc_rx_serial_thread, sconn);

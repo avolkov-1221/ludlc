@@ -320,4 +320,26 @@ int ludlc_send_disconnect(struct ludlc_connection *conn);
  */
 int ludlc_connect(struct ludlc_connection *conn);
 
+/**
+ * @brief Whether the caller runs on a thread of @p conn.
+ *
+ * The callbacks run on the threads of the transport, one per direction or
+ * one doing both. The receiving thread reports what arrives and confirms
+ * what the peer acknowledges; the transmitting one confirms an unnumbered
+ * packet once it is on the wire, and ends the session when the transport
+ * fails. Code that may run there, such as a log hook, must not wait for a
+ * confirmation or for room in the window: the packet it waits for is sent,
+ * acknowledged or released by one of those threads, so the wait would block
+ * what it waits for. The transport, which keeps the handles of its threads,
+ * compares the caller with them; no lock is taken. The calls that end or
+ * restart a session, ludlc_connect(), ludlc_send_disconnect() and destroying
+ * a link, run callbacks on the caller's own thread, which this does not
+ * report.
+ *
+ * @param conn The connection, or NULL.
+ * @return true on a thread of @p conn, false elsewhere, in an interrupt and
+ * for a NULL @p conn.
+ */
+bool ludlc_in_callback(struct ludlc_connection *conn);
+
 #endif /* __LUDLC_H__ */

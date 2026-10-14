@@ -77,6 +77,11 @@ struct ludlc_serial_connection {
 	const struct ludlc_csum *csum;
 
 	struct work_struct tx_work;
+	/**
+	 * @brief The work of the tty layer that receives, noted when it first
+	 * calls in. For ludlc_in_callback().
+	 */
+	struct work_struct *rx_work;
 	DECLARE_KFIFO(tx_fifo, u8, LUDLC_SERDEV_TX_BUF_SZ);
 
 	/** Decoded packet: a packet and its checksum. */

@@ -196,6 +196,21 @@ static void ludlc_serdev_tx_workfn(struct work_struct *work)
 }
 
 /**
+ * @brief Whether the caller is in a context this link runs in.
+ *
+ * What ludlc_in_callback() asks the transport: the TX work, or the work of
+ * the tty layer that receives, once it has called in.
+ */
+static bool ludlc_serdev_in_callback(struct ludlc_connection *conn)
+{
+	struct ludlc_serial_connection *lsc = to_serial_conn(conn);
+	struct work_struct *work = current_work();
+
+	return work && (work == &lsc->tx_work ||
+			work == READ_ONCE(lsc->rx_work));
+}
+
+/**
  * @brief Feed what the tty handed over to the decoder.
  */
 static size_t ludlc_serdev_receive_buf(struct serdev_device *serdev,
@@ -207,6 +222,12 @@ static size_t ludlc_serdev_receive_buf(struct serdev_device *serdev,
 
 	if (READ_ONCE(lsc->conn.conn_state) == LUDLC_STATE_TERMINATE)
 		return count;
+
+	/* The tty layer calls in from a work of its own: note it for
+	 * ludlc_serdev_in_callback().
+	 */
+	if (current_work())
+		WRITE_ONCE(lsc->rx_work, current_work());
 
 	for (i = 0; i < count;) {
 		bool done;
@@ -408,6 +429,7 @@ int ludlc_serial_connection_create(
 		       ludlc_conn_frame_sz(&lsc->conn, csum));
 
 	lsc->conn.pconn.start_tx = ludlc_serdev_schedule_tx;
+	lsc->conn.pconn.in_callback = ludlc_serdev_in_callback;
 
 	/* The port represents the local end of the link on the LuDLC bus. */
 	ret = ludlc_conn_set_device(&lsc->conn, &lsc->serdev->dev);

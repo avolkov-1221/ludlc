@@ -191,6 +191,24 @@ static void ludlc_spi_start_tx(struct ludlc_connection *conn)
 }
 
 /**
+ * @brief Whether the caller is the exchange thread of @p conn.
+ *
+ * What ludlc_in_callback() asks the transport: the one thread runs both
+ * directions. Compared with the thread object, which exists before the
+ * thread runs.
+ *
+ * @param conn The connection.
+ * @return true on the exchange thread.
+ */
+static bool ludlc_spi_in_callback(struct ludlc_connection *conn)
+{
+	struct ludlc_spi_connection *sconn =
+		CONTAINER_OF(conn, struct ludlc_spi_connection, conn);
+
+	return k_current_get() == &sconn->xfer_thread_data;
+}
+
+/**
  * @brief Clock @p len octets each way and wait for the controller to do it.
  *
  * @param sconn The link.
@@ -595,6 +613,9 @@ int ludlc_spi_slave_connection_create(const ludlc_platform_args_t *args,
 
 	/* Set before anything can ask for a TX round, handshake included. */
 	sconn->conn.pconn.start_tx = ludlc_spi_start_tx;
+
+	/* Set before the thread runs: its first exchange may call back. */
+	sconn->conn.pconn.in_callback = ludlc_spi_in_callback;
 
 	/*
 	 * Started last, once everything it touches is in place: it goes onto
