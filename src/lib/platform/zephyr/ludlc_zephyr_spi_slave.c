@@ -545,9 +545,9 @@ int ludlc_spi_slave_connection_create(const ludlc_platform_args_t *args,
 	 * controller uses unless its devicetree overrides it. The format does
 	 * not depend on the choice, but both ends must make the same one.
 	 */
-	sconn->cfg.operation = SPI_OP_MODE_SLAVE | SPI_WORD_SET(8) |
+	sconn->cfg.operation = SPI_OP_MODE_PERIPHERAL | SPI_WORD_SET(8) |
 			       args->spi.mode;
-	sconn->cfg.slave = args->spi.slave;
+	sconn->cfg.peripheral = args->spi.slave;
 
 	if (sconn->data_ready.port) {
 		ret = gpio_pin_configure_dt(&sconn->data_ready,

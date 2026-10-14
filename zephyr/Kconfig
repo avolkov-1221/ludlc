@@ -260,7 +260,7 @@ config LUDLC_SPI_CONN
 	bool "LuDLC SPI peripheral connection support"
 	default DT_HAS_LUDLC_SPI_PERIPHERAL_ENABLED
 	depends on SPI
-	select SPI_SLAVE
+	select SPI_PERIPHERAL
 	select GPIO
 	# What a link here falls back on when the application names no
 	# framing: the announced length already delimits the frame.
