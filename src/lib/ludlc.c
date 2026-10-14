@@ -1731,6 +1731,8 @@ int ludlc_connection_init(struct ludlc_connection *conn,
 
 	memset(conn, 0, sizeof(*conn));
 
+	LUDLC_LOCK_INIT(&conn->lock);
+
 	/*
 	 * A setting the caller left at zero takes the build default.
 	 * Resolved here, once, rather than at every read afterwards.
