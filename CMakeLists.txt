@@ -15,7 +15,7 @@
 # added from src/ and, on POSIX, the tests from tests/. See doc/PORTING.md for
 # a port kept outside this tree.
 
-cmake_minimum_required(VERSION 3.20.0)
+cmake_minimum_required(VERSION 3.28.3)
 
 include(CheckLibraryExists)
 include(CheckIncludeFiles)
