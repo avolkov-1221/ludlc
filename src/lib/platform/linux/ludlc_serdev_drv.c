@@ -280,8 +280,8 @@ static const struct serdev_device_ops ludlc_serdev_ops = {
 /**
  * @brief Take the link down and free it.
  *
- * Removes the bus devices it carried while it still runs, marks it terminated
- * so the RX and TX paths stop, frees the core state, then closes the port.
+ * Removes the bus devices it carried while it still runs, ends the link, and
+ * stops the TX and RX paths before the core state they read is freed.
  *
  * @param conn The link, as returned by ludlc_serial_connection_create().
  */
@@ -298,25 +298,27 @@ void ludlc_serial_connection_destroy(struct ludlc_connection *conn)
 
 	ludlc_connection_terminate(conn);
 
-	ludlc_connection_cleanup(conn);
-
 	/*
-	 * Only now, with the timers destroyed and the core done with the link,
-	 * can nothing ask for another TX round. A write wakeup arriving from
-	 * here on finds the link terminated and does nothing, so the work is
-	 * never queued again.
+	 * A TX run under way may be encoding a frame the cleanup frees, or
+	 * writing to the port the close releases. A run queued from here on,
+	 * by a timer, finds the link terminated and stops before either.
 	 */
 	cancel_work_sync(&lsc->tx_work);
 
 	/*
 	 * Closing the port ends the client ops: it waits for the ones in flight
-	 * and lets no new ones start. Only then can the state they reach
-	 * through drvdata be cleared and freed.
+	 * and lets no new ones start.
 	 */
-	if (lsc->serdev) {
+	if (lsc->serdev)
 		serdev_device_close(lsc->serdev);
-		serdev_device_set_drvdata(lsc->serdev, NULL);
 
+	ludlc_connection_cleanup(conn);
+
+	/* With the timers destroyed, nothing can queue another run. */
+	cancel_work_sync(&lsc->tx_work);
+
+	if (lsc->serdev) {
+		serdev_device_set_drvdata(lsc->serdev, NULL);
 		put_device(&lsc->serdev->dev);
 	}
 

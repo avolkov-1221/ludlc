@@ -407,9 +407,8 @@ static irqreturn_t ludlc_spi_ready_isr(int irq, void *data)
 /**
  * @brief Take the link down and free it.
  *
- * Removes the bus devices it carried while it still runs, marks it terminated
- * so both paths stop, frees the core state, then stops the exchanges
- * themselves.
+ * Removes the bus devices it carried while it still runs, ends the link, and
+ * stops the exchanges before the core state they read is freed.
  *
  * @param conn The link, as returned by ludlc_spi_master_connection_create().
  */
@@ -426,17 +425,20 @@ void ludlc_spi_master_connection_destroy(struct ludlc_connection *conn)
 
 	ludlc_connection_terminate(conn);
 
-	ludlc_connection_cleanup(conn);
-
 	/*
-	 * Only now, with the timers destroyed and the core done with the link,
-	 * can nothing ask for another exchange. Both sources are stopped here:
-	 * the interrupt first, since its handler queues the work for what a
-	 * burst left over.
+	 * An exchange under way may be encoding a frame the cleanup frees.
+	 * Both sources are stopped: the interrupt first, since its handler
+	 * queues the work for what a burst left over. An exchange queued from
+	 * here on, by a timer, finds the link terminated and does not start.
 	 */
 	if (lsc->irq)
 		free_irq(lsc->irq, lsc);
 
+	cancel_delayed_work_sync(&lsc->xfer_work);
+
+	ludlc_connection_cleanup(conn);
+
+	/* With the timers destroyed, nothing can queue another exchange. */
 	cancel_delayed_work_sync(&lsc->xfer_work);
 
 	/*
