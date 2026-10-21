@@ -791,9 +791,14 @@ int ludlc_device_add(struct ludlc_device *ldev)
 	if (ret)
 		return ret;
 
-	/* Claim every channel before the device becomes visible. */
+	/*
+	 * Claim every channel before the device becomes visible, but leave the
+	 * claim empty: a lookup must not find a device the driver core has not
+	 * set up. ludlc_bus_notify() fills it in before the probe, whose
+	 * replies have to find their way.
+	 */
 	for (i = 0; i < ldev->nchans; i++) {
-		ret = xa_insert(channels, ldev->chans[i], ldev, GFP_KERNEL);
+		ret = xa_insert(channels, ldev->chans[i], NULL, GFP_KERNEL);
 		if (ret) {
 			if (ret == -EBUSY)
 				dev_err(ldev->conn->pconn.dev,
@@ -1728,6 +1733,31 @@ int ludlc_default_get_timestamp(ludlc_timestamp_t *ts)
 }
 EXPORT_SYMBOL_GPL(ludlc_default_get_timestamp);
 
+/*
+ * The driver core has set the device up and is about to probe it: from here
+ * on its channels lead to it. See ludlc_device_add().
+ */
+static int ludlc_bus_notify(struct notifier_block *nb, unsigned long action,
+			    void *data)
+{
+	struct ludlc_device *ldev = to_ludlc_device(data);
+	unsigned int i;
+
+	if (action != BUS_NOTIFY_ADD_DEVICE)
+		return NOTIFY_DONE;
+
+	/* The claim holds the memory, so this store cannot fail. */
+	for (i = 0; i < ldev->nchans; i++)
+		xa_store(&ldev->conn->pconn.channels, ldev->chans[i], ldev,
+			 GFP_KERNEL);
+
+	return NOTIFY_OK;
+}
+
+static struct notifier_block ludlc_bus_nb = {
+	.notifier_call = ludlc_bus_notify,
+};
+
 /**
  * @brief Settle the checksums, then publish the bus.
  *
@@ -1742,14 +1772,21 @@ static int __init ludlc_core_init(void)
 		return ret;
 
 	ret = bus_register(&ludlc_bus_type);
-	if (ret < 0)
+	if (ret < 0) {
 		pr_err("ludlc: failed to register LuDLC bus type!\n");
+		return ret;
+	}
+
+	ret = bus_register_notifier(&ludlc_bus_type, &ludlc_bus_nb);
+	if (ret)
+		bus_unregister(&ludlc_bus_type);
 
 	return ret;
 }
 
 static void __exit ludlc_core_exit(void)
 {
+	bus_unregister_notifier(&ludlc_bus_type, &ludlc_bus_nb);
 	bus_unregister(&ludlc_bus_type);
 }
 
