@@ -109,10 +109,10 @@ struct ludlc_device {
  * MODULE_DEVICE_TABLE(of, ...), whose aliases this bus reports in the uevent
  * and in each device's sysfs "modalias". Power management is the ordinary
  * @c drv.pm: the link is up for all of prepare() and outlasts suspend(), so a
- * driver may still talk to the peer from either, but between the start of
- * suspend() and the end of resume() receive() is called only for a wakeup
- * source, while confirm() is never held back. A driver that must not be
- * suspended must return a negative error from its suspend().
+ * driver may still talk to the peer from either and hear the answer, but
+ * between the end of suspend() and the start of resume() receive() is called
+ * only for a wakeup source, while confirm() is never held back. A driver that
+ * must not be suspended must return a negative error from its suspend().
  */
 struct ludlc_driver {
 	/**

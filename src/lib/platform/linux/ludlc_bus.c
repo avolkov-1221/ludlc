@@ -402,13 +402,13 @@ static void ludlc_bus_shutdown(struct device *dev)
 /**
  * @brief Stop dispatching unsolicited packets to @p dev while it is suspended.
  *
- * This affects receive() only, and only between the start of the driver's
- * suspend() and the end of its resume(), unless the device is a wakeup source.
- * confirm() is never gated, because the link outlives every device on it, so a
- * driver can still send from its own suspend() and get an answer. Anything the
- * peer sends meanwhile is dropped, as for any channel with no driver bound;
- * the protocol acknowledges the packet regardless, and a driver that must not
- * miss anything can refuse the transition from its suspend().
+ * This affects receive() only, and only between the end of the driver's
+ * suspend() and the start of its resume(), unless the device is a wakeup
+ * source, so a driver can still ask the peer something from either and hear
+ * the answer. confirm() is never gated. Anything the peer sends meanwhile is
+ * dropped, as for any channel with no driver bound; the protocol acknowledges
+ * the packet regardless, and a driver that must not miss anything can refuse
+ * the transition from its suspend().
  */
 static void ludlc_bus_pm_gate(struct device *dev, bool suspended)
 {
@@ -442,37 +442,42 @@ static int ludlc_bus_prepare(struct device *dev)
 	return ret < 0 ? ret : 0;
 }
 
-/** @brief Stop dispatch to the channel, then suspend the driver with @p op. */
+/**
+ * @brief Suspend the driver with @p op, then stop dispatch to the channel.
+ *
+ * The driver may still be handed a packet that arrives as its suspend()
+ * returns, but none once this returns. A device whose suspend failed stays
+ * awake, so the gate stays open.
+ */
 static inline
 int ludlc_bus_pm_down(struct device *dev, int (*op)(struct device *))
 {
-	int ret;
+	int ret = op(dev);
 
-	ludlc_bus_pm_gate(dev, true);
-
-	/* Nothing resumes a device whose suspend failed, so undo it here. */
-	ret = op(dev);
-	if (ret)
-		ludlc_bus_pm_gate(dev, false);
+	if (!ret)
+		ludlc_bus_pm_gate(dev, true);
 
 	return ret;
 }
 
 /**
- * @brief Resume the driver with @p op, and allow dispatch again if it worked.
+ * @brief Allow dispatch again, then resume the driver with @p op.
  *
  * A driver that failed to resume is in no state to be handed packets, so the
- * gate stays shut. Nothing resumes a device twice, so the channel stays quiet
+ * gate shuts again. Nothing resumes a device twice, so the channel stays quiet
  * until another suspend and resume bring the driver back: dispatch follows the
  * driver, not the system.
  */
 static inline
 int ludlc_bus_pm_up(struct device *dev, int (*op)(struct device *))
 {
-	int ret = op(dev);
+	int ret;
 
-	if (!ret)
-		ludlc_bus_pm_gate(dev, false);
+	ludlc_bus_pm_gate(dev, false);
+
+	ret = op(dev);
+	if (ret)
+		ludlc_bus_pm_gate(dev, true);
 
 	return ret;
 }
