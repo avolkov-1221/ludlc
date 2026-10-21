@@ -280,8 +280,8 @@ static const struct serdev_device_ops ludlc_serdev_ops = {
 /**
  * @brief Take the link down and free it.
  *
- * Marks the link terminated so the RX and TX paths stop, removes the bus
- * devices it carried together with the core state, then closes the port.
+ * Removes the bus devices it carried while it still runs, marks it terminated
+ * so the RX and TX paths stop, frees the core state, then closes the port.
  *
  * @param conn The link, as returned by ludlc_serial_connection_create().
  */
@@ -294,9 +294,10 @@ void ludlc_serial_connection_destroy(struct ludlc_connection *conn)
 
 	lsc = to_serial_conn(conn);
 
+	ludlc_conn_remove_devices(conn);
+
 	WRITE_ONCE(conn->conn_state, LUDLC_STATE_TERMINATE);
 
-	/* Releases the devices on this link along with the connection. */
 	ludlc_connection_cleanup(conn);
 
 	/*

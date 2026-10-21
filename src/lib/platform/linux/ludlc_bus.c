@@ -1433,6 +1433,20 @@ void ludlc_conn_complete(struct ludlc_connection *conn)
 }
 EXPORT_SYMBOL_GPL(ludlc_conn_complete);
 
+/** @brief Take every device off a link that is going away, while it runs. */
+void ludlc_conn_remove_devices(struct ludlc_connection *conn)
+{
+	if (!conn)
+		return;
+
+	/* The bus stops following the link for good: nothing probes again. */
+	set_bit(LUDLC_CONN_BUS_HOLD_F, &conn->pconn.flags);
+	ludlc_bus_conn_hold(conn);
+
+	ludlc_bus_sweep(conn);
+}
+EXPORT_SYMBOL_GPL(ludlc_conn_remove_devices);
+
 /** @brief Ask the transport for another TX round, with or without new data. */
 void ludlc_platform_request_tx(struct ludlc_connection *conn)
 {
@@ -1684,10 +1698,10 @@ void ludlc_platform_conn_destroy(struct ludlc_connection *conn)
 	cancel_work_sync(&conn->pconn.bus_work);
 
 	/*
-	 * The connection is the bus, so nothing may outlive it, and the
-	 * devices the link enumerated go here. The code that created the
-	 * others is expected to have removed them by now; remove what is left
-	 * rather than leave it pointing at a freed link.
+	 * The connection is the bus, so nothing may outlive it. The transport
+	 * removed the devices with ludlc_conn_remove_devices() while the link
+	 * still ran; remove whatever is still there rather than leave it
+	 * pointing at a freed link.
 	 */
 	ludlc_bus_sweep(conn);
 	xa_destroy(&conn->pconn.channels);

@@ -316,4 +316,14 @@ void ludlc_conn_complete(struct ludlc_connection *conn);
  */
 bool ludlc_conn_send_disconnect(struct ludlc_connection *conn);
 
+/**
+ * @brief Remove the devices of a link that is being destroyed.
+ *
+ * The first step of a destroy, before the link is marked terminated: their
+ * drivers may still talk to the peer from remove(), and on a terminated link
+ * they would wait for an answer that cannot come. The bus no longer follows
+ * the link afterwards.
+ */
+void ludlc_conn_remove_devices(struct ludlc_connection *conn);
+
 #endif /* _LUDLC_PLATFORM_H_ */

@@ -407,8 +407,9 @@ static irqreturn_t ludlc_spi_ready_isr(int irq, void *data)
 /**
  * @brief Take the link down and free it.
  *
- * Marks the link terminated so both paths stop, removes the bus devices it
- * carried together with the core state, then stops the exchanges themselves.
+ * Removes the bus devices it carried while it still runs, marks it terminated
+ * so both paths stop, frees the core state, then stops the exchanges
+ * themselves.
  *
  * @param conn The link, as returned by ludlc_spi_master_connection_create().
  */
@@ -421,9 +422,10 @@ void ludlc_spi_master_connection_destroy(struct ludlc_connection *conn)
 
 	lsc = to_spi_conn(conn);
 
+	ludlc_conn_remove_devices(conn);
+
 	WRITE_ONCE(conn->conn_state, LUDLC_STATE_TERMINATE);
 
-	/* Releases the devices on this link along with the connection. */
 	ludlc_connection_cleanup(conn);
 
 	/*
