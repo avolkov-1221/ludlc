@@ -243,7 +243,7 @@ void ludlc_device_unlisten(struct ludlc_device *ldev);
  *
  * For a system transition, during which the driver core walks the devices and
  * none may be added or removed underneath it. The platform glue pairs these
- * with LUDLC_CONN_BUS_HELD_F.
+ * with LUDLC_CONN_BUS_HOLD_F.
  */
 void ludlc_bus_conn_hold(struct ludlc_connection *conn);
 void ludlc_bus_conn_resync(struct ludlc_connection *conn);

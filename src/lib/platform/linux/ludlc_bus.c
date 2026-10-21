@@ -1198,7 +1198,7 @@ EXPORT_SYMBOL_GPL(ludlc_device_peer_caps);
 /**
  * @brief Wait for whatever the bus was in the middle of.
  *
- * The caller has set LUDLC_CONN_BUS_HELD_F, so anything queued after this
+ * The caller has set LUDLC_CONN_BUS_HOLD_F, so anything queued after this
  * returns immediately; this waits for the run already under way.
  */
 void ludlc_bus_conn_hold(struct ludlc_connection *conn)
@@ -1318,7 +1318,7 @@ void ludlc_conn_prepare(struct ludlc_connection *conn)
 	 * bus stops following it, because a peer dropping out mid-transition
 	 * would otherwise unbind drivers on a bus the driver core is walking.
 	 */
-	if (test_and_set_bit(LUDLC_CONN_BUS_HOLD_F, &conn->pconn.flags))
+	if (!test_and_set_bit(LUDLC_CONN_BUS_HOLD_F, &conn->pconn.flags))
 		ludlc_bus_conn_hold(conn);
 }
 EXPORT_SYMBOL_GPL(ludlc_conn_prepare);
