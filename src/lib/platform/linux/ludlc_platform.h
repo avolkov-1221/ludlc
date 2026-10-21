@@ -169,13 +169,16 @@ struct ludlc_platform_connection {
 	/**
 	 * @brief The state of the link, for everything that has to follow it.
 	 *
-	 * @c POPULATED: the bus currently carries its devices. @c SUSPENDED:
-	 * the timers are stopped and the port must not be written to, from the
-	 * transport's suspend to its resume. @c BUS_HOLD: no device may be
-	 * added to or removed from the bus while the driver core walks it for a
-	 * system transition, from prepare to complete. @c SESSION_LOST: the
-	 * peer went away since the bus last followed the link, so the devices
-	 * it carries are those of a session that is over. Accessed atomically,
+	 * @c POPULATED: the bus has created the devices of the firmware nodes,
+	 * which it keeps until the connection is destroyed. @c BUS_UP: the bus
+	 * followed the link up, and its drivers were probed for the current
+	 * session. @c SUSPENDED: the timers are stopped and the port must not
+	 * be written to, from the transport's suspend to its resume.
+	 * @c BUS_HOLD: no device may be added to the bus, nor any driver bound
+	 * or unbound, while the driver core walks it for a system transition,
+	 * from prepare to complete. @c SESSION_LOST: the peer went away since
+	 * the bus last followed the link, so the drivers it carries are those
+	 * of a session that is over. Accessed atomically,
 	 * unlike the fields that belong to a single lock or context: a PM
 	 * transition writes two of these bits while the bus work and the link
 	 * handlers write the others, and none may lose another's update.
@@ -185,6 +188,7 @@ struct ludlc_platform_connection {
 #define LUDLC_CONN_SUSPENDED_F		2
 #define LUDLC_CONN_BUS_HOLD_F		3
 #define LUDLC_CONN_SESSION_LOST_F	4
+#define LUDLC_CONN_BUS_UP_F		5
 	unsigned long			flags;
 
 	/**

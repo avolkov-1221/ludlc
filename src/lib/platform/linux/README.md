@@ -88,9 +88,13 @@ side of `remove()`, so a driver is never called into after it has gone. A
 what its callbacks use.
 
 A driver is probed once for each session with the peer. When the peer goes
-away and comes back it may have restarted, so the devices the link enumerates
-are removed and created again, and the drivers of the other devices are
-removed and probed again.
+away and comes back it may have restarted, so the drivers of the devices the
+link enumerates are unbound when the session ends, and every driver that has
+not met the new peer is probed again. The devices themselves stay until the
+link is destroyed, as a USB device stays across a reset: a consumer that the
+driver core linked to one of them from the firmware is unbound and probed
+again with it. Devices that a driver created for the firmware nodes below its
+own device are removed with that device.
 
 ## Data path
 

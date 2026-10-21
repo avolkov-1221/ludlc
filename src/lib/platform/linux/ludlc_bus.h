@@ -65,8 +65,9 @@ struct ludlc_device {
 	 * @brief What this device is, and whether it is listening.
 	 *
 	 * @c ENUMERATED marks a device the bus created from firmware, which
-	 * comes and goes with the link; one created by any other code stays
-	 * until its creator removes it. @c SUSPENDED blocks delivery from the
+	 * stays until the link is destroyed and whose driver is unbound when a
+	 * session ends; one created by any other code stays until its creator
+	 * removes it. @c SUSPENDED blocks delivery from the
 	 * end of the driver's suspend() to the start of its resume().
 	 * @c REMOVED marks a device on its way off the bus, which only one
 	 * caller takes off and no driver binds any more. Written

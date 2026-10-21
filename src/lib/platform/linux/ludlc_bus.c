@@ -26,6 +26,7 @@
 #include <linux/cleanup.h>
 #include <linux/acpi.h>
 #include <linux/of_device.h>
+#include <linux/of_platform.h>
 #include <linux/mod_devicetable.h>
 #include <linux/property.h>
 #include <linux/bitops.h>
@@ -843,6 +844,12 @@ void ludlc_device_unregister(struct ludlc_device *ldev)
 	 */
 	device_release_driver(&ldev->dev);
 
+	/*
+	 * A driver may keep the devices it created for the firmware nodes
+	 * below this one from one binding to the next; they go with it.
+	 */
+	of_platform_depopulate(&ldev->dev);
+
 	for (i = 0; i < ldev->nchans; i++)
 		xa_erase(channels, ldev->chans[i]);
 
@@ -860,10 +867,12 @@ static void ludlc_fwnode_device_release(struct device *dev)
 /**
  * @brief Create a bus device for every firmware child node of the link.
  *
- * Called when a link comes up, for whatever DT or ACPI describes below the
- * transport's port, each child naming its channels in a "reg" property. A
+ * Called when the link first comes up, for whatever DT or ACPI describes below
+ * the transport's port, each child naming its channels in a "reg" property. A
  * child that cannot be registered is skipped rather than failing the whole
- * link, the way SPI and I2C treat their controllers' children.
+ * link, the way SPI and I2C treat their controllers' children. The devices
+ * stay until the link is destroyed, and only their drivers follow the
+ * sessions.
  */
 static void ludlc_bus_populate(struct ludlc_connection *conn)
 {
@@ -904,17 +913,15 @@ static void ludlc_bus_populate(struct ludlc_connection *conn)
 }
 
 /**
- * @brief Take the devices on @p conn off the bus.
- *
- * @param enumerated_only Remove only the devices the link enumerated itself,
- * rather than all of them, which is what a link going away for good needs.
+ * @brief Take every device on @p conn off the bus, for a link going away for
+ * good.
  *
  * The walk only reports that a channel was in use; the device behind it may
  * already be going away, and a device owning several channels appears once per
  * channel. Looking it up again takes a reference, which makes it safe to
  * touch, and ludlc_device_unregister() decides which caller removes it.
  */
-static void ludlc_bus_sweep(struct ludlc_connection *conn, bool enumerated_only)
+static void ludlc_bus_sweep(struct ludlc_connection *conn)
 {
 	struct ludlc_device *ldev;
 	unsigned long chan;
@@ -925,23 +932,48 @@ static void ludlc_bus_sweep(struct ludlc_connection *conn, bool enumerated_only)
 		if (!ldev)
 			continue;
 
-		if (!enumerated_only ||
+		ludlc_device_unregister(ldev);
+		ludlc_device_put(ldev);
+	}
+}
+
+/**
+ * @brief Unbind the drivers of the devices the link enumerated.
+ *
+ * The session they were probed in is over. The devices stay, as a USB device
+ * does across a reset: the driver core unbinds the consumers it linked to them
+ * from the firmware first, and probes them again once the devices have their
+ * drivers back. A deleted device would take those links with it for good.
+ */
+static void ludlc_bus_release(struct ludlc_connection *conn)
+{
+	struct ludlc_device *ldev;
+	unsigned long chan;
+	void *entry;
+
+	xa_for_each(&conn->pconn.channels, chan, entry) {
+		ldev = ludlc_device_find_by_channel(conn, chan);
+		if (!ldev)
+			continue;
+
+		/* Once per device, however many channels it owns. */
+		if (chan == ldev->chans[0] &&
 		    test_bit(LUDLC_DEV_ENUMERATED_F, &ldev->flags))
-			ludlc_device_unregister(ldev);
+			device_release_driver(&ldev->dev);
 
 		ludlc_device_put(ldev);
 	}
 }
 
 /**
- * @brief Bind the drivers of the devices the link did not enumerate again.
+ * @brief Bind the drivers of the devices again, for a new session.
  *
- * Those devices belong to whoever created them and stay on the bus when the
- * peer goes away, so their drivers are still bound from the session before.
- * The peer of a new session may have restarted and lost what it was told, so
- * each driver is removed and probed again, as a driver of an enumerated
- * device is when its device comes back. A device left without a driver,
- * because its probe() found no peer to talk to, gets one the same way.
+ * The peer of a new session may have restarted and lost what it was told. The
+ * drivers of the devices the link enumerated were unbound when the session
+ * before ended, and those of the other devices, which belong to whoever
+ * created them, are still bound from it: each of these is removed and probed
+ * again. A device left without a driver, because its session ended or its
+ * probe() found no peer to talk to, gets one the same way.
  */
 static void ludlc_bus_reprobe(struct ludlc_connection *conn)
 {
@@ -958,8 +990,7 @@ static void ludlc_bus_reprobe(struct ludlc_connection *conn)
 			continue;
 
 		/* Once per device, however many channels it owns. */
-		if (chan != ldev->chans[0] ||
-		    test_bit(LUDLC_DEV_ENUMERATED_F, &ldev->flags)) {
+		if (chan != ldev->chans[0]) {
 			ludlc_device_put(ldev);
 			continue;
 		}
@@ -993,8 +1024,8 @@ static void ludlc_bus_reprobe(struct ludlc_connection *conn)
  * followed is where the link has got to, not each step of the way. A session
  * that ended is the exception: it is remembered, because the next one may
  * have begun by the time this runs, and its peer may be one that restarted. The
- * devices of the old session are then removed before those of the new one are
- * created, so every driver meets the peer afresh.
+ * drivers of the old session are then unbound before those of the new one are
+ * probed, so every driver meets the peer afresh.
  */
 static void ludlc_bus_link_workfn(struct work_struct *work)
 {
@@ -1008,23 +1039,27 @@ static void ludlc_bus_link_workfn(struct work_struct *work)
 	if (test_bit(LUDLC_CONN_BUS_HOLD_F, &pconn->flags))
 		return;
 
-	/* The session the bus was populated for is over, whatever came next. */
+	/* The session the drivers were probed for is over, whatever came next. */
 	if (test_and_clear_bit(LUDLC_CONN_SESSION_LOST_F, &pconn->flags) &&
-	    test_and_clear_bit(LUDLC_CONN_POPULATED_F, &pconn->flags))
-		ludlc_bus_sweep(conn, true);
+	    test_and_clear_bit(LUDLC_CONN_BUS_UP_F, &pconn->flags))
+		ludlc_bus_release(conn);
 
 	/* The bus already matches the link. */
-	if (up == test_bit(LUDLC_CONN_POPULATED_F, &pconn->flags))
+	if (up == test_bit(LUDLC_CONN_BUS_UP_F, &pconn->flags))
 		return;
 
-	assign_bit(LUDLC_CONN_POPULATED_F, &pconn->flags, up);
+	assign_bit(LUDLC_CONN_BUS_UP_F, &pconn->flags, up);
 
-	if (up) {
-		ludlc_bus_populate(conn);
-		ludlc_bus_reprobe(conn);
-	} else {
-		ludlc_bus_sweep(conn, true);
+	if (!up) {
+		ludlc_bus_release(conn);
+		return;
 	}
+
+	/* The firmware describes the same devices to every session. */
+	if (!test_and_set_bit(LUDLC_CONN_POPULATED_F, &pconn->flags))
+		ludlc_bus_populate(conn);
+
+	ludlc_bus_reprobe(conn);
 }
 
 /**
@@ -1050,14 +1085,14 @@ static void ludlc_bus_on_caps(struct ludlc_connection *conn, const void *data,
 	spin_unlock_irqrestore(&pconn->caps_lock, flags);
 }
 
-/** @brief The peer answered: the devices on this link can be created. */
+/** @brief The peer answered: the drivers on this link can be probed. */
 static void ludlc_bus_on_connect(struct ludlc_connection *conn, void *user_arg)
 {
 	atomic_inc(&conn->pconn.session);
 	schedule_work(&conn->pconn.bus_work);
 }
 
-/** @brief The peer is gone, and with it everything the link enumerated. */
+/** @brief The peer is gone, and with it the session of the drivers. */
 static void ludlc_bus_on_disconnect(struct ludlc_connection *conn,
 				    void *user_arg)
 {
@@ -1281,8 +1316,7 @@ void ludlc_conn_prepare(struct ludlc_connection *conn)
 	 * The link itself keeps running: the port works until its own driver
 	 * suspends, and the devices on it can still talk to the peer. Only the
 	 * bus stops following it, because a peer dropping out mid-transition
-	 * would otherwise remove its devices from a bus the driver core is
-	 * walking.
+	 * would otherwise unbind drivers on a bus the driver core is walking.
 	 */
 	if (test_and_set_bit(LUDLC_CONN_BUS_HOLD_F, &conn->pconn.flags))
 		ludlc_bus_conn_hold(conn);
@@ -1650,12 +1684,12 @@ void ludlc_platform_conn_destroy(struct ludlc_connection *conn)
 	cancel_work_sync(&conn->pconn.bus_work);
 
 	/*
-	 * The connection is the bus, so nothing may outlive it. The code that
-	 * created the devices the link did not enumerate is expected to have
-	 * removed them by now; remove what is left rather than leave it
-	 * pointing at a freed link.
+	 * The connection is the bus, so nothing may outlive it, and the
+	 * devices the link enumerated go here. The code that created the
+	 * others is expected to have removed them by now; remove what is left
+	 * rather than leave it pointing at a freed link.
 	 */
-	ludlc_bus_sweep(conn, false);
+	ludlc_bus_sweep(conn);
 	xa_destroy(&conn->pconn.channels);
 
 	ludlc_stats_sysfs_remove(conn);
