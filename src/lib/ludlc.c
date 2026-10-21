@@ -500,6 +500,8 @@ static void on_disconnect_lock(struct ludlc_connection *conn)
  * above what this link carries.
  * @return -EAGAIN if the transmit queue is full, or if a disconnect is
  * failing what the queue held and has yet to reset the sequence.
+ * @return -ESHUTDOWN if the connection is being destroyed. A link that is
+ * down keeps the packet until it comes up; this one never will.
  */
 int ludlc_enqueue_data(struct ludlc_connection *conn,
 		ludlc_channel_t dst_chan,
@@ -534,7 +536,10 @@ int ludlc_enqueue_data(struct ludlc_connection *conn,
 	}
 
 	LUDLC_LOCK(&conn->lock);
-	if (ludlc_platform_test_bit(LUDLC_CONN_BUS_OUT_F, &conn->flags)) {
+	if (conn->conn_state == LUDLC_STATE_TERMINATE) {
+		ret = -ESHUTDOWN;
+	} else if (ludlc_platform_test_bit(LUDLC_CONN_BUS_OUT_F,
+					   &conn->flags)) {
 		/* A disconnect is failing the queue and is about to reset the
 		 * sequence, so there is nowhere to put this yet.
 		 */
