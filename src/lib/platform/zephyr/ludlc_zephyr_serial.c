@@ -726,7 +726,7 @@ void ludlc_serial_connection_destroy(struct ludlc_connection *conn)
 		}
 	}
 
-	conn->conn_state = LUDLC_STATE_TERMINATE;
+	ludlc_connection_terminate(conn);
 
 #if !IS_ENABLED(CONFIG_LUDLC_SERIAL_SINGLE_THREAD)
 	k_event_post(&conn->pconn.rx_event, RX_EXIT_EVT);

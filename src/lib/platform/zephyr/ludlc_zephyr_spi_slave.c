@@ -482,7 +482,7 @@ void ludlc_spi_slave_connection_destroy(struct ludlc_connection *conn)
 			       k_msleep(1));
 	}
 
-	conn->conn_state = LUDLC_STATE_TERMINATE;
+	ludlc_connection_terminate(conn);
 
 	/*
 	 * The join waits on the controller, which may never clock again. The

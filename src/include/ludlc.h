@@ -155,6 +155,19 @@ int ludlc_connection_init(
 		const struct ludlc_conn_cfg *cfg,
 		const struct ludlc_conn_cb *cb,
 		void *user_ctx);
+
+/**
+ * @brief Ends a LuDLC connection for good.
+ *
+ * The first step of a transport's teardown: fails the queue, and stops
+ * the link from receiving, sending or reconnecting, whatever arrives
+ * meanwhile. The transport stops its own paths after this, then calls
+ * @ref ludlc_connection_cleanup.
+ *
+ * @param conn The connection to end, or NULL.
+ */
+void ludlc_connection_terminate(struct ludlc_connection *conn);
+
 /**
  * @brief Cleans up a LuDLC connection structure.
  *

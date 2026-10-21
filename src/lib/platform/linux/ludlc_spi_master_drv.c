@@ -424,7 +424,7 @@ void ludlc_spi_master_connection_destroy(struct ludlc_connection *conn)
 
 	ludlc_conn_remove_devices(conn);
 
-	WRITE_ONCE(conn->conn_state, LUDLC_STATE_TERMINATE);
+	ludlc_connection_terminate(conn);
 
 	ludlc_connection_cleanup(conn);
 

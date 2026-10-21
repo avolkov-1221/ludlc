@@ -1041,7 +1041,8 @@ static int rx_handle_ack(struct ludlc_connection *conn, ludlc_id_t ack_id,
  *
  * This function is the core of the receive-side logic. It must be
  * called with the connection lock held. It performs the following steps:
- * 1. Validates packet size, and drops a tagged control packet.
+ * 1. Drops anything on a terminated link, validates packet size, and drops
+ *    a tagged control packet.
  * 2. If not connected, calls @ref rx_handle_handshake, and starts the
  *    watchdog if that brings the link up.
  * 3. Handles control channel packets: an announced disconnect, and a
@@ -1074,6 +1075,10 @@ static int rx_handle_packet(
 								: false;
 	bool is_hshake;
 	int ret;
+
+	/* The handshake would take a terminated link back to DISCONNECTED. */
+	if (conn->conn_state == LUDLC_STATE_TERMINATE)
+		return 0;
 
 	if (!ping && pkt_sz < sizeof(ludlc_packet_hdr_t)) {
 		/* Too short to hold a header, yet the checksum is good, so
@@ -1334,6 +1339,7 @@ EXPORT_SYMBOL_GPL(ludlc_receive);
  * @return 1 if this is the last packet in the queue (or if a PING/control
  * packet is sent).
  * @return -EINVAL if any output pointers are NULL.
+ * @return -ESHUTDOWN once the link is terminated.
  */
 int ludlc_get_packet_to_send(struct ludlc_connection *conn,
 		const void **hdr,
@@ -1352,6 +1358,12 @@ int ludlc_get_packet_to_send(struct ludlc_connection *conn,
 		return -EINVAL;
 
 	LUDLC_LOCK(&conn->lock);
+
+	/* The handshake step would go out, and re-arm the ping timer. */
+	if (conn->conn_state == LUDLC_STATE_TERMINATE) {
+		LUDLC_UNLOCK(&conn->lock);
+		return -ESHUTDOWN;
+	}
 
 	/* The previous frame has been sent by now, so the transport has
 	 * finished with the unnumbered packet and its buffer can be returned
@@ -1652,6 +1664,40 @@ void ludlc_handle_disconnect(struct ludlc_connection *conn)
 }
 #ifdef __KERNEL__
 EXPORT_SYMBOL_GPL(ludlc_handle_disconnect);
+#endif
+
+/**
+ * @brief Ends the link for good, as the first step of its teardown.
+ *
+ * Fails the queue through the confirm path and marks the link terminated,
+ * under the lock, so that a frame processed meanwhile cannot reopen it.
+ * From then on nothing is received, sent or queued, and no timer is armed
+ * again. No on_disconnect is called: the transport ends the link itself.
+ *
+ * @param conn Pointer to the connection structure, or NULL.
+ */
+void ludlc_connection_terminate(struct ludlc_connection *conn)
+{
+	if (!conn)
+		return;
+
+	/* Before init there is no lock, only the threads to stop. */
+	if (!ludlc_platform_test_bit(LUDLC_CONN_INITED_F, &conn->flags)) {
+		conn->conn_state = LUDLC_STATE_TERMINATE;
+		return;
+	}
+
+	LUDLC_LOCK(&conn->lock);
+	if (conn->conn_state != LUDLC_STATE_DISCONNECTED &&
+	    conn->conn_state != LUDLC_STATE_TERMINATE)
+		on_disconnect_lock(conn);
+	conn->conn_state = LUDLC_STATE_TERMINATE;
+	LUDLC_UNLOCK(&conn->lock);
+
+	ludlc_confirm_unlocked(conn);
+}
+#ifdef __KERNEL__
+EXPORT_SYMBOL_GPL(ludlc_connection_terminate);
 #endif
 
 /**

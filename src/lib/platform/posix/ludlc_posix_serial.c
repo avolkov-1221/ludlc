@@ -756,7 +756,7 @@ void ludlc_serial_connection_destroy(struct ludlc_connection *conn)
 	}
 
 	/* Signal threads to terminate */
-	conn->conn_state = LUDLC_STATE_TERMINATE;
+	ludlc_connection_terminate(conn);
 
 	/* Unblock and join TX thread */
 	if (sconn->flags & TX_THREAD_OK) {
