@@ -18,6 +18,7 @@
 #include <linux/mod_devicetable.h>
 #include <linux/module.h>
 #include <linux/property.h>
+#include <linux/version.h>
 #include <linux/pm.h>
 #include <linux/scatterlist.h>
 #include <linux/sched.h>
@@ -270,6 +271,40 @@ static void ludlc_serdev_write_wakeup(struct serdev_device *serdev)
 	schedule_work(&lsc->tx_work);
 }
 
+/*
+ * Before 6.9 serdev reads back a signed count: an int, with unsigned chars,
+ * before 6.8, and an ssize_t in 6.8.
+ */
+#if LINUX_VERSION_CODE < KERNEL_VERSION(6, 8, 0)
+static int ludlc_serdev_receive_buf_compat(struct serdev_device *serdev,
+					   const unsigned char *data,
+					   size_t count)
+{
+	return ludlc_serdev_receive_buf(serdev, data, count);
+}
+#define ludlc_serdev_receive_buf ludlc_serdev_receive_buf_compat
+#elif LINUX_VERSION_CODE < KERNEL_VERSION(6, 9, 0)
+static ssize_t ludlc_serdev_receive_buf_compat(struct serdev_device *serdev,
+					       const u8 *data, size_t count)
+{
+	return ludlc_serdev_receive_buf(serdev, data, count);
+}
+#define ludlc_serdev_receive_buf ludlc_serdev_receive_buf_compat
+#endif
+
+/* Before 6.8 a controller has no host device; its parent is that device. */
+#if LINUX_VERSION_CODE < KERNEL_VERSION(6, 8, 0)
+static inline struct device *ludlc_serdev_host(struct serdev_controller *ctrl)
+{
+	return ctrl->dev.parent;
+}
+#else
+static inline struct device *ludlc_serdev_host(struct serdev_controller *ctrl)
+{
+	return ctrl->host;
+}
+#endif
+
 static const struct serdev_device_ops ludlc_serdev_ops = {
 	.receive_buf = ludlc_serdev_receive_buf,
 	.write_wakeup = ludlc_serdev_write_wakeup,
@@ -369,7 +404,7 @@ int ludlc_serial_connection_create(
 
 	dev_dbg(&args->serdev.dev->dev,
 		"Creating the serdev conn on dev %s",
-		dev_name(args->serdev.dev->ctrl->host));
+		dev_name(ludlc_serdev_host(args->serdev.dev->ctrl)));
 
 	/*
 	 * A port hands over octets and nothing else, so a framing that expects

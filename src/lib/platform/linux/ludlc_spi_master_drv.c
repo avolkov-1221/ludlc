@@ -27,6 +27,7 @@
 #include <linux/sched.h>
 #include <linux/slab.h>
 #include <linux/spi/spi.h>
+#include <linux/version.h>
 #include <linux/workqueue.h>
 
 #include "ludlc_bus.h"
@@ -923,6 +924,16 @@ static const struct spi_device_id ludlc_spi_id[] = {
 	{ }
 };
 MODULE_DEVICE_TABLE(spi, ludlc_spi_id);
+
+/* Before 5.18 the SPI core expects remove() to return a status it ignores. */
+#if LINUX_VERSION_CODE < KERNEL_VERSION(5, 18, 0)
+static int ludlc_spi_remove_compat(struct spi_device *spi)
+{
+	ludlc_spi_remove(spi);
+	return 0;
+}
+#define ludlc_spi_remove ludlc_spi_remove_compat
+#endif
 
 static struct spi_driver ludlc_spi_driver = {
 	.driver = {

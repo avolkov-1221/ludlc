@@ -13,6 +13,7 @@
 
 #if defined(__linux__) && defined(__KERNEL__)
 #include <linux/types.h>
+#include <linux/ktime.h>
 #ifndef UINT8_MAX
 #define UINT8_MAX 0xffU
 #endif

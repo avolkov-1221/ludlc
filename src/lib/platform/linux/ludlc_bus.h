@@ -19,12 +19,12 @@
 
 #include <linux/device.h>
 #include <linux/mutex.h>
+#include <linux/version.h>
 #include <ludlc.h>
 #include <ludlc_proto.h>
 
 struct ludlc_connection;
 struct fwnode_handle;
-extern const struct bus_type ludlc_bus_type;
 
 /**
  * @brief Highest channel id @ref ludlc_channel_t can represent.
@@ -500,6 +500,13 @@ void ludlc_cfg_port_unbind(struct configfs_subsystem *subsys,
 int ludlc_cfg_port_subsys_register(struct configfs_subsystem *subsys);
 
 void ludlc_cfg_port_subsys_unregister(struct configfs_subsystem *subsys);
+#endif
+
+/* The bus field of a device and of a driver is const from 6.4. */
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(6, 4, 0)
+extern const struct bus_type ludlc_bus_type;
+#else
+extern struct bus_type ludlc_bus_type;
 #endif
 
 #endif /* __LUDLC_BUS_H__ */

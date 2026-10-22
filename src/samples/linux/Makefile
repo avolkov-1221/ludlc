@@ -14,6 +14,6 @@
 LUDLC_SRC := $(KBUILD_EXTMOD)
 include $(LUDLC_SRC)/ludlc.mk
 
-ccflags-y += $(LUDLC_CCFLAGS)
+ccflags-y += $(LUDLC_CCFLAGS) $(LUDLC_LINUX_COMPAT_CCFLAGS)
 
 obj-m += ludlc_echo.o

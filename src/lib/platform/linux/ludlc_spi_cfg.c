@@ -180,7 +180,12 @@ static struct configfs_group_operations ludlc_spi_cfg_group_ops = {
 	.make_group = ludlc_spi_cfg_make_port,
 };
 
+/* The type of a configfs item is const from 4.15. */
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(4, 15, 0)
 static const struct config_item_type ludlc_spi_cfg_subsys_type = {
+#else
+static struct config_item_type ludlc_spi_cfg_subsys_type = {
+#endif
 	.ct_group_ops	= &ludlc_spi_cfg_group_ops,
 	.ct_owner	= THIS_MODULE,
 };

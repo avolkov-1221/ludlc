@@ -56,6 +56,16 @@ include $(LUDLC_SRC)/ludlc.mk
 ccflags-y += $(LUDLC_CCFLAGS)
 ccflags-y += -DCONFIG_LUDLC_CRC_DFLT_$(CONFIG_LUDLC_CRC_DFLT)=1
 
+ccflags-y += $(LUDLC_LINUX_COMPAT_CCFLAGS)
+
+# The driver_override of the driver core, generic since 7.0 and in 6.12.80 and
+# 6.6.142 among the stable kernels, is optional for this bus: offer it where
+# the kernel has it.
+ifneq ($(shell grep -qs device_match_driver_override \
+		$(srctree)/include/linux/device.h && echo y),)
+ccflags-y += -DLUDLC_HAVE_DRIVER_OVERRIDE
+endif
+
 # Core module: protocol core + software bus and module entry point
 # (ludlc_bus.o, the replacement of other platforms ludlc_platform.c) + the
 # checksums a link can run (ludlc_csum.o), which belong to the link rather

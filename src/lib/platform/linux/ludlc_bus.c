@@ -179,12 +179,14 @@ EXPORT_SYMBOL_GPL(ludlc_platform_destroy_timer);
 static int ludlc_bus_match(struct device *dev, const struct device_driver *drv)
 {
 	const struct of_device_id *id;
-	int ret;
 
+#ifdef LUDLC_HAVE_DRIVER_OVERRIDE
 	/* A driver_override from user space decides the match on its own. */
-	ret = device_match_driver_override(dev, drv);
+	int ret = device_match_driver_override(dev, drv);
+
 	if (ret >= 0)
 		return ret;
+#endif
 
 	if (dev->of_node)
 		return of_driver_match_device(dev, drv);
@@ -529,6 +531,39 @@ static const struct dev_pm_ops ludlc_bus_pm_ops = {
 };
 
 /*
+ * The bus callbacks of older kernels: before 6.11 the driver to match is not
+ * const, before 6.3 the device to report is not const, and before 5.15
+ * remove() returns a status the core ignores. Each wrapper takes the old
+ * shape and then the function's name, so that the bus type below reads the
+ * same on every kernel.
+ */
+#if LINUX_VERSION_CODE < KERNEL_VERSION(6, 11, 0)
+static int ludlc_bus_match_compat(struct device *dev, struct device_driver *drv)
+{
+	return ludlc_bus_match(dev, drv);
+}
+#define ludlc_bus_match ludlc_bus_match_compat
+#endif
+
+#if LINUX_VERSION_CODE < KERNEL_VERSION(6, 3, 0)
+static int ludlc_bus_uevent_compat(struct device *dev,
+				   struct kobj_uevent_env *env)
+{
+	return ludlc_bus_uevent(dev, env);
+}
+#define ludlc_bus_uevent ludlc_bus_uevent_compat
+#endif
+
+#if LINUX_VERSION_CODE < KERNEL_VERSION(5, 15, 0)
+static int ludlc_bus_remove_compat(struct device *dev)
+{
+	ludlc_bus_remove(dev);
+	return 0;
+}
+#define ludlc_bus_remove ludlc_bus_remove_compat
+#endif
+
+/*
  * Fields this bus deliberately leaves unset, and why:
  *
  * - .dev_name: every device is named after its link and channel before it is
@@ -537,7 +572,7 @@ static const struct dev_pm_ops ludlc_bus_pm_ops = {
  *   link or one device, and are exposed there.
  * - .drv_groups: i2c puts new_id/remove_id here for devices firmware never
  *   described; here such devices come from configfs, and driver_override
- *   selects the driver.
+ *   selects the driver where the kernel has it.
  * - .sync_state: a channel holds no resource on behalf of consumers that have
  *   not probed yet, only its own place in the map.
  * - .online/.offline: a peer that stops answering does not ask permission, and
@@ -551,10 +586,16 @@ static const struct dev_pm_ops ludlc_bus_pm_ops = {
  * - runtime PM: a channel has nothing of its own to idle, and the port it
  *   shares with its siblings is the transport's responsibility.
  */
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(6, 4, 0)
 const struct bus_type ludlc_bus_type = {
+#else
+struct bus_type ludlc_bus_type = {
+#endif
 	.name		 = "ludlc",
 	.dev_groups	 = ludlc_dev_groups,
+#ifdef LUDLC_HAVE_DRIVER_OVERRIDE
 	.driver_override = true,
+#endif
 	.match		 = ludlc_bus_match,
 	.uevent		 = ludlc_bus_uevent,
 	.probe		 = ludlc_bus_probe,

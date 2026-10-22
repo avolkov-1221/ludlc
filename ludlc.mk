@@ -72,3 +72,19 @@ LUDLC_CCFLAGS :=							\
 	-DCONFIG_LUDLC_FRAMING_RAW=$(CONFIG_LUDLC_FRAMING_RAW)		\
 	-DCONFIG_LUDLC_STATIC_FRAMING_NUM=$(CONFIG_LUDLC_STATIC_FRAMING_NUM) \
 	$(LUDLC_VERSION_CFLAGS)
+
+# A kernel before 6.11 is built as gnu89 until 5.18, which rejects the
+# declarations scoped_guard() puts in a for statement, and warns about a
+# declaration after a statement, which guard() is. It also lacks helpers and
+# headers the Linux port uses: src/lib/platform/linux/compat/ludlc_compat.h
+# gives the helpers ahead of every source, and compat/linux/ the headers,
+# after the kernel's own, so that a kernel which has one keeps its own. A user
+# of these headers takes the flags too, as the headers rely on the helpers.
+ludlc-linux-compat := $(LUDLC_SRC)/src/lib/platform/linux/compat
+ludlc-before-6-11 := $(shell test $(VERSION) -lt 6 -o \
+			     $(VERSION) -eq 6 -a $(PATCHLEVEL) -lt 11 && echo y)
+ifeq ($(ludlc-before-6-11),y)
+LUDLC_LINUX_COMPAT_CCFLAGS := -std=gnu11 -Wno-declaration-after-statement \
+			      -I$(ludlc-linux-compat) \
+			      -include $(ludlc-linux-compat)/ludlc_compat.h
+endif
