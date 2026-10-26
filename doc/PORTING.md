@@ -117,9 +117,11 @@ A port whose build runs one checksum can have the escaping framing compute it
 inline. It sets `-DCONFIG_LUDLC_SINGLE_CSUM=1`, and its `ludlc_platform.h`
 provides `LUDLC_PLATFORM_CSUM_OCTETS` and three hooks for each direction,
 `ludlc_platform_csum_tx_init()`, `_tx()` and `_tx_final()` for transmit and
-`ludlc_platform_csum_rx_init()`, `_rx()` and `_rx_ok()` for receive. Each
-direction may use its own backend, a CRC unit on one side and software on the
-other. `ludlc_private.h` describes the contract.
+`ludlc_platform_csum_rx_init()`, `_rx()` and `_rx_ok()` for receive. The
+`_tx()` and `_rx()` hooks take a run of octets, a pointer and a length, which
+is what a CRC unit wants fed. Each direction may use its own backend, a CRC
+unit on one side and software on the other. `ludlc_private.h` describes the
+contract.
 
 The tag in the channel field is fixed the same way. A port with one
 connection runs `CONFIG_LUDLC_CHAN_TAG_BITS` on its link, zero and so no tag

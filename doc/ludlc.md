@@ -608,11 +608,15 @@ algorithm appropriate for their device's architecture and requirements, and
 both ends of a link must choose the same one.
 
 The checksum belongs to the transport, not to the protocol engine. A link is
-told which one it runs through `struct ludlc_csum`: the running function, its
-seed, the residual it must leave behind, an optional final transform and its
-width in octets. A link that needs none, its transport validating frames in
-hardware for instance, is opened with a NULL checksum: none is then computed,
-sent or checked.
+told which one it runs through `struct ludlc_csum`: the function that runs it
+over a run of octets, a value, a buffer and a length as the CRC libraries of
+Linux and Zephyr take them, its seed, the residual it must leave behind, an
+optional final transform and its width in octets. The framing hands it a run
+of octets at a time: on transmit the header and the payload before any
+stuffing, on receive what each call has stored once the stuffing is undone, so
+a transport fed from an interrupt pays for its own chunk and no more. A link
+that needs none, its transport validating frames in hardware for instance, is
+opened with a NULL checksum: none is then computed, sent or checked.
 
 The checksum is transmitted **least significant octet first**, whatever the
 endianness of either peer. An algorithm that is defined the other way round

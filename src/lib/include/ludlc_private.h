@@ -507,9 +507,12 @@ static inline bool ludlc_chan_tag_bits_ok(unsigned int bits)
  * ludlc_platform_csum_tx_init(), ludlc_platform_csum_tx() and
  * ludlc_platform_csum_tx_final() on transmit, ludlc_platform_csum_rx_init(),
  * ludlc_platform_csum_rx() and ludlc_platform_csum_rx_ok() on receive, and
- * LUDLC_PLATFORM_CSUM_OCTETS for the width. The framing never reads the value
- * it passes between them, so one direction may own a CRC unit and keep its
- * state there while the other computes in software.
+ * LUDLC_PLATFORM_CSUM_OCTETS for the width. The _tx() and _rx() hooks take a
+ * run of octets, a pointer and a length: on transmit the header and the
+ * payload, on receive what one feed call stores, so a feed call pays for its
+ * own octets whatever the frame length. The framing never reads the value it
+ * passes between them, so one direction may own a CRC unit and keep its state
+ * there while the other computes in software.
  */
 #ifndef CONFIG_LUDLC_SINGLE_CSUM
 #define CONFIG_LUDLC_SINGLE_CSUM	0
@@ -539,12 +542,13 @@ static inline ludlc_csum_t ludlc_csum_tx_init(const struct ludlc_csum *alg)
 	return ludlc_platform_csum_tx_init();
 }
 
-/** @brief Add @p data, an octet being sent, to @p csum. */
+/** @brief Add @p len octets at @p data, being sent, to @p csum. */
 static inline ludlc_csum_t ludlc_csum_tx(const struct ludlc_csum *alg,
-					 ludlc_csum_t csum, uint8_t data)
+					 ludlc_csum_t csum,
+					 const uint8_t *data, size_t len)
 {
 	(void)alg;
-	return ludlc_platform_csum_tx(csum, data);
+	return ludlc_platform_csum_tx(csum, data, len);
 }
 
 /** @brief The checksum of the frame sent, as it goes on the wire. */
@@ -562,12 +566,13 @@ static inline ludlc_csum_t ludlc_csum_rx_init(const struct ludlc_csum *alg)
 	return ludlc_platform_csum_rx_init();
 }
 
-/** @brief Add @p data, an octet received, to @p csum. */
+/** @brief Add @p len octets at @p data, received, to @p csum. */
 static inline ludlc_csum_t ludlc_csum_rx(const struct ludlc_csum *alg,
-					 ludlc_csum_t csum, uint8_t data)
+					 ludlc_csum_t csum,
+					 const uint8_t *data, size_t len)
 {
 	(void)alg;
-	return ludlc_platform_csum_rx(csum, data);
+	return ludlc_platform_csum_rx(csum, data, len);
 }
 
 /** @brief Whether the frame received, its checksum included, is intact. */
@@ -596,11 +601,12 @@ static inline ludlc_csum_t ludlc_csum_tx_init(const struct ludlc_csum *alg)
 	return alg->init;
 }
 
-/** @brief Add @p data, an octet being sent, to @p csum. */
+/** @brief Add @p len octets at @p data, being sent, to @p csum. */
 static inline ludlc_csum_t ludlc_csum_tx(const struct ludlc_csum *alg,
-					 ludlc_csum_t csum, uint8_t data)
+					 ludlc_csum_t csum,
+					 const uint8_t *data, size_t len)
 {
-	return alg->csum(csum, data);
+	return alg->csum(csum, data, len);
 }
 
 /** @brief The checksum of the frame sent, as it goes on the wire. */
@@ -616,11 +622,12 @@ static inline ludlc_csum_t ludlc_csum_rx_init(const struct ludlc_csum *alg)
 	return alg->init;
 }
 
-/** @brief Add @p data, an octet received, to @p csum. */
+/** @brief Add @p len octets at @p data, received, to @p csum. */
 static inline ludlc_csum_t ludlc_csum_rx(const struct ludlc_csum *alg,
-					 ludlc_csum_t csum, uint8_t data)
+					 ludlc_csum_t csum,
+					 const uint8_t *data, size_t len)
 {
-	return alg->csum(csum, data);
+	return alg->csum(csum, data, len);
 }
 
 /** @brief Whether the frame received, its checksum included, is intact. */

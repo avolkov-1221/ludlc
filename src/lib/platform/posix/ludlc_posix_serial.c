@@ -902,20 +902,23 @@ err:
  * CRC-16/KERMIT, which the other LuDLC platforms send and a Linux host runs by
  * default under this name. Computed bit by bit, a host opening few links.
  */
-static ludlc_csum_t ludlc_crc16_ccitt_pr0_byte(ludlc_csum_t crc, uint8_t data)
+static ludlc_csum_t ludlc_crc16_ccitt_pr0_run(ludlc_csum_t crc,
+					      const uint8_t *data, size_t len)
 {
-	int i;
+	while (len--) {
+		int i;
 
-	crc ^= data;
-	for (i = 0; i < 8; i++)
-		crc = (crc & 1U) ? (crc >> 1) ^ 0x8408U : crc >> 1;
+		crc ^= *data++;
+		for (i = 0; i < 8; i++)
+			crc = (crc & 1U) ? (crc >> 1) ^ 0x8408U : crc >> 1;
+	}
 
 	return crc;
 }
 
 static const struct ludlc_csum ludlc_crc16_ccitt_pr0 = {
 	.name = "crc16-ccitt-pr0",
-	.csum = ludlc_crc16_ccitt_pr0_byte,
+	.csum = ludlc_crc16_ccitt_pr0_run,
 	.octets = 2,
 };
 

@@ -53,14 +53,16 @@ static int fails;
  * for the same reason: what is being tested is the framing around a checksum
  * and not the checksum.
  */
-static ludlc_csum_t sum8(ludlc_csum_t c, uint8_t b)
+static ludlc_csum_t sum8(ludlc_csum_t c, const uint8_t *d, size_t len)
 {
-	int i;
+	while (len--) {
+		int i;
 
-	c ^= b;
-	for (i = 0; i < 8; i++)
-		c = (c & 0x80) ? (ludlc_csum_t)(((c << 1) ^ 0x07) & 0xff)
-			       : (ludlc_csum_t)((c << 1) & 0xff);
+		c ^= *d++;
+		for (i = 0; i < 8; i++)
+			c = (c & 0x80) ? (ludlc_csum_t)(((c << 1) ^ 0x07) & 0xff)
+				       : (ludlc_csum_t)((c << 1) & 0xff);
+	}
 
 	return c;
 }

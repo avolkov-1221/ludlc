@@ -78,9 +78,10 @@ static uint32_t prng(void)
  * The vectors and boundaries below are about the stuffing, and a checksum on
  * the end would only add octets to stuff. The frame test uses a real one.
  */
-static ludlc_csum_t sum_none(ludlc_csum_t c, uint8_t b)
+static ludlc_csum_t sum_none(ludlc_csum_t c, const uint8_t *d, size_t len)
 {
-	ARG_UNUSED(b);
+	ARG_UNUSED(d);
+	ARG_UNUSED(len);
 
 	return c;
 }
@@ -92,15 +93,16 @@ static const struct ludlc_csum none = {
 };
 
 /** @brief CRC-16/KERMIT, as LuDLC peers speak: seed and residual both zero. */
-static ludlc_csum_t csum_byte(ludlc_csum_t crc, uint8_t data)
+static ludlc_csum_t csum_run(ludlc_csum_t crc, const uint8_t *data,
+			     size_t len)
 {
-	return crc16_ccitt(crc, &data, 1);
+	return crc16_ccitt(crc, data, len);
 }
 
 static const struct ludlc_csum alg = {
 	.name = "crc16-kermit",
 	.octets = 2,
-	.csum = csum_byte,
+	.csum = csum_run,
 };
 
 /*

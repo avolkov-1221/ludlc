@@ -65,9 +65,10 @@ static int fails;
  * The vectors and boundaries below are about the stuffing, and a checksum on
  * the end would only add octets to stuff. The frame tests use a real one.
  */
-static ludlc_csum_t sum_none(ludlc_csum_t c, uint8_t b)
+static ludlc_csum_t sum_none(ludlc_csum_t c, const uint8_t *d, size_t len)
 {
-	(void)b;
+	(void)d;
+	(void)len;
 
 	return c;
 }
@@ -426,14 +427,16 @@ static void pieces(void)
  * Written out here rather than taken from a library, since what is under test
  * is the framing around a checksum and not the checksum itself.
  */
-static ludlc_csum_t sum8(ludlc_csum_t c, uint8_t b)
+static ludlc_csum_t sum8(ludlc_csum_t c, const uint8_t *d, size_t len)
 {
-	int i;
+	while (len--) {
+		int i;
 
-	c ^= b;
-	for (i = 0; i < 8; i++)
-		c = (c & 0x80) ? (ludlc_csum_t)(((c << 1) ^ 0x07) & 0xff)
-			       : (ludlc_csum_t)((c << 1) & 0xff);
+		c ^= *d++;
+		for (i = 0; i < 8; i++)
+			c = (c & 0x80) ? (ludlc_csum_t)(((c << 1) ^ 0x07) & 0xff)
+				       : (ludlc_csum_t)((c << 1) & 0xff);
+	}
 
 	return c;
 }

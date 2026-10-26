@@ -33,28 +33,30 @@
 #if IS_ENABLED(CONFIG_CRC_CCITT)
 /*
  * The kernel crc_ccitt() is the reflected 0x1021 table, which seeded with zero
- * is the CRC-16/KERMIT the other platforms send. One octet at a time, because
- * that is how the serial encoder feeds the frame it escapes as it goes.
+ * is the CRC-16/KERMIT the other platforms send.
  */
-static ludlc_csum_t ludlc_crc16_ccitt_byte(ludlc_csum_t csum, u8 byte)
+static ludlc_csum_t ludlc_crc16_ccitt_run(ludlc_csum_t csum, const u8 *data,
+					  size_t len)
 {
-	return crc_ccitt_byte((u16)csum, byte);
+	return crc_ccitt((u16)csum, data, len);
 }
 #endif
 
 #if IS_ENABLED(CONFIG_CRC16)
 /* CRC-16/ARC: reflected 0x8005, the other 16-bit CRC the kernel provides. */
-static ludlc_csum_t ludlc_crc16_byte(ludlc_csum_t csum, u8 byte)
+static ludlc_csum_t ludlc_crc16_run(ludlc_csum_t csum, const u8 *data,
+				    size_t len)
 {
-	return crc16_byte((u16)csum, byte);
+	return crc16((u16)csum, data, len);
 }
 #endif
 
 #if IS_ENABLED(CONFIG_CRC32)
 /* CRC-32/ISO-HDLC, for a link that needs more than 16 bits. */
-static ludlc_csum_t ludlc_crc32_byte(ludlc_csum_t csum, u8 byte)
+static ludlc_csum_t ludlc_crc32_run(ludlc_csum_t csum, const u8 *data,
+				    size_t len)
 {
-	return crc32_le((u32)csum, &byte, 1);
+	return crc32_le((u32)csum, data, len);
 }
 #endif
 
@@ -86,14 +88,14 @@ static ludlc_csum_t ludlc_x25_to_wire(ludlc_csum_t csum)
 const struct ludlc_csum ludlc_crc16_ccitt_pr0 = {
 	.name = "crc16-ccitt-pr0",
 	.octets = BITS_TO_BYTES(16),
-	.csum = ludlc_crc16_ccitt_byte,
+	.csum = ludlc_crc16_ccitt_run,
 };
 EXPORT_SYMBOL_GPL(ludlc_crc16_ccitt_pr0);
 
 const struct ludlc_csum ludlc_crc16_x25_pr1 = {
 	.name = "crc16-x25-pr1",
 	.octets = BITS_TO_BYTES(16),
-	.csum = ludlc_crc16_ccitt_byte,
+	.csum = ludlc_crc16_ccitt_run,
 	.init = 0xffff,
 	.verify = 0xf0b8,
 	.to_wire = ludlc_x25_to_wire,
@@ -105,7 +107,7 @@ EXPORT_SYMBOL_GPL(ludlc_crc16_x25_pr1);
 const struct ludlc_csum ludlc_crc16_pr0 = {
 	.name = "crc16-pr0",
 	.octets = BITS_TO_BYTES(16),
-	.csum = ludlc_crc16_byte,
+	.csum = ludlc_crc16_run,
 };
 EXPORT_SYMBOL_GPL(ludlc_crc16_pr0);
 #endif
@@ -114,7 +116,7 @@ EXPORT_SYMBOL_GPL(ludlc_crc16_pr0);
 const struct ludlc_csum ludlc_crc32_ccitt_pr0 = {
 	.name = "crc32-ccitt-pr0",
 	.octets = BITS_TO_BYTES(32),
-	.csum = ludlc_crc32_byte,
+	.csum = ludlc_crc32_run,
 };
 EXPORT_SYMBOL_GPL(ludlc_crc32_ccitt_pr0);
 #endif
@@ -363,17 +365,17 @@ static bool ludlc_csum_verifies(const struct ludlc_csum *csum)
 	unsigned int f, i;
 
 	for (f = 0; f < ARRAY_SIZE(frames); f++) {
+		u8 sent[LUDLC_MAX_CSUM_SIZE];
 		ludlc_csum_t val = csum->init;
 		ludlc_csum_t wire;
 
-		for (i = 0; i < sizeof(frames[f]); i++)
-			val = csum->csum(val, frames[f][i]);
-
+		val = csum->csum(val, frames[f], sizeof(frames[f]));
 		wire = csum->to_wire ? csum->to_wire(val) : val;
 
 		/* As the encoder sends it: low octet first, @octets of them. */
 		for (i = 0; i < csum->octets; i++)
-			val = csum->csum(val, (u8)(wire >> (8 * i)));
+			sent[i] = (u8)(wire >> (8 * i));
+		val = csum->csum(val, sent, csum->octets);
 
 		if (val != csum->verify)
 			return false;

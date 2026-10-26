@@ -110,8 +110,8 @@ struct ludlc_cenc_state {
 	/**
 	 * @brief The frame's checksum.
 	 *
-	 * The running sum while the body is scanned, then the wire value.
-	 * Its octets are shifted out least significant first.
+	 * The running sum while the body is scanned, a group at a time, then
+	 * the wire value. Its octets are shifted out least significant first.
 	 */
 	ludlc_csum_t	csum;
 
@@ -139,8 +139,9 @@ struct ludlc_cdec_state {
 	ludlc_frame_size_t	payload_cap;
 	/**< Current size of the incoming packet. */
 	ludlc_frame_size_t	size;
-	/**< Running checksum of the incoming packet. */
+	/**< Running checksum of the stored octets, up to csum_pos of them. */
 	ludlc_csum_t		csum;
+	ludlc_frame_size_t	csum_pos;
 	/**< The code octet of the group being read. */
 	uint8_t			code;
 	/**< Data octets still expected in that group. */
@@ -185,6 +186,7 @@ static void cobs_dec_reset(struct ludlc_framing_state *fs,
 	struct ludlc_cdec_state *dec_state = &fs_to_cobs(fs)->dec;
 
 	dec_state->size = 0;
+	dec_state->csum_pos = 0;
 	if (ludlc_csum_on(csum_alg))
 		dec_state->csum = ludlc_csum_rx_init(csum_alg);
 	dec_state->code = 0;
@@ -192,16 +194,51 @@ static void cobs_dec_reset(struct ludlc_framing_state *fs,
 	ludlc_platform_clear_mask(CDEC_FLAGS_MASK, &fs->flags);
 }
 
-static void cobs_store_byte(struct ludlc_framing_state *fs,
-			    const struct ludlc_csum *csum_alg, uint8_t c)
+/*
+ * Fold the octets stored since the last fold into the running checksum: one
+ * run per call, so a chunk costs its own octets and the end of the frame
+ * costs nothing more.
+ */
+static void cobs_dec_sum(struct ludlc_framing_state *fs,
+			 const struct ludlc_csum *csum_alg)
+{
+	struct ludlc_cdec_state *dec = &fs_to_cobs(fs)->dec;
+
+	if (ludlc_csum_on(csum_alg) && dec->size > dec->csum_pos) {
+		dec->csum = ludlc_csum_rx(csum_alg, dec->csum,
+					  &dec->payload[dec->csum_pos],
+					  dec->size - dec->csum_pos);
+		dec->csum_pos = dec->size;
+	}
+}
+
+/*
+ * Fold the body octets the scan passed since the last fold: the run taken
+ * from the current segment and the run taken from the payload behind it.
+ */
+static void cobs_enc_sum(struct ludlc_cenc_state *enc,
+			 const struct ludlc_csum *csum,
+			 const uint8_t **sum_p, const uint8_t *p,
+			 const uint8_t **sum_pay, const uint8_t *pay)
+{
+	if (ludlc_csum_on(csum)) {
+		if (p > *sum_p)
+			enc->csum = ludlc_csum_tx(csum, enc->csum, *sum_p,
+						  (size_t)(p - *sum_p));
+		if (pay > *sum_pay)
+			enc->csum = ludlc_csum_tx(csum, enc->csum, *sum_pay,
+						  (size_t)(pay - *sum_pay));
+	}
+	*sum_p = p;
+	*sum_pay = pay;
+}
+
+static void cobs_store_byte(struct ludlc_framing_state *fs, uint8_t c)
 {
 	struct ludlc_cdec_state *dec_state = &fs_to_cobs(fs)->dec;
 
 	if (dec_state->size < dec_state->payload_cap) {
 		dec_state->payload[dec_state->size++] = c;
-		if (ludlc_csum_on(csum_alg))
-			dec_state->csum = ludlc_csum_rx(csum_alg,
-							dec_state->csum, c);
 	} else {
 		/* Frame is longer than this link can carry (jabber) */
 		ludlc_platform_set_bit(CDEC_OVER_F, &fs->flags);
@@ -274,16 +311,17 @@ size_t ludlc_cobs_enc_fill(struct ludlc_framing_state *fs,
 			size_t sz = enc->sz;
 			const uint8_t *pay = enc->payload;
 			size_t pay_sz = enc->payload_size;
+			const uint8_t *sum_p = p;
+			const uint8_t *sum_pay = pay;
 			uint8_t cleft = enc->csum_left;
 			uint8_t run;
 			bool delim = false;
 
-			/* Open a group from the cursor and fold each body
-			 * octet into the checksum as the scan passes it.
+			/* Open a group from the cursor: the body first, then
+			 * the checksum octets once the body is through.
 			 */
 			for (run = 0; run < LUDLC_COBS_BLOCK_MAX; run++) {
 				uint8_t c;
-				bool body = true;
 
 				if (sz) {
 					c = *p++;
@@ -294,6 +332,8 @@ size_t ludlc_cobs_enc_fill(struct ludlc_framing_state *fs,
 				} else {
 					if (!ludlc_platform_test_bit(
 							CENC_ARMED_F, &fs->flags)) {
+						cobs_enc_sum(enc, csum, &sum_p, p,
+							     &sum_pay, pay);
 						if (ludlc_csum_on(csum))
 							enc->csum =
 								ludlc_csum_tx_final(
@@ -309,18 +349,15 @@ size_t ludlc_cobs_enc_fill(struct ludlc_framing_state *fs,
 					c = (uint8_t)(enc->csum >>
 						      (8U * (enc->csum_left - cleft)));
 					cleft--;
-					body = false;
 				}
 
-				if (body && ludlc_csum_on(csum))
-					enc->csum = ludlc_csum_tx(csum,
-								  enc->csum, c);
 				if (c == LUDLC_COBS_DELIMITER) {
 					delim = true;
 					break;
 				}
 			}
 
+			cobs_enc_sum(enc, csum, &sum_p, p, &sum_pay, pay);
 			if (delim)
 				ludlc_platform_set_bit(CENC_DELIM_F, &fs->flags);
 			else
@@ -460,7 +497,7 @@ size_t ludlc_cobs_dec_feed(struct ludlc_framing_state *fs,
 				continue;
 
 			if (dec->left) {
-				cobs_store_byte(fs, csum, c);
+				cobs_store_byte(fs, c);
 				dec->left--;
 				continue;
 			}
@@ -473,7 +510,7 @@ size_t ludlc_cobs_dec_feed(struct ludlc_framing_state *fs,
 			if (ludlc_platform_test_bit(CDEC_STARTED_F,
 						    &fs->flags) &&
 			    dec->code != 0xff) {
-				cobs_store_byte(fs, csum, LUDLC_COBS_DELIMITER);
+				cobs_store_byte(fs, LUDLC_COBS_DELIMITER);
 			}
 
 			dec->code = c;
@@ -483,6 +520,7 @@ size_t ludlc_cobs_dec_feed(struct ludlc_framing_state *fs,
 		}
 
 		/* The delimiter ends the frame, valid or not. */
+		cobs_dec_sum(fs, csum);
 		if (ludlc_platform_test_bit(CDEC_OVER_F, &fs->flags)) {
 			LUDLC_INC_STATS(conn, jabber);
 		} else if (dec->left) {
@@ -512,6 +550,8 @@ size_t ludlc_cobs_dec_feed(struct ludlc_framing_state *fs,
 
 		cobs_dec_reset(fs, csum);
 	}
+
+	cobs_dec_sum(fs, csum);
 
 	return n;
 }

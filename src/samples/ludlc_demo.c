@@ -811,15 +811,20 @@ static const uint16_t crc16_kermit_table[] = {
 };
 
 /**
- * @brief Running CRC-16/KERMIT over one octet for @ref ludlc_csum.
+ * @brief Running CRC-16/KERMIT over a run of octets for @ref ludlc_csum.
  *
  * @param crc The current CRC value.
- * @param data The new byte to incorporate into the CRC.
+ * @param data The octets to incorporate into the CRC.
+ * @param len How many.
  * @return The updated CRC value.
  */
-static ludlc_csum_t crc16_ccitt(ludlc_csum_t crc, const uint8_t data)
+static ludlc_csum_t crc16_ccitt(ludlc_csum_t crc, const uint8_t *data,
+				size_t len)
 {
-	return  (crc >> 8) ^ crc16_kermit_table[(crc ^ data) & 0xFF];
+	while (len--)
+		crc = (crc >> 8) ^ crc16_kermit_table[(crc ^ *data++) & 0xFF];
+
+	return crc;
 }
 
 /**

@@ -72,6 +72,7 @@ struct ludlc_renc_state {
 	/**< Current FSM state (see above). */
 	uint8_t		state;
 
+	/**< Running checksum, then its wire value once the payload is through. */
 	ludlc_csum_t	csum;
 };
 
@@ -195,21 +196,12 @@ size_t ludlc_raw_enc_fill(struct ludlc_framing_state *fs,
 			if (len > enc->sz)
 				len = enc->sz;
 
-			if (ludlc_csum_on(csum)) {
-				size_t i;
-
-				for (i = 0; i < len; i++) {
-					uint8_t c = *enc->ptr++;
-
-					dst[n++] = c;
-					enc->csum = ludlc_csum_tx(csum,
-							enc->csum, c);
-				}
-			} else {
-				memcpy(&dst[n], enc->ptr, len);
-				enc->ptr += len;
-				n += len;
-			}
+			memcpy(&dst[n], enc->ptr, len);
+			if (ludlc_csum_on(csum))
+				enc->csum = ludlc_csum_tx(csum, enc->csum,
+							  enc->ptr, len);
+			enc->ptr += len;
+			n += len;
 
 			enc->sz -= len;
 			if (enc->sz) {
@@ -288,19 +280,11 @@ size_t ludlc_raw_dec_feed(struct ludlc_framing_state *fs,
 
 	switch (dec->state) {
 	case rdec_data:
-		if (ludlc_csum_on(csum)) {
-			size_t i;
-
-			for (i = 0; i < take; i++) {
-				uint8_t c = src[i];
-
-				dec->csum = ludlc_csum_rx(csum, dec->csum, c);
-				dec->payload[dec->size++] = c;
-			}
-		} else {
-			memcpy(dec->payload + dec->size, src, take);
-			dec->size += take;
-		}
+		memcpy(dec->payload + dec->size, src, take);
+		if (ludlc_csum_on(csum))
+			dec->csum = ludlc_csum_rx(csum, dec->csum,
+						  dec->payload + dec->size, take);
+		dec->size += take;
 
 		dec->sz -= take;
 		if (dec->sz)

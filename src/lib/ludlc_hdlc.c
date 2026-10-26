@@ -56,7 +56,7 @@ struct ludlc_henc_state {
 	/**< Remaining octets in the current segment. */
 	ludlc_payload_size_t	sz;
 
-	/**< Running checksum of the outgoing packet. */
+	/**< Running checksum, then its wire value once the payload is through. */
 	ludlc_csum_t	csum;
 
 	/**< Current FSM state (see below). */
@@ -74,7 +74,7 @@ struct ludlc_henc_state {
 struct ludlc_hdec_state {
 	/**< Current size of the incoming packet. */
 	ludlc_frame_size_t	size;
-	/**< Running checksum of the incoming packet. */
+	/**< Running checksum of the stored octets, summed a run at a time. */
 	ludlc_csum_t		csum;
 
 	/**< Current FSM state (see below). */
@@ -198,9 +198,13 @@ size_t ludlc_hdlc_enc_fill(struct ludlc_framing_state *fs,
 				enc->state = enc_data;
 				enc->ptr = enc->hdr;
 				enc->sz = enc->hdr_size;
+				/* A segment is summed whole as it is armed,
+				 * so nothing tracks what each call takes.
+				 */
 				if (ludlc_csum_on(csum_alg)) {
-					enc->csum =
-						ludlc_csum_tx_init(csum_alg);
+					enc->csum = ludlc_csum_tx(csum_alg,
+						ludlc_csum_tx_init(csum_alg),
+						enc->ptr, enc->sz);
 				}
 			}
 
@@ -210,11 +214,6 @@ size_t ludlc_hdlc_enc_fill(struct ludlc_framing_state *fs,
 		case enc_data:
 			/* Sending header or payload data */
 			c = *enc->ptr++;
-
-			if (ludlc_csum_on(csum_alg)) {
-				enc->csum = ludlc_csum_tx(csum_alg,
-							  enc->csum, c);
-			}
 
 			if (--enc->sz) {
 				break; /* More data in this segment */
@@ -229,6 +228,12 @@ size_t ludlc_hdlc_enc_fill(struct ludlc_framing_state *fs,
 				enc->sz = enc->payload_size;
 				enc->ptr = enc->payload;
 				enc->payload_size = 0;
+				if (ludlc_csum_on(csum_alg)) {
+					enc->csum = ludlc_csum_tx(csum_alg,
+								  enc->csum,
+								  enc->ptr,
+								  enc->sz);
+				}
 				break;
 			}
 
@@ -302,6 +307,7 @@ void ludlc_hdlc_dec_init(struct ludlc_framing_state *fs)
 	dec->size = 0;
 }
 
+/* Start a frame afresh in the buffer. */
 void ludlc_hdlc_dec_prep(struct ludlc_framing_state *fs,
 			 const struct ludlc_csum *csum, void *buf,
 			 ludlc_frame_size_t cap)
@@ -310,28 +316,52 @@ void ludlc_hdlc_dec_prep(struct ludlc_framing_state *fs,
 
 	dec->payload = buf;
 	dec->payload_cap = cap;
+	dec->size = 0;
 	if (ludlc_csum_on(csum)) {
 		dec->csum = ludlc_csum_rx_init(csum);
 	}
-	dec->size = 0;
 }
 
-/**
- * @brief Process one received data: sync on SOF, de-escape, checksum.
- *
- * @param fs Pointer to the decoder state structure.
- * @param csum Checksum algorithm this link runs.
- * @param conn The link, for its counters.
- * @param src The raw octet received from the serial interface.
- * @return handles data when @p dec_state holds a whole, verified packet.
+/*
+ * Close the frame in the buffer: fold the octets stored since @p start into
+ * the checksum, check it and take it off the size. Called once the buffer
+ * holds at least a minimum frame, so the checksum octets are there to take
+ * off. The caller counts a frame that fails.
  */
+static bool hdlc_dec_finalize(struct ludlc_hdec_state *dec,
+			      const struct ludlc_csum *csum_alg,
+			      ludlc_frame_size_t start)
+{
+	if (!ludlc_csum_on(csum_alg)) {
+		return true;
+	}
+
+	if (dec->size > start) {
+		dec->csum = ludlc_csum_rx(csum_alg, dec->csum,
+					  &dec->payload[start],
+					  dec->size - start);
+	}
+
+	/* The checksum ran over its own octets too: an intact frame leaves a
+	 * known residual, or it is not a checksum but noise.
+	 */
+	if (!ludlc_csum_rx_ok(csum_alg, dec->csum)) {
+		return false;
+	}
+
+	dec->size -= ludlc_csum_octets(csum_alg);
+	return true;
+}
+
 size_t ludlc_hdlc_dec_feed(struct ludlc_framing_state *fs,
-			   const struct ludlc_csum *csum,
+			   const struct ludlc_csum *csum_alg,
 			   struct ludlc_connection *conn,
 			   const uint8_t *src, size_t len,
 			   bool *done)
 {
 	struct ludlc_hdec_state *dec = &fs_to_hdlc(fs)->dec;
+	/* Where this call's run starts: earlier calls folded all before it. */
+	ludlc_frame_size_t start_off = dec->size;
 	size_t n;
 
 	for (n = 0; n < len;) {
@@ -344,41 +374,35 @@ size_t ludlc_hdlc_dec_feed(struct ludlc_framing_state *fs,
 		switch (dec->state) {
 		case dec_idle:
 			/* Filter out all incoming data until SOF arrived
-			* (and the state will be modified in the
-			* 'if' expression above)
-			*/
+			 * (and the state will be modified in the
+			 * 'if' expression above)
+			 */
 			continue;
 
 		case dec_wait_sof:
 			/* This is a new packet, triggered by LUDLC_SOF. */
 
-			/* First, process the *previous* one. */
+			/* First, finalize the *previous* one, if any. */
 			dec->state = dec_payload;
-			if (dec->size >= ludlc_frame_min_sz(csum)) {
-				/* the CRC([data][crc]) must be a known constant,
-				 * or it's not a crc but something else
-				 */
-				if (ludlc_csum_on(csum) &&
-				    !ludlc_csum_rx_ok(csum, dec->csum)) {
-					LUDLC_INC_STATS(conn, bad_csum);
-				} else {
-					if (ludlc_csum_on(csum)) {
-						dec->size -=
-							ludlc_csum_octets(csum);
-					}
+			if (dec->size >= ludlc_frame_min_sz(csum_alg)) {
+				if (hdlc_dec_finalize(dec,
+						      csum_alg, start_off)) {
 					LUDLC_INC_STATS(conn, rx_packet);
 					*done = true;
 					return n;
 				}
+				LUDLC_INC_STATS(conn, bad_csum);
 			} else if (dec->size) {
-				/* Packet was too short */
+				/* Packet is too short */
 				LUDLC_INC_STATS(conn, dropped);
 			}
 
 			dec->size = 0;
-			if (ludlc_csum_on(csum)) {
-				dec->csum = ludlc_csum_rx_init(csum);
+			if (ludlc_csum_on(csum_alg)) {
+				dec->csum = ludlc_csum_rx_init(csum_alg);
+				start_off = 0;
 			}
+
 			continue;
 
 		case dec_esc:
@@ -400,14 +424,18 @@ size_t ludlc_hdlc_dec_feed(struct ludlc_framing_state *fs,
 		/* Store normal data octet. */
 		if (dec->size < dec->payload_cap) {
 			dec->payload[dec->size++] = c;
-			if (ludlc_csum_on(csum)) {
-				dec->csum = ludlc_csum_rx(csum, dec->csum, c);
-			}
 		} else {
 			/* Packet is too big (jabber) */
 			LUDLC_INC_STATS(conn, jabber);
 			ludlc_hdlc_dec_init(fs);
 		}
+	}
+
+	/* Fold what this call stored: the next one starts past it. */
+	if (ludlc_csum_on(csum_alg) && dec->size > start_off) {
+		dec->csum = ludlc_csum_rx(csum_alg, dec->csum,
+					  &dec->payload[start_off],
+					  dec->size - start_off);
 	}
 
 	*done = false;

@@ -407,16 +407,20 @@ int ludlc_default_get_timestamp(ludlc_timestamp_t *out_ts);
 struct ludlc_csum {
 	const char *name;
 	/**
-	 * @brief Running checksum over one octet. **Mandatory.**
+	 * @brief Running checksum over a run of octets. **Mandatory.**
 	 *
-	 * Called for each frame octet, before escaping on TX and after
-	 * unescaping on RX.
+	 * Called with a value, a buffer and its length, as the CRC libraries
+	 * of the kernel and of Zephyr take their input: on TX the octets of
+	 * the packet before escaping them, on RX the octets a feed call has
+	 * stored after unescaping them.
 	 *
 	 * @param csum Checksum so far.
-	 * @param data Octet to add.
-	 * @return Checksum including @p data.
+	 * @param data The octets to add.
+	 * @param len How many.
+	 * @return Checksum including them.
 	 */
-	ludlc_csum_t (*csum)(ludlc_csum_t csum, uint8_t data);
+	ludlc_csum_t (*csum)(ludlc_csum_t csum, const uint8_t *data,
+			     size_t len);
 	/**
 	 * @brief Optional last transform before the checksum goes on the wire.
 	 *

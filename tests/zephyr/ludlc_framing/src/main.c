@@ -48,11 +48,9 @@
 ZTEST_SUITE(ludlc_framing, NULL, NULL, NULL, NULL, NULL);
 
 /** @brief The checksum the other suites frame against: CRC-8/ATM. */
-static ludlc_csum_t sum8(ludlc_csum_t c, uint8_t b)
+static ludlc_csum_t sum8(ludlc_csum_t c, const uint8_t *d, size_t len)
 {
-	uint8_t v = (uint8_t)c;
-
-	return crc8((const uint8_t *)&b, 1, 0x07, v, false);
+	return crc8(d, len, 0x07, (uint8_t)c, false);
 }
 
 static const struct ludlc_csum alg = {
